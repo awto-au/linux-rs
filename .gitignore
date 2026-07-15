@@ -1,0 +1,4 @@
+/linux/
+/tmp/
+__pycache__/
+target/
