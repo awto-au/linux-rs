@@ -1,6 +1,12 @@
 # linux-rs — pattern-learning C→Rust translation of Linux kernel code
 
-Plan drafted 2026-07-16 from the initial concept discussion. Status: nothing built yet.
+Plan drafted 2026-07-16 from the initial concept discussion.
+
+**End goal (added 2026-07-16):** boot the translated Rust kernel on a RISC-V
+soft core on a **Cynthion** (Great Scott Gadgets, Lattice ECP5) — i.e. a
+LiteX/VexRiscv-class rv32 SoC with a minimal kernel config. x86_64 is the
+development lab; RISC-V is the shipping target (and its tiny config is a far
+smaller final corpus than the lab defconfig).
 
 ## Thesis
 
@@ -169,7 +175,9 @@ then a simple char driver).
   wrappers, driven by the same pattern DB (`LOCKED_REGION` instance →
   `Guard`-based rewrite).
 - Second config / second arch to test pattern portability — the real test of
-  "the DB is the product".
+  "the DB is the product". The second arch is **RISC-V rv32** (minimal
+  config for the Cynthion soft-core end goal); pattern portability across
+  arch here is directly on the critical path, not a side quest.
 
 ## Risk register
 
