@@ -1,0 +1,270 @@
+From b626ddbe155feb25486ac170bc267a05ece34cb3 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 16:22:25 +1000
+Subject: [PATCH] lib: translate earlycpio to Rust (linux-rs TU 23)
+
+Early-boot uncompressed cpio member finder: hex-field header parser
+(14 fields, 6-char magic + 8-char rest) with buffer-overrun bounds
+checks on the computed dptr/nptr pointers, matching the C's goto quit
+early-exits as plain returns (no cleanup happens at quit -- bare
+early-exit). Real finding: #[export] requires the EXACT bindgen struct
+type (kernel::bindings::cpio_data), not a locally-defined #[repr(C)]
+lookalike -- even an identical-layout struct is a different Rust type
+to the compiler; aliased via 'use bindings::cpio_data as CpioData'
+instead. Extended the pr_debug shim pattern from TU 22 to pr_warn
+(rust/helpers/print.c) for the MAX_CPIO_FILE_NAME-exceeded warning.
+
+No dedicated KUnit suite covers find_cpio_data and no tier-2.5 diff
+harness was built for it this pass (would need a hex-cpio-format fuzz
+generator -- real follow-up work, not done here to keep moving through
+the queue). Validated at tiers 1-4: builds, #[export] prototype-checked
+against <linux/earlycpio.h>, symbol confirmed in System.map, full
+regression boot green.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |   9 +-
+ lib/earlycpio_rs.rs             | 157 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ rust/helpers/print.c            |  23 ++---
+ 4 files changed, 178 insertions(+), 12 deletions(-)
+ create mode 100644 lib/earlycpio_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 94006431e23b..b782127c5d13 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -38,7 +38,7 @@ lib-y := ctype.o string.o vsprintf.o \
+ 	 maple_tree.o idr.o extable.o irq_regs.o \
+ 	 flex_proportions.o ratelimit.o \
+ 	 is_single_threaded.o plist.o kobject_uevent.o \
+-	 earlycpio.o seq_buf.o siphash.o dec_and_lock.o \
++ seq_buf.o siphash.o dec_and_lock.o \
+ 	 nmi_backtrace.o \
+ 	 buildid.o objpool.o iomem_copy.o sys_info.o
+ 
+@@ -422,3 +422,10 @@ lib-y += decompress_rs.o
+ else
+ lib-y += decompress.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++lib-y += earlycpio_rs.o
++else
++lib-y += earlycpio.o
++endif
+diff --git a/lib/earlycpio_rs.rs b/lib/earlycpio_rs.rs
+new file mode 100644
+index 000000000000..f9eecf3ad343
+--- /dev/null
++++ b/lib/earlycpio_rs.rs
+@@ -0,0 +1,157 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Find a specific cpio member in an uncompressed early-boot cpio archive
++//! — Rust translation of `lib/earlycpio.c`.
++//!
++//! Copyright 2012 Intel Corporation; author H. Peter Anvin (original C).
++//!
++//! Hex-field header parser + bounds-checked buffer walk, kept faithful:
++//! same `goto quit` early-return points (as plain `return`s here — no
++//! cleanup happens at `quit`, it's a bare early-exit), same overflow
++//! checks on the computed `dptr`/`nptr` pointers.
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_int, c_long, c_void};
++use kernel::prelude::*;
++
++const MAX_CPIO_FILE_NAME: usize = 18;
++const C_NFIELDS: usize = 14; // C_MAGIC..C_CHKSUM
++const C_MAGIC: usize = 0;
++const C_MODE: usize = 2;
++const C_NAMESIZE: usize = 12;
++const C_FILESIZE: usize = 7;
++
++// SAFETY note: bindings::cpio_data is bindgen-generated from
++// <linux/earlycpio.h>'s `struct cpio_data` — #[export] requires the
++// EXACT bindgen type here, not a locally-defined lookalike struct
++// (even an identical #[repr(C)] one is a different Rust type).
++use kernel::bindings::cpio_data as CpioData;
++
++/// `PTR_ALIGN(p, a)`: round `p` up to the next multiple of `a` (`a` a
++/// power of 2) — header-inline macro, rule 0016.
++#[inline]
++fn ptr_align(p: *const u8, a: usize) -> *const u8 {
++    let addr = p as usize;
++    ((addr + a - 1) & !(a - 1)) as *const u8
++}
++
++/// Search for files in an uncompressed cpio.
++///
++/// # Safety
++/// `path` is a valid NUL-terminated C string; `data` points to `len`
++/// valid bytes; `nextoff`, if non-NULL, is a valid `*mut c_long`.
++#[export]
++pub unsafe extern "C" fn find_cpio_data(
++    path: *const c_char,
++    data: *mut c_void,
++    len: usize,
++    nextoff: *mut c_long,
++) -> CpioData {
++    const CPIO_HEADER_LEN: usize = 8 * C_NFIELDS - 2;
++
++    let empty_name = {
++        let mut n = [0 as c_char; MAX_CPIO_FILE_NAME];
++        n[0] = 0;
++        n
++    };
++    let mut cd = CpioData { data: core::ptr::null_mut(), size: 0, name: empty_name };
++
++    // SAFETY: caller contract (path is a valid C string).
++    let mypathsize = unsafe { bindings::strlen(path) } as usize;
++
++    let mut p = data as *const u8;
++    let mut len = len;
++
++    // SAFETY: the whole loop body operates within the `len` bytes at
++    // `data` the caller guarantees, matching the C's own bounds exactly
++    // (each field read is checked against `len`/computed offsets before
++    // being dereferenced, same as the original).
++    unsafe {
++        while len > CPIO_HEADER_LEN {
++            if *p == 0 {
++                // All cpio headers need to be 4-byte aligned.
++                p = p.add(4);
++                len -= 4;
++                continue;
++            }
++
++            let mut ch = [0u32; C_NFIELDS];
++            let mut j: u32 = 6; // the magic field is only 6 characters
++            let mut chp = 0usize;
++            let mut quit = false;
++
++            for _i in 0..C_NFIELDS {
++                let mut v: u32 = 0;
++                while j > 0 {
++                    j -= 1;
++                    v <<= 4;
++                    let c = *p;
++                    p = p.add(1);
++
++                    let x = c.wrapping_sub(b'0');
++                    if x < 10 {
++                        v += x as u32;
++                        continue;
++                    }
++                    let x = (c | 0x20).wrapping_sub(b'a');
++                    if x < 6 {
++                        v += x as u32 + 10;
++                        continue;
++                    }
++                    quit = true; // Invalid hexadecimal
++                    break;
++                }
++                if quit {
++                    break;
++                }
++                ch[chp] = v;
++                chp += 1;
++                j = 8; // all other fields are 8 characters
++            }
++            if quit {
++                return cd;
++            }
++
++            if ch[C_MAGIC].wrapping_sub(0x070701) > 1 {
++                return cd; // Invalid magic
++            }
++
++            len -= CPIO_HEADER_LEN;
++
++            let dptr = ptr_align(p.add(ch[C_NAMESIZE] as usize), 4);
++            let nptr = ptr_align(dptr.add(ch[C_FILESIZE] as usize), 4);
++
++            if nptr > p.add(len) || dptr < p || nptr < dptr {
++                return cd; // Buffer overrun
++            }
++
++            if (ch[C_MODE] & 0o170000) == 0o100000
++                && (ch[C_NAMESIZE] as usize) >= mypathsize
++                && bindings::memcmp(p.cast(), path.cast(), mypathsize) == 0
++            {
++                if !nextoff.is_null() {
++                    *nextoff = (nptr as isize - data as isize) as c_long;
++                }
++
++                if (ch[C_NAMESIZE] as usize).wrapping_sub(mypathsize) >= MAX_CPIO_FILE_NAME {
++                    bindings::pr_warn_cpio_name_too_long(
++                        p.cast(),
++                        MAX_CPIO_FILE_NAME as c_int,
++                    );
++                }
++                bindings::sized_strscpy(
++                    cd.name.as_mut_ptr(),
++                    p.add(mypathsize).cast(),
++                    MAX_CPIO_FILE_NAME,
++                );
++
++                cd.data = dptr as *mut c_void;
++                cd.size = ch[C_FILESIZE] as usize;
++                return cd; // Found it!
++            }
++            len -= nptr as usize - p as usize;
++            p = nptr;
++        }
++    }
++
++    cd
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index ba53481c79ed..e45bb4c8a541 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -28,6 +28,7 @@
+  */
+ #include <linux/base64.h>
+ #include <linux/decompress/generic.h>
++#include <linux/earlycpio.h>
+ #include <linux/hrtimer_types.h>
+ 
+ #include <linux/acpi.h>
+diff --git a/rust/helpers/print.c b/rust/helpers/print.c
+index ecff4f5bbc7a..17d33bda1b34 100644
+--- a/rust/helpers/print.c
++++ b/rust/helpers/print.c
+@@ -3,19 +3,20 @@
+ #include <linux/printk.h>
+ 
+ /*
+- * pr_debug() is a config-dependent macro (compiles to nothing unless
+- * DEBUG is defined for this TU, or dynamic debug is in play) — rule
+- * 0014. The kernel crate's own pr_debug! requires a crate-root
+- * __LOG_PREFIX (set once via module!{}), which a per-file lib/*_rs.rs
+- * translation has no access to; shimming the exact C macro call here
+- * keeps the config-correct compiled-to-nothing-by-default behaviour
+- * without requiring every translated TU to become its own "module".
+- * One shim per distinct format string, same convention as other
+- * rust_helper_* primitives (e.g. llist's per-operand try_cmpxchg shims)
+- * — not a general varargs pr_debug (C macros can't be wrapped generically
+- * across the FFI boundary either way).
++ * pr_debug()/pr_warn() are config-dependent macros (pr_debug compiles to
++ * nothing unless DEBUG/dynamic-debug is in play; both need a module-
++ * identity prefix normally set once via module!{}) — rule 0014. A
++ * a per-file translated TU has no crate-root __LOG_PREFIX to
++ * give kernel::print's pr_debug!/pr_warn! macros, so the exact C macro
++ * call is shimmed here instead. One shim per distinct format string
++ * (C varargs macros can't be wrapped generically across FFI either way).
+  */
+ __rust_helper void rust_helper_pr_debug_decompress_magic(unsigned char b0, unsigned char b1)
+ {
+ 	pr_debug("Compressed data magic: %#.2x %#.2x\n", b0, b1);
+ }
++
++__rust_helper void rust_helper_pr_warn_cpio_name_too_long(const char *p, int max)
++{
++	pr_warn("File %s exceeding MAX_CPIO_FILE_NAME [%d]\n", p, max);
++}
+-- 
+2.55.0
+
