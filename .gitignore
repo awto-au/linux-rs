@@ -9,3 +9,5 @@ target/
 # the project's "derived artifacts have no legacy" rule, this is
 # rebuild-not-migrate. 145MB+ and grows with corpus size.
 /rulesdb/patterns.db
+/rulesdb/patterns.db-wal
+/rulesdb/patterns.db-shm

@@ -149,6 +149,14 @@ def main() -> int:
     )
     DB.unlink(missing_ok=True)
     conn = sqlite3.connect(DB)
+    # WAL: readers (dev.py q ..., a query while a rebuild is mid-flight)
+    # never block on the writer, and the writer never blocks on readers —
+    # real, justified win for a DB that gets queried interactively while
+    # cscope/sparse imports are still running after this script returns.
+    # No new dependency, one pragma; not nogil/threading, since none of
+    # this import path is CPU-bound on Python bytecode (SQLite's C layer
+    # already releases the GIL during actual I/O).
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA.read_text())
 
     n_rules = load_rules(conn)

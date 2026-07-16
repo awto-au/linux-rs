@@ -1,0 +1,17 @@
+{
+	"terminal.integrated.stickyScroll.enabled": false,
+	"files.watcherExclude": {
+		"**/tmp/**": true,
+		"**/linux/**": true,
+		"**/linux-riscv/**": true,
+		"**/target/**": true,
+		"**/__pycache__/**": true,
+		"**/rulesdb/patterns.db": true
+	},
+	"search.exclude": {
+		"**/tmp/**": true,
+		"**/linux/**": true,
+		"**/linux-riscv/**": true,
+		"**/target/**": true
+	}
+}
