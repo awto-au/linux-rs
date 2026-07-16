@@ -147,6 +147,30 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stdout)],
     )
+    # c2rust_attempts/c2rust_failure_signatures are populated by a
+    # separate, occasional process (scripts/run_c2rust_baseline.py +
+    # import_c2rust_baseline.py), not re-derived from the census/rules
+    # like everything else here — preserve that history across the
+    # DB.unlink() below instead of silently discarding fix-progress data
+    # every routine rebuild.
+    c2rust_backup = []
+    signatures_backup = []
+    if DB.exists():
+        old_conn = sqlite3.connect(DB)
+        try:
+            c2rust_backup = old_conn.execute(
+                "SELECT id, c_file, run_at, outcome, returncode, warnings, "
+                "missing_top_level_nodes, missing_children, label_address_exprs, "
+                "rs_files_emitted, c2rust_rev, notes FROM c2rust_attempts"
+            ).fetchall()
+            signatures_backup = old_conn.execute(
+                "SELECT id, attempt_id, c_file, kind, source_file, source_line, detail "
+                "FROM c2rust_failure_signatures"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            pass  # tables don't exist yet (first run, or pre-c2rust-tracking DB)
+        old_conn.close()
+
     DB.unlink(missing_ok=True)
     conn = sqlite3.connect(DB)
     # WAL: readers (dev.py q ..., a query while a rebuild is mid-flight)
@@ -167,6 +191,18 @@ def main() -> int:
     logging.info("statement families: %d", n_stmts)
     n_tus = load_translated_tus(conn)
     logging.info("translated TUs: %d", n_tus)
+
+    if c2rust_backup:
+        conn.executemany(
+            "INSERT INTO c2rust_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", c2rust_backup
+        )
+        conn.executemany(
+            "INSERT INTO c2rust_failure_signatures VALUES (?,?,?,?,?,?,?)", signatures_backup
+        )
+        logging.info(
+            "restored %d c2rust_attempts + %d c2rust_failure_signatures rows",
+            len(c2rust_backup), len(signatures_backup),
+        )
 
     conn.commit()
 

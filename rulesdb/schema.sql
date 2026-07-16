@@ -149,6 +149,144 @@ CREATE TABLE translated_tus (
 );
 CREATE INDEX idx_translated_tus_cfile ON translated_tus(c_file);
 
+-- c2rust baseline/triage runs (scripts/run_c2rust_baseline.py): one row
+-- per (c_file, run) so re-running after a c2rust fork fix shows progress
+-- over time rather than overwriting history. outcome is c2rust's own
+-- result, independent of translated_tus — a TU can be manually landed
+-- AND separately have a c2rust attempt on record (e.g. as a differential
+-- check, or from before it was hand-translated).
+CREATE TABLE c2rust_attempts (
+    id INTEGER PRIMARY KEY,
+    c_file TEXT NOT NULL,          -- relative to linux-riscv/, e.g. "lib/bcd.c"
+    run_at TEXT NOT NULL,          -- ISO 8601, when this baseline run happened
+    outcome TEXT NOT NULL,         -- crash | no_output | dropped_decls | clean
+    returncode INTEGER,
+    warnings INTEGER,
+    missing_top_level_nodes INTEGER,
+    missing_children INTEGER,
+    label_address_exprs INTEGER,
+    rs_files_emitted INTEGER,
+    c2rust_rev TEXT,               -- awtoau/c2rust git rev used for this run
+    notes TEXT
+);
+CREATE INDEX idx_c2rust_attempts_cfile ON c2rust_attempts(c_file);
+CREATE INDEX idx_c2rust_attempts_outcome ON c2rust_attempts(outcome);
+
+-- Individual failure SIGNATURES extracted from each attempt's log —
+-- one row per distinct (kind, detail) occurrence, so recurring failure
+-- classes (e.g. "GNU address-of-label in _THIS_IP_", "panic at
+-- conversion.rs:1024 TagTypeUnknown") surface as queryable patterns
+-- across the whole corpus, not just per-file pass/fail counts.
+-- 2026-07-17, Dan's request: "extract the issues... so we get patterns
+-- of failures".
+CREATE TABLE c2rust_failure_signatures (
+    id INTEGER PRIMARY KEY,
+    attempt_id INTEGER NOT NULL REFERENCES c2rust_attempts(id),
+    c_file TEXT NOT NULL,
+    kind TEXT NOT NULL,        -- panic | missing_top_level_node | missing_child |
+                                -- label_address | ast_warning | other
+    source_file TEXT,          -- header/file the failure was located in, if known
+    source_line INTEGER,
+    detail TEXT NOT NULL       -- the specific message/macro/tag, deduplicatable
+);
+CREATE INDEX idx_c2rust_failsig_cfile ON c2rust_failure_signatures(c_file);
+CREATE INDEX idx_c2rust_failsig_kind ON c2rust_failure_signatures(kind);
+CREATE INDEX idx_c2rust_failsig_detail ON c2rust_failure_signatures(detail);
+
+-- The actual "patterns of failure" view: distinct failure signatures
+-- ranked by how many TUs they block — this is the fix-prioritization
+-- queue (fix the signature blocking the most files first). Scoped to
+-- the MOST RECENT run_at only — c2rust_attempts accumulates history
+-- across repeated baseline runs (that's the point, for progress
+-- tracking), but "what should I fix next" should reflect current
+-- state, not every run ever recorded mixed together.
+CREATE VIEW c2rust_failure_patterns AS
+SELECT s.kind, s.detail, COUNT(DISTINCT s.c_file) AS tus_affected,
+       GROUP_CONCAT(DISTINCT s.c_file) AS example_files
+FROM c2rust_failure_signatures s
+JOIN c2rust_attempts a ON a.id = s.attempt_id
+WHERE a.run_at = (SELECT MAX(run_at) FROM c2rust_attempts)
+GROUP BY s.kind, s.detail
+ORDER BY tus_affected DESC;
+
+-- Same "latest run only" scoping for the outcome-summary use case
+-- (dev.py-style progress dashboard: how many clean/crash/etc RIGHT NOW).
+CREATE VIEW c2rust_latest_run_summary AS
+SELECT outcome, COUNT(*) AS n
+FROM c2rust_attempts
+WHERE run_at = (SELECT MAX(run_at) FROM c2rust_attempts)
+GROUP BY outcome
+ORDER BY n DESC;
+
+-- Upstream immunant/c2rust intel: forks, issues, PRs — so before writing
+-- our own fix we can check "has someone already solved this" in one
+-- query instead of manually re-searching GitHub every time. 2026-07-17,
+-- Dan's request: "make a database of all known issue and forks issue
+-- and pr and patchs so we can quickly check for existing code before we
+-- write our own". Populated by scripts/crawl_c2rust_upstream.py, NOT
+-- wired into dev.py db (occasional/manual, like c2rust_attempts) —
+-- preserved across build_db.py rebuilds the same way.
+CREATE TABLE c2rust_forks (
+    id INTEGER PRIMARY KEY,        -- GitHub repo id
+    full_name TEXT NOT NULL UNIQUE, -- "owner/repo"
+    html_url TEXT NOT NULL,
+    pushed_at TEXT,                -- ISO 8601, last push — staleness signal
+    ahead_by INTEGER,              -- commits ahead of immunant/c2rust master, if known
+    stargazers_count INTEGER,
+    default_branch TEXT,
+    crawled_at TEXT NOT NULL
+);
+CREATE INDEX idx_c2rust_forks_pushed ON c2rust_forks(pushed_at);
+
+CREATE TABLE c2rust_issues (
+    id INTEGER PRIMARY KEY,        -- GitHub issue id (global, not per-repo number)
+    repo TEXT NOT NULL,            -- "owner/repo" (immunant/c2rust or a fork)
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    state TEXT NOT NULL,           -- open | closed
+    is_pr INTEGER NOT NULL,        -- 1 if this is actually a PR (GitHub's API unifies them)
+    labels TEXT,                   -- comma-joined
+    html_url TEXT NOT NULL,
+    body TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    closed_at TEXT,
+    merged INTEGER,                -- PRs only: 1 if merged, 0 if closed-unmerged, NULL if open/not-a-PR
+    crawled_at TEXT NOT NULL
+);
+CREATE INDEX idx_c2rust_issues_repo ON c2rust_issues(repo);
+CREATE INDEX idx_c2rust_issues_state ON c2rust_issues(state);
+CREATE INDEX idx_c2rust_issues_ispr ON c2rust_issues(is_pr);
+
+-- FTS5 full-text index over issue/PR title+body — the actual "check for
+-- existing code before we write our own" search surface (e.g. MATCH
+-- '"address of label" OR TagTypeUnknown OR AddrLabelExpr').
+CREATE VIRTUAL TABLE c2rust_issues_fts USING fts5(
+    repo, number UNINDEXED, title, body, content='c2rust_issues', content_rowid='id'
+);
+
+-- Per-TU translation progress: manual (translated_tus) status joined
+-- with the MOST RECENT c2rust_attempts row for that file, so one query
+-- answers "what's done, how (manual/c2rust), and if c2rust failed, why"
+-- — the relational progress table requested 2026-07-17.
+CREATE VIEW tu_translation_progress AS
+SELECT
+  t.c_file,
+  (tt.c_file IS NOT NULL) AS manually_translated,
+  tt.rs_file, tt.landed_at, tt.patch_number,
+  latest.outcome AS c2rust_outcome,
+  latest.run_at AS c2rust_run_at,
+  latest.warnings AS c2rust_warnings,
+  latest.missing_top_level_nodes AS c2rust_missing_nodes,
+  latest.label_address_exprs AS c2rust_label_addr_exprs,
+  latest.c2rust_rev
+FROM (SELECT DISTINCT c_file FROM c2rust_attempts
+      UNION SELECT c_file FROM translated_tus) t
+LEFT JOIN translated_tus tt ON tt.c_file = t.c_file
+LEFT JOIN c2rust_attempts latest
+  ON latest.c_file = t.c_file
+  AND latest.run_at = (SELECT MAX(run_at) FROM c2rust_attempts WHERE c_file = t.c_file);
+
 -- ---- convenience views (the point of "everything relational, reverse-
 -- checkable" — where is X defined, where is X called FROM, is X already
 -- translated, in one join, not grep) ----
