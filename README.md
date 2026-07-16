@@ -43,6 +43,34 @@ incrementally validated translation of a current Linux tree that preserves
 its internal architecture**. The booting Rust kernels are used here as a
 target-design corpus: [docs/reference-projects.md](docs/reference-projects.md).
 
+## Translation discipline: faithful, not clever
+
+Construct-by-construct conversion, **no optimisation** — the output must be
+behaviourally identical to the C, not improved:
+
+- **The oracle certifies equivalence, never improvement.** Every tier
+  (ABI diff, KUnit differential, boot) compares Rust against the C
+  original; an "optimised" translation makes differential testing
+  meaningless and review unscalable.
+- **Optimisation is the compiler's job.** LLVM sees both versions.
+- **Deviations are never silent.** When Rust forces a difference it goes in
+  the rule's `deviations` field with justification — and so far every one
+  is strictly *safer* (explicit `wrapping_*` where C wraps implicitly,
+  `trailing_zeros(0)` defined where `__ffs(0)` is UB, `#[export]`'s
+  compile-time prototype check).
+- **Not literally line-by-line:** structure maps (`do{}while(0)` shells
+  vanish, `goto err` ladders become early returns, list macros become
+  iterators) but semantics, side-effect order and error behaviour must not.
+- **Making it nicer is a separate pass.** The Stage-3 safety lift (raw
+  pointers → guards and `kernel`-crate types) transforms representation,
+  never algorithms, and runs only on rule-validated instances with the
+  unsafe-first version as its differential baseline.
+
+Worked example: the first translated TU kept *both* GCD algorithms and the
+runtime static-key dispatch, though the key looked constant — riscv
+disables it at boot without Zbb, so the "dead" path is the live one on our
+target ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)).
+
 ## Status
 
 | Date | Milestone |
