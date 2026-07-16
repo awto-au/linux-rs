@@ -47,6 +47,25 @@ staging. The optimisation subagent (Phase 2.5) gets a work queue from the
 purity census and must beat the faithful version on measurement or the
 faithful version ships.
 
+## Stabilised numbers (min-of-5, pinned core — supersede the table above)
+
+Naive single runs swung ±2× in BOTH directions between runs (turbo/
+scheduling noise). Pinned + min-of-5 + interleaved:
+
+| func | C -O2 | C -O3 | faithful | Δ vs C | optimised |
+|---|---:|---:|---:|---:|---:|
+| gcd | 62.1 | 62.2 | 60.3 | **-3%** | 122.6 (2× slower) |
+| int_sqrt | 21.5 | 21.6 | 20.7 | **-3%** | **9.9 (2.2× faster)** |
+| int_pow | 2.43 | 2.48 | 2.41 | **-1%** | — |
+| intlog2 | 1.55 | 1.58 | 1.52 | **-2%** | — |
+
+All four faithful translations pass the **±10% perf-parity gate**
+(rule 0011, Dan's proposal): any translated function outside the band
+stops the line for cause analysis, and the cause catalogue feeds the
+Phase 2.5 optimisation lane's rule set. Methodology is mandatory in the
+rule — the phantom swings of unpinned runs are exactly what it exists
+to prevent.
+
 ## Why the "idiomatic" gcd lost — the kernel documented it in 2016
 
 Kernel commit `fff7fb0b2d90` ("lib/GCD.c: use binary GCD algorithm instead

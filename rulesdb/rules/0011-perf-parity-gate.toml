@@ -1,0 +1,39 @@
+id = "perf-parity-gate"
+version = 1
+tier = 1
+category = "process"
+
+[match]
+c = "every translated function with a benchmarkable pure interface (Dan, 2026-07-16)"
+
+[emit]
+kind = "rewrite"
+rust = """
+GATE: faithful translation must be within ±10% of the C original.
+Outside the band => STOP and analyse the cause before shipping; the cause
+catalogue is the working rule set for the Phase 2.5 optimisation lane.
+
+Measurement methodology (mandatory — naive runs produced 2x phantom
+swings): pinned core (taskset), min-of-N (N>=5), interleaved binaries,
+fixed input stream, cross-implementation checksum agreement. QEMU numbers
+are relative-only; absolute numbers from real hardware.
+"""
+deviations = []
+
+[provenance]
+derivation = "independently derived"
+evidence = ["docs/phase2-batch2-and-bench.md stabilised table 2026-07-16",
+            "kernel commit fff7fb0b2d90 (the kernel's own gcd tournament)"]
+
+[validation]
+instances = ["gcd -3%", "int_sqrt -3%", "int_pow -1%", "intlog2 -2% — all four PASS the gate"]
+oracle = "tier1"
+negative = ["single unpinned runs (produced phantom 1.8-2x ratios both directions — never trust them)"]
+human_review = false
+
+[findings]
+catalogue = [
+  "control-structure changes are logic changes: dropped early exits cost 2x on gcd (coprime probability 6/pi^2 makes ==1 exits dominant)",
+  "check original file git-log for prior benchmark tournaments before proposing cleaner algorithms",
+  "std intrinsic-backed routines (u64::isqrt) can legitimately beat kernel C 2x — candidates, per-function, measured",
+]
