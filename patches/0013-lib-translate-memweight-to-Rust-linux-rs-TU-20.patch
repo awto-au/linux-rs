@@ -1,0 +1,118 @@
+From 22c8e6308b083ab0256795a9fcd4298f02ce502c Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 13:47:39 +1000
+Subject: [PATCH] lib: translate memweight to Rust (linux-rs TU 20)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile        |  9 +++++-
+ lib/memweight_rs.rs | 73 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 81 insertions(+), 1 deletion(-)
+ create mode 100644 lib/memweight_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index c63e75521971..747d97c8f044 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -61,7 +61,7 @@ endif
+ obj-y += parser.o debug_locks.o random32.o \
+ 	 bust_spinlocks.o kasprintf.o bitmap.o scatterlist.o \
+ 	 uuid.o iov_iter.o clz_ctz.o \
+-	 bsearch.o lwq.o memweight.o kfifo.o \
++	 bsearch.o lwq.o kfifo.o \
+ 	 percpu-refcount.o rhashtable.o \
+ 	 once.o refcount.o rcuref.o usercopy.o errseq.o bucket_locks.o \
+ 	 generic-radix-tree.o bitmap-str.o
+@@ -401,3 +401,10 @@ lib-y += cmdline_rs.o
+ else
+ lib-y += cmdline.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += memweight_rs.o
++else
++obj-y += memweight.o
++endif
+diff --git a/lib/memweight_rs.rs b/lib/memweight_rs.rs
+new file mode 100644
+index 000000000000..19dec719471c
+--- /dev/null
++++ b/lib/memweight_rs.rs
+@@ -0,0 +1,73 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Count total bits set in a memory area — Rust translation of
++//! `lib/memweight.c`.
++
++use kernel::bindings;
++use kernel::ffi::c_void;
++use kernel::prelude::*;
++
++const BITS_PER_LONG: usize = kernel::ffi::c_ulong::BITS as usize;
++const SIZEOF_LONG: usize = core::mem::size_of::<kernel::ffi::c_ulong>();
++const INT_MAX: usize = i32::MAX as usize; // <linux/limits.h>: (int)(~0U >> 1)
++
++/// Count the total number of bits set in a memory area.
++///
++/// SAFETY: `ptr` points to at least `bytes` valid, readable bytes.
++#[export]
++pub unsafe extern "C" fn memweight(ptr: *const c_void, bytes: usize) -> usize {
++    let mut ret: usize = 0;
++    let mut bytes = bytes;
++    let mut bitmap = ptr as *const u8;
++
++    // C: for (; bytes > 0 && ((unsigned long)bitmap) % sizeof(long); bytes--, bitmap++)
++    //        ret += hweight8(*bitmap);
++    // `hweight8(x)` on a non-compile-time-constant byte always takes the
++    // __arch_hweight8 -> __sw_hweight8 path (rule 0021: real exported fn,
++    // already translated in this same crate — same cross-TU-call pattern
++    // as calling into still-C code, per lib/math/lcm_rs.rs's bindings::gcd
++    // precedent).
++    while bytes > 0 && (bitmap as usize) % SIZEOF_LONG != 0 {
++        // SAFETY: caller contract; `bytes > 0` guarantees this byte is
++        // in range.
++        let b = unsafe { *bitmap };
++        // SAFETY: __sw_hweight8 has no preconditions.
++        ret += unsafe { bindings::__sw_hweight8(b as core::ffi::c_uint) } as usize;
++        bytes -= 1;
++        bitmap = unsafe { bitmap.add(1) };
++    }
++
++    let longs = bytes / SIZEOF_LONG;
++    if longs != 0 {
++        // C: BUG_ON(longs >= INT_MAX / BITS_PER_LONG); — BUG_ON(cond) ==
++        // `if (unlikely(cond)) BUG();` (branch hint dropped, rule 0007).
++        if longs >= INT_MAX / BITS_PER_LONG {
++            // SAFETY: BUG() never returns.
++            unsafe { bindings::BUG() };
++        }
++        // SAFETY: `bitmap` is `SIZEOF_LONG`-aligned here (loop above ran
++        // until alignment or bytes==0, and longs!=0 implies bytes!=0 at
++        // that point), and covers `longs * SIZEOF_LONG` bytes per the
++        // caller's contract combined with `longs = bytes / SIZEOF_LONG`.
++        ret += unsafe {
++            bindings::__bitmap_weight(
++                bitmap as *const kernel::ffi::c_ulong,
++                (longs * BITS_PER_LONG) as core::ffi::c_uint,
++            )
++        } as usize;
++        bytes -= longs * SIZEOF_LONG;
++        bitmap = unsafe { bitmap.add(longs * SIZEOF_LONG) };
++    }
++
++    // The reason that this last loop is distinct from the preceding
++    // bitmap_weight() call is to compute 1-bits in the last region
++    // smaller than sizeof(long) properly on big-endian systems.
++    while bytes > 0 {
++        // SAFETY: per the same reasoning as the first loop.
++        let b = unsafe { *bitmap };
++        ret += unsafe { bindings::__sw_hweight8(b as core::ffi::c_uint) } as usize;
++        bytes -= 1;
++        bitmap = unsafe { bitmap.add(1) };
++    }
++
++    ret
++}
+-- 
+2.55.0
+
