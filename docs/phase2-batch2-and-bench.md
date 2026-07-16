@@ -46,3 +46,23 @@ Path impact of the bench: none required — it validates the current
 staging. The optimisation subagent (Phase 2.5) gets a work queue from the
 purity census and must beat the faithful version on measurement or the
 faithful version ships.
+
+## Why the "idiomatic" gcd lost — the kernel documented it in 2016
+
+Kernel commit `fff7fb0b2d90` ("lib/GCD.c: use binary GCD algorithm instead
+of Euclidean", Zhaoxiu Zeng, 2016) is a benchmark tournament of five gcd
+variants with full source and numbers in the commit message: Euclidean
+division (gcd0, ~10,000 units), basic binary GCD (gcd1, ~2,100), even/odd
+(gcd2, ~2,800), binary **with `==1` early exits** (gcd3, ~2,030 — the
+winner, today's fast path), even/odd with early exits (gcd4 — today's
+fallback). Our "idiomatic" rewrite is essentially **gcd1 with an extra
+`trailing_zeros` per iteration — a shape the kernel already measured and
+rejected**. The early exits matter because random input pairs are coprime
+with probability 6/π² ≈ 61%, so `gcd == small` dominates and the `a == 1`
+check terminates most loops almost immediately; the "clean" `while a != b`
+loop has no such exit and pays two bit-scans per iteration.
+
+Lesson for the rule DB: kernel C that *looks* baroque frequently encodes a
+benchmark result. The optimisation lane must check `git log` of the
+original file for prior tournaments before proposing "cleaner" algorithms
+— provenance cuts both ways.
