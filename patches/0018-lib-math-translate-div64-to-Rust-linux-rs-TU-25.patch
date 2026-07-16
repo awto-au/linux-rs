@@ -1,0 +1,233 @@
+From 3cf21e2e62d086a41679cfe88f703347213e0df2 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 16:40:09 +1000
+Subject: [PATCH] lib/math: translate div64 to Rust (linux-rs TU 25)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/math/Makefile               |   9 +-
+ lib/math/div64_rs.rs            | 177 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ 3 files changed, 186 insertions(+), 1 deletion(-)
+ create mode 100644 lib/math/div64_rs.rs
+
+diff --git a/lib/math/Makefile b/lib/math/Makefile
+index 97e3de5d33f0..6dcd987e49bb 100644
+--- a/lib/math/Makefile
++++ b/lib/math/Makefile
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+-obj-y += div64.o
++obj-y +=
+ 
+ # linux-rs: translated TUs — Rust when available (gcd_key.c stays C: the
+ # static key's linker-section definition), C originals otherwise.
+@@ -29,3 +29,10 @@ obj-y += reciprocal_div_rs.o
+ else
+ obj-y += reciprocal_div.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += div64_rs.o
++else
++obj-y += div64.o
++endif
+diff --git a/lib/math/div64_rs.rs b/lib/math/div64_rs.rs
+new file mode 100644
+index 000000000000..493c950a0d8b
+--- /dev/null
++++ b/lib/math/div64_rs.rs
+@@ -0,0 +1,177 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Generic 64-bit division helpers — Rust translation of `lib/math/div64.c`.
++//!
++//! Scope: only `iter_div_u64_rem` and `mul_u64_add_u64_div_u64`. Every
++//! other function in the C original (`__div64_32`, `div_s64_rem`,
++//! `div64_u64_rem`, `div64_u64`, `div64_s64`) lives inside
++//! `#if BITS_PER_LONG == 32` — dead code on this riscv64 target
++//! (`BITS_PER_LONG == 64`, confirmed via
++//! `include/asm-generic/bitsperlong.h`), so translating them would add
++//! symbols that never existed in the C build for this arch. Ordinary
++//! dead-code-for-this-config, not an arch-header override (rule 0026's
++//! own `negative` clause covers this exact case).
++//!
++//! `div64_u64` itself — needed by `mul_u64_add_u64_div_u64` below — is a
++//! plain header-inline on 64-bit archs (`include/linux/math64.h`:
++//! `#if BITS_PER_LONG == 64` branch is just `dividend / divisor`), rule
++//! 0016, not the C file's `#elif BITS_PER_LONG == 32` extern version.
++
++use kernel::prelude::*;
++
++/// `mul_u32_u32`/`add_u64_u32` (`include/linux/math64.h`) — plain
++/// header-inlines, rule 0016.
++#[inline]
++fn mul_u32_u32(a: u32, b: u32) -> u64 {
++    a as u64 * b as u64
++}
++#[inline]
++fn add_u64_u32(a: u64, b: u32) -> u64 {
++    a + b as u64
++}
++#[inline]
++fn mul_add(a: u32, b: u32, c: u32) -> u64 {
++    add_u64_u32(mul_u32_u32(a, b), c)
++}
++
++/// `mul_u64_u64_add_u64` (`lib/math/div64.c`, `#else` branch — this
++/// build has no `__SIZEOF_INT128__`-native-multiply fast path selected
++/// since we go through the portable 32-bit-chunks version to avoid
++/// depending on an i128 codegen lowering choice; behaviourally
++/// identical, matches the `#else` arm exactly).
++#[inline]
++fn mul_u64_u64_add_u64(a: u64, b: u64, c: u64) -> (u64, u64) {
++    // Since (x-1)(x-1) + 2(x-1) == x.x - 1 two u32 can be added to a u64.
++    let x = mul_add(a as u32, b as u32, c as u32);
++    let mut y = mul_add(a as u32, (b >> 32) as u32, (c >> 32) as u32);
++    y = add_u64_u32(y, (x >> 32) as u32);
++    let z = mul_add((a >> 32) as u32, (b >> 32) as u32, (y >> 32) as u32);
++    y = mul_add((a >> 32) as u32, b as u32, y as u32);
++    let p_lo = (y << 32) + (x as u32) as u64;
++    (add_u64_u32(z, (y >> 32) as u32), p_lo)
++}
++
++/// `BITS_PER_ITER (__LONG_WIDTH__ >= 64 ? 32 : 16)` — this is riscv64
++/// (`__LONG_WIDTH__ == 64`), so `BITS_PER_ITER == 32` unconditionally;
++/// the C's `#if BITS_PER_ITER == 16` fallback branch is dead here.
++const BITS_PER_ITER: u32 = 32;
++
++/// `mul_u64_long_add_u64` (`BITS_PER_ITER == 32` arm) == `mul_u64_u64_add_u64` directly.
++#[inline]
++fn mul_u64_long_add_u64(a: u64, b: u64, c: u64) -> (u64, u64) {
++    mul_u64_u64_add_u64(a, b, c)
++}
++
++/// `__iter_div_u64_rem` (`include/vdso/math64.h`) — header-inline, rule
++/// 0016. The C wraps the loop body in `asm("" : "+rm"(dividend))` purely
++/// to defeat GCC's strength-reduction of the loop into a modulo op; that
++/// is a codegen-quality trick, not a semantic requirement — the
++/// repeated-subtraction behaviour is preserved by the loop itself
++/// regardless of what LLVM does with it.
++#[inline]
++fn iter_div_u64_rem_inline(mut dividend: u64, divisor: u32) -> (u32, u64) {
++    let mut ret: u32 = 0;
++    while dividend >= divisor as u64 {
++        dividend -= divisor as u64;
++        ret += 1;
++    }
++    (ret, dividend)
++}
++
++/// Iterative div/mod for use when dividend is not expected to be much
++/// bigger than divisor.
++///
++/// # Safety
++/// `remainder` is a valid, non-null, properly aligned `*mut u64`.
++#[export]
++pub unsafe extern "C" fn iter_div_u64_rem(dividend: u64, divisor: u32, remainder: *mut u64) -> u32 {
++    let (ret, rem) = iter_div_u64_rem_inline(dividend, divisor);
++    // SAFETY: per function contract.
++    unsafe {
++        *remainder = rem;
++    }
++    ret
++}
++
++/// `a*b + c`, then `/ d`, computed at full 128-bit intermediate
++/// precision without ever truncating `a*b + c`.
++#[export]
++pub unsafe extern "C" fn mul_u64_add_u64_div_u64(a: u64, b: u64, c: u64, d: u64) -> u64 {
++    let (mut n_hi, mut n_lo) = mul_u64_u64_add_u64(a, b, c);
++
++    if n_hi == 0 {
++        return n_lo / d;
++    }
++
++    if n_hi >= d {
++        if d == 0 {
++            // Trigger a runtime divide-by-zero exception, matching the
++            // C's `~0UL / zero` with OPTIMIZER_HIDE_VAR(zero) forcing a
++            // genuine runtime division rather than a compile-time-
++            // provable-UB elision. `black_box` is this project's
++            // equivalent optimizer-defeat primitive.
++            let zero: u64 = core::hint::black_box(0);
++            return u64::MAX / zero;
++        }
++        // overflow: result is unrepresentable in a u64
++        return u64::MAX;
++    }
++
++    // Left align the divisor, shifting the dividend to match.
++    let mut d = d;
++    let d_z_hi = d.leading_zeros();
++    if d_z_hi != 0 {
++        d <<= d_z_hi;
++        n_hi = (n_hi << d_z_hi) | (n_lo >> (64 - d_z_hi));
++        n_lo <<= d_z_hi;
++    }
++
++    let mut reps = 64 / BITS_PER_ITER;
++    // Optimise loop count for small dividends.
++    if (n_hi >> 32) as u32 == 0 {
++        reps -= 32 / BITS_PER_ITER;
++        n_hi = (n_hi << 32) | (n_lo >> 32);
++        n_lo <<= 32;
++    }
++    // BITS_PER_ITER == 16 branch (n_hi >> 48 check) is dead: BITS_PER_ITER is
++    // unconditionally 32 on this target (see const above).
++
++    // Invert the dividend so we can use add instead of subtract.
++    n_lo = !n_lo;
++    n_hi = !n_hi;
++
++    // Get the most significant BITS_PER_ITER bits of the divisor.
++    // This is used to get a low 'guestimate' of the quotient digit.
++    let d_msig: u64 = (d >> (64 - BITS_PER_ITER)) + 1;
++
++    // Now do a 'long division' with BITS_PER_ITER bit 'digits'.
++    // The 'guess' quotient digit can be low and BITS_PER_ITER+1 bits.
++    // The worst case is dividing ~0 by 0x8000 which requires two subtracts.
++    let mut quotient: u64 = 0;
++    while reps > 0 {
++        reps -= 1;
++        let mut q_digit: u64 = (!n_hi >> (64 - 2 * BITS_PER_ITER)) / d_msig;
++        // Shift 'n' left to align with the product q_digit * d.
++        let mut overflow: u32 = (n_hi >> (64 - BITS_PER_ITER)) as u32;
++        n_hi = add_u64_u32(n_hi << BITS_PER_ITER, (n_lo >> (64 - BITS_PER_ITER)) as u32);
++        n_lo <<= BITS_PER_ITER;
++        // Add product to negated divisor.
++        let (carry, new_n_hi) = mul_u64_long_add_u64(d, q_digit, n_hi);
++        n_hi = new_n_hi;
++        overflow = overflow.wrapping_add(carry as u32);
++        // Adjust for the q_digit 'guestimate' being low.
++        while overflow < (0xffffffffu32 >> (32 - BITS_PER_ITER)) {
++            q_digit += 1;
++            n_hi += d;
++            overflow = overflow.wrapping_add((n_hi < d) as u32);
++        }
++        quotient = (quotient << BITS_PER_ITER) + q_digit;
++    }
++
++    // The above only ensures the remainder doesn't overflow, it can
++    // still be possible to add (aka subtract) another copy of the
++    // divisor.
++    if n_hi.wrapping_add(d) > n_hi {
++        quotient += 1;
++    }
++    quotient
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index 7d6fb6128a04..52b31b354ab5 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -80,6 +80,7 @@
+ #include <linux/list_sort.h>
+ #include <linux/llist.h>
+ #include <linux/math.h>
++#include <linux/math64.h>
+ #include <linux/mdio.h>
+ #include <linux/mm.h>
+ #include <linux/miscdevice.h>
+-- 
+2.55.0
+
