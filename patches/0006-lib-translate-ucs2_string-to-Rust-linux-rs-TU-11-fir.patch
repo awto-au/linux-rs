@@ -1,0 +1,282 @@
+From 3798da0f420f5db0f7288e0d9845b140a6e97df7 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 12:18:07 +1000
+Subject: [PATCH] lib: translate ucs2_string to Rust (linux-rs TU 11, first via
+ integrate_tu)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Raw-pointer UCS2 string walks kept faithful; WARN_ON_ONCE via a new
+rust_helper_WARN_ON_ONCE shim (rule 0014 — exact for this TU's single
+call site); MODULE_* dropped (builtin). First TU whose integration
+(Makefile switch, bindings include, config, build, boot, KUnit verdict)
+ran as one dev.py integrate command. No dedicated KUnit suite: oracle
+tiers 1-2 + full regression boot (13 suites green).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |   9 +-
+ lib/ucs2_string_rs.rs           | 197 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ rust/helpers/bug.c              |   7 ++
+ 4 files changed, 213 insertions(+), 1 deletion(-)
+ create mode 100644 lib/ucs2_string_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 3cbb3c0dcfed..fc31a603de08 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -310,7 +310,7 @@ quiet_cmd_build_OID_registry = GEN     $@
+ 
+ clean-files	+= oid_registry_data.c
+ 
+-obj-$(CONFIG_UCS2_STRING) += ucs2_string.o
++obj-$(CONFIG_UCS2_STRING) +=
+ obj-$(CONFIG_UBSAN) += ubsan.o
+ 
+ UBSAN_SANITIZE_ubsan.o := n
+@@ -345,3 +345,10 @@ CONTEXT_ANALYSIS_test_context-analysis.o := y
+ obj-$(CONFIG_CONTEXT_ANALYSIS_TEST) += test_context-analysis.o
+ 
+ subdir-$(CONFIG_FORTIFY_SOURCE) += test_fortify
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-$(CONFIG_UCS2_STRING) += ucs2_string_rs.o
++else
++obj-$(CONFIG_UCS2_STRING) += ucs2_string.o
++endif
+diff --git a/lib/ucs2_string_rs.rs b/lib/ucs2_string_rs.rs
+new file mode 100644
+index 000000000000..20b31c785248
+--- /dev/null
++++ b/lib/ucs2_string_rs.rs
+@@ -0,0 +1,197 @@
++// SPDX-License-Identifier: GPL-2.0
++//! UCS2 string handling — Rust translation of `lib/ucs2_string.c`.
++//!
++//! Raw-pointer string walks, faithful; WARN_ON_ONCE via the C shim
++//! (rule 0014 — exact here: this TU has a single call site).
++//! MODULE_* macros dropped (builtin, CONFIG_MODULES=n).
++
++use kernel::bindings;
++use kernel::ffi::{c_int, c_ulong};
++use kernel::prelude::*;
++
++type Ucs2Char = bindings::ucs2_char_t; // u16
++
++/// Return the number of unicode characters in data.
++///
++/// All pointer parameters follow the C contract: valid, NUL-terminated
++/// (or `maxlength`-bounded) UCS2 buffers.
++#[export]
++pub unsafe extern "C" fn ucs2_strnlen(mut s: *const Ucs2Char, maxlength: usize) -> c_ulong {
++    let mut length: c_ulong = 0;
++
++    // SAFETY: per C contract; we read at most maxlength+1 chars up to NUL.
++    unsafe {
++        // C: while (*s++ != 0 && length < maxlength) length++;
++        loop {
++            let c = *s;
++            s = s.add(1);
++            if c != 0 && (length as usize) < maxlength {
++                length += 1;
++            } else {
++                break;
++            }
++        }
++    }
++    length
++}
++
++/// Return the number of unicode characters in a NUL-terminated string.
++#[export]
++pub unsafe extern "C" fn ucs2_strlen(s: *const Ucs2Char) -> c_ulong {
++    // SAFETY: as ucs2_strnlen.
++    unsafe { ucs2_strnlen(s, !0usize) }
++}
++
++/// Return the length of this string in BYTES (not unicode characters).
++#[export]
++pub unsafe extern "C" fn ucs2_strsize(data: *const Ucs2Char, maxlength: c_ulong) -> c_ulong {
++    let sz = core::mem::size_of::<Ucs2Char>() as c_ulong;
++    // SAFETY: as ucs2_strnlen.
++    unsafe { ucs2_strnlen(data, (maxlength / sz) as usize) * sz }
++}
++
++/// Copy a UCS2 string into a sized buffer, always NUL-terminating.
++/// Returns characters copied (excl. NUL) or -E2BIG (count 0 or truncated).
++#[export]
++pub unsafe extern "C" fn ucs2_strscpy(
++    dst: *mut Ucs2Char,
++    src: *const Ucs2Char,
++    count: usize,
++) -> isize {
++    let e2big = -(bindings::E2BIG as isize);
++
++    // Need space for at least one NUL character.
++    // SAFETY: WARN_ON_ONCE shim only evaluates the condition.
++    if count == 0
++        || unsafe {
++            bindings::WARN_ON_ONCE(count > i32::MAX as usize / core::mem::size_of::<Ucs2Char>())
++        }
++    {
++        return e2big;
++    }
++
++    // SAFETY: dst has room for `count` chars, src is NUL-terminated or
++    // longer than count (C contract); buffers don't overlap.
++    unsafe {
++        // Copy at most 'count' characters, return early on NUL.
++        let mut res: isize = 0;
++        while (res as usize) < count {
++            let c = *src.add(res as usize);
++            *dst.add(res as usize) = c;
++
++            if c == 0 {
++                return res;
++            }
++            res += 1;
++        }
++
++        // No NUL found within count: enforce NUL-termination, report error.
++        *dst.add(count - 1) = 0;
++    }
++    e2big
++}
++
++/// Compare two UCS2 strings, at most `len` characters.
++#[export]
++pub unsafe extern "C" fn ucs2_strncmp(
++    mut a: *const Ucs2Char,
++    mut b: *const Ucs2Char,
++    mut len: usize,
++) -> c_int {
++    // SAFETY: per C contract (valid, bounded/NUL-terminated buffers).
++    unsafe {
++        loop {
++            if len == 0 {
++                return 0;
++            }
++            if *a < *b {
++                return -1;
++            }
++            if *a > *b {
++                return 1;
++            }
++            if *a == 0 {
++                // implies *b == 0
++                return 0;
++            }
++            a = a.add(1);
++            b = b.add(1);
++            len -= 1;
++        }
++    }
++}
++
++/// Number of bytes the string needs when encoded as UTF-8.
++#[export]
++pub unsafe extern "C" fn ucs2_utf8size(src: *const Ucs2Char) -> c_ulong {
++    let mut j: c_ulong = 0;
++
++    // SAFETY: src is NUL-terminated (C contract).
++    unsafe {
++        let mut i = 0usize;
++        while *src.add(i) != 0 {
++            let c: u16 = *src.add(i);
++
++            if c >= 0x800 {
++                j += 3;
++            } else if c >= 0x80 {
++                j += 2;
++            } else {
++                j += 1;
++            }
++            i += 1;
++        }
++    }
++    j
++}
++
++/// Copy at most `maxlength` bytes of whole UTF-8 characters to `dest` from
++/// the UCS2 string `src`. Returns characters copied, excluding final NUL.
++#[export]
++pub unsafe extern "C" fn ucs2_as_utf8(
++    dest: *mut u8,
++    src: *const Ucs2Char,
++    mut maxlength: c_ulong,
++) -> c_ulong {
++    let mut j: usize = 0;
++    // SAFETY: src NUL-terminated; dest has maxlength bytes (C contract).
++    unsafe {
++        let limit = ucs2_strnlen(src, maxlength as usize);
++
++        let mut i: usize = 0;
++        while maxlength != 0 && (i as c_ulong) < limit {
++            let c: u16 = *src.add(i);
++
++            if c >= 0x800 {
++                if maxlength < 3 {
++                    break;
++                }
++                maxlength -= 3;
++                *dest.add(j) = 0xe0 | ((c & 0xf000) >> 12) as u8;
++                j += 1;
++                *dest.add(j) = 0x80 | ((c & 0x0fc0) >> 6) as u8;
++                j += 1;
++                *dest.add(j) = 0x80 | (c & 0x003f) as u8;
++                j += 1;
++            } else if c >= 0x80 {
++                if maxlength < 2 {
++                    break;
++                }
++                maxlength -= 2;
++                *dest.add(j) = 0xc0 | ((c & 0x7c0) >> 6) as u8;
++                j += 1;
++                *dest.add(j) = 0x80 | (c & 0x03f) as u8;
++                j += 1;
++            } else {
++                maxlength -= 1;
++                *dest.add(j) = (c & 0x7f) as u8;
++                j += 1;
++            }
++            i += 1;
++        }
++        if maxlength != 0 {
++            *dest.add(j) = 0;
++        }
++    }
++    j as c_ulong
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index ee59030593ac..7586969db7b7 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -96,6 +96,7 @@
+ #include <linux/sys_soc.h>
+ #include <linux/task_work.h>
+ #include <linux/tracepoint.h>
++#include <linux/ucs2_string.h>
+ #include <linux/usb.h>
+ #include <linux/wait.h>
+ #include <linux/workqueue.h>
+diff --git a/rust/helpers/bug.c b/rust/helpers/bug.c
+index b51e60772578..9b0d664688b2 100644
+--- a/rust/helpers/bug.c
++++ b/rust/helpers/bug.c
+@@ -11,3 +11,10 @@ __rust_helper bool rust_helper_WARN_ON(bool cond)
+ {
+ 	return WARN_ON(cond);
+ }
++
++/* Once-per-THIS-call-site (rule 0014 shim): exact for translated TUs with
++ * a single WARN_ON_ONCE site; multi-site TUs need per-site treatment. */
++__rust_helper bool rust_helper_WARN_ON_ONCE(bool cond)
++{
++	return WARN_ON_ONCE(cond);
++}
+-- 
+2.55.0
+
