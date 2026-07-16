@@ -1,0 +1,52 @@
+# Reference projects — target-design corpus for the rule DB.
+# Survey source: ChatGPT deep-research session provided by Dan (2026-07-16),
+# repos and activity verified via `gh` the same day. See
+# docs/reference-projects.md for roles and usage policy.
+# EVIDENCE ONLY: external code informs rule design (type shapes, safety
+# boundaries, tests); emitted Linux code is derived from the Linux source
+# and Rust-for-Linux interfaces, never copied from these (licence + semantic
+# contamination policy in docs/reference-projects.md).
+
+[[project]]
+name = "rust-for-linux"
+repository = "https://github.com/Rust-for-Linux/linux"
+role = ["in-tree-integration", "canonical-abstractions", "kunit"]
+relationship = "upstream-linux"
+license = "GPL-2.0"
+
+[[project]]
+name = "asterinas"
+repository = "https://github.com/asterinas/asterinas"
+role = ["target-idioms", "linux-abi", "riscv-boot", "validation"]
+relationship = "clean-room-linux-compatible"
+license = "MPL-2.0"
+verified = "2026-07-16, 4.8k stars, active (pushed 2026-07-15)"
+
+[[project]]
+name = "moss"
+repository = "https://github.com/hexagonal-sun/moss-kernel"
+role = ["target-idioms", "uaccess", "vfs", "host-testing"]
+relationship = "clean-room-linux-compatible"
+license = "MIT"
+verified = "2026-07-16, 2.0k stars, active (pushed 2026-07-12)"
+
+[[project]]
+name = "kerla"
+repository = "https://github.com/nuta/kerla"
+role = ["linux-abi", "x86-boot", "syscalls", "elf", "virtio"]
+relationship = "clean-room-linux-compatible"
+status = "unmaintained"
+verified = "2026-07-16, 3.5k stars, last push 2026-02"
+
+[[project]]
+name = "linux-0.11-rs"
+repository = "https://github.com/Poseidon-fan/linux-0.11-rs"
+role = ["paired-translation", "historical-linux"]
+relationship = "historical-reimplementation"
+verified = "2026-07-16, boots i386 QEMU, 60+ coreutils userland"
+
+[[project]]
+name = "rcore-arceos"
+repository = "https://github.com/rcore-os/rCore"
+role = ["riscv-boot", "sbi", "minimal-machinery"]
+relationship = "teaching-research-kernels"

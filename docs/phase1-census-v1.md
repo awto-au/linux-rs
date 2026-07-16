@@ -1,5 +1,14 @@
 # Phase 1 census — v1 results (statement/region granularity) — **GATE: GO**
 
+> **CORRECTED 2026-07-16 (v1.1):** an independent correctness review found
+> the v1.0 numbers below inflated by macro-expansion internals and biased
+> by brace style and type erasure. Corrected numbers: **1,056,134
+> instances / 245,118 families; 26 families cover 25%, 713 cover 50%**
+> (collapse 76.8%). The gate decision is unchanged — see
+> [review-findings-2026-07-16.md](review-findings-2026-07-16.md). The
+> v1.0 text below is retained for the record; read its numbers as
+> superseded.
+
 2026-07-16. Pipeline: `scripts/region_census.py` (statement fingerprints with
 compound bodies pruned to a BODY token; sibling bigrams/trigrams) →
 `scripts/region_report.py`. Full corpus, 0 TU failures, ~3.5 min.

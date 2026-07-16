@@ -1,5 +1,13 @@
 # Phase 1 v2 — compositionality of the tail (hypothesis: Dan, confirmed)
 
+> **CORRECTED 2026-07-16 (v2.1):** re-run on the corrected v1.1 census with
+> the root node (glue by construction) reported separately, per
+> [review-findings-2026-07-16.md](review-findings-2026-07-16.md).
+> Corrected result: 174,985 singleton statements; **median non-root glue =
+> 1** at T=5/10/50; ≤3 non-root glue for 88.8% (T=10); node coverage 88.8%.
+> The conclusion below stands with these numbers; the v2.0 figures
+> (median 2 including root, 91.2% coverage) are superseded.
+
 2026-07-16. `scripts/compose_census.py`: two corpus passes — (1) count all
 23.7M statement-internal subtree fingerprints (668,876 distinct), (2) for
 each of the 216,659 singleton statement families from v1, classify every

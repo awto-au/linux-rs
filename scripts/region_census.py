@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""Phase 1 v1: statement/region-level fingerprint census — the real gate.
+"""Phase 1 v1.1: statement/region-level fingerprint census (corrected).
 
-v0 showed whole functions don't collapse. This measures where the thesis
-says the collapse lives: statements and short statement sequences.
+v1.0 counted post-expansion clang-AST statements naively. The 2026-07-16
+correctness review found three material biases, fixed here:
 
-Units:
-  statement  — any cursor in statement position (parent is a compound stmt).
-               Fingerprint = normalised preorder walk of its subtree with
-               nested COMPOUND_STMT children pruned to a BODY token, so
-               `if (ret < 0) { ...20 lines... }` and
-               `if (err < 0) { ...3 lines... }` share the family
-               IF(cmp(var,LIT)<0)→BODY. Atomic statements (no compound
-               children) fingerprint their full subtree.
-  bigram/trigram — consecutive sibling statement fingerprints inside one
-               compound: composite regions (lock;access;unlock, goto
-               ladders, init sequences).
+ 1. Macro internals: statements inside GNU statement-expressions and
+    do{}while(0) expansions were counted as independent instances (27% of
+    all instances). Now: never descend into expressions; a nested statement
+    whose (file,line,col) equals its parent's is macro-internal — skipped.
+    Macro-generated shells (root token at the source location is an
+    identifier, not the expected keyword) become one `MACROSTMT:<name>`
+    instance — the macro *invocation* is the unit, labelled semantically.
+ 2. Brace style: `if (x) foo();` vs `if (x) { foo(); }` landed in different
+    families and the unbraced body statement was never counted (59% of
+    ifs!). Now: control-statement bodies are always pruned to BODY in the
+    parent fingerprint and always emitted as statements themselves.
+ 3. Type erasure: local declarations now carry the declared type
+    (`VAR_DECL:<type>`), and compound-assignment operators their opcode.
 
-Normalisation (as v0 fp_exact): identifiers→ref category, literals→LIT,
-callee names KEPT (semantic labels).
+Bigrams/trigrams: consecutive sibling statements within one braced block.
 
-The gate: how many statement families cover 50/80/95% of all instances?
-
-Output: tmp/region_census.pkl (counters), log tmp/region_census.log.
-Report: scripts/region_report.py.
+Usage: region_census.py   Output: tmp/region_census.pkl, log tmp/region_census.log
+Report: scripts/region_report.py
 """
 import json
 import logging
 import multiprocessing as mp
 import os
 import pickle
+import re
 import shlex
 import sys
 from collections import Counter
@@ -41,12 +41,22 @@ LOG = REPO / "tmp" / "region_census.log"
 OUT = REPO / "tmp" / "region_census.pkl"
 
 K = ci.CursorKind
-STMT_PARENT = K.COMPOUND_STMT
 LITERALS = {K.INTEGER_LITERAL, K.FLOATING_LITERAL, K.STRING_LITERAL,
             K.CHARACTER_LITERAL}
+# control kinds -> which children are body statements (pruned + re-emitted)
+#   'last' = last child; IF: all children after the condition; DO: first.
+CONTROL_KEYWORD = {K.IF_STMT: "if", K.DO_STMT: "do", K.WHILE_STMT: "while",
+                   K.FOR_STMT: "for", K.SWITCH_STMT: "switch"}
+MACRO_DETECT = set(CONTROL_KEYWORD) | {K.StmtExpr, K.NULL_STMT}
+IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def tu_args(entry):
+    """Clang args from a compile_commands entry, minus argv0/-c/-o/source.
+
+    The source appears in `command` relative to `directory` while
+    entry['file'] is absolute — compare resolved paths, not strings.
+    """
     src = os.path.realpath(entry["file"])
     argv = shlex.split(entry["command"])
     args, skip = [], False
@@ -66,18 +76,69 @@ def tu_args(entry):
     return args
 
 
-def stmt_fp(cursor):
-    """Normalised fingerprint of one statement, compound children pruned."""
+def load_entries(repo, tree="linux"):
+    cc = json.load(open(repo / tree / "compile_commands.json"))
+    seen, entries = set(), []
+    for e in cc:
+        if not e["file"].endswith(".c") or e["file"] in seen:
+            continue
+        seen.add(e["file"])
+        entries.append(e)
+    entries.sort(key=lambda e: e["file"])
+    return entries
+
+
+def body_children(c):
+    """The children of a control statement that are its body/branches."""
+    kids = list(c.get_children())
+    kind = c.kind
+    if kind == K.IF_STMT:
+        return kids[1:]
+    if kind == K.DO_STMT:
+        return kids[:1]
+    if kind in (K.WHILE_STMT, K.FOR_STMT, K.SWITCH_STMT,
+                K.CASE_STMT, K.DEFAULT_STMT, K.LABEL_STMT):
+        return kids[-1:] if kids else []
+    return []
+
+
+def source_ident(src_lines, line, col):
+    """Identifier starting exactly at (line, col) in the source, or None."""
+    try:
+        m = IDENT.match(src_lines[line - 1][col - 1:])
+    except IndexError:
+        return None
+    return m.group(0) if m else None
+
+
+def macro_name(c, src_lines):
+    """If this statement is a macro expansion shell, the macro's name."""
+    if c.kind not in MACRO_DETECT:
+        return None
+    ident = source_ident(src_lines, c.location.line, c.location.column)
+    if ident is None:
+        return None
+    if ident == CONTROL_KEYWORD.get(c.kind):
+        return None
+    return ident
+
+
+def stmt_fp(cursor, src_lines):
+    """Normalised statement fingerprint. Control bodies pruned to BODY;
+    macro shells collapse to MACROSTMT:<name>."""
+    name = macro_name(cursor, src_lines)
+    if name is not None:
+        return f"MACROSTMT:{name}"
     toks = []
-    stack = [cursor]
+    stack = [(cursor, False)]
     n = 0
     while stack and n < 5000:
-        c = stack.pop()
+        c, pruned = stack.pop()
         n += 1
-        kind = c.kind
-        if kind == K.COMPOUND_STMT:
+        if pruned or c.kind == K.COMPOUND_STMT:
             toks.append("BODY")
-            continue  # prune
+            continue
+        kind = c.kind
         tok = str(kind.value)
         if kind == K.CALL_EXPR:
             tok += ":" + (c.spelling or "?")
@@ -92,42 +153,79 @@ def stmt_fp(cursor):
             tok += ":" + cat
         elif kind in LITERALS:
             tok = "LIT"
-        elif kind == K.BINARY_OPERATOR:
+        elif kind in (K.BINARY_OPERATOR, K.COMPOUND_ASSIGNMENT_OPERATOR):
             try:
                 tok += ":" + c.binary_operator.name
             except AttributeError:
                 pass
+        elif kind == K.VAR_DECL:
+            tok += ":" + c.type.spelling
         toks.append(tok)
-        stack.extend(reversed(list(c.get_children())))
+        bodies = {b.hash for b in body_children(c)}
+        for ch in reversed(list(c.get_children())):
+            stack.append((ch, ch.hash in bodies))
     if n >= 5000:
         toks.append("TRUNC")
     return "\x00".join(toks)
 
 
-def walk_compounds(cursor):
-    """Yield every COMPOUND_STMT under cursor (including nested)."""
-    stack = [cursor]
-    while stack:
-        c = stack.pop()
-        if c.kind == K.COMPOUND_STMT:
-            yield c
-        stack.extend(c.get_children())
+def is_stmt_like(c):
+    return c.kind == K.DECL_STMT or c.kind.is_statement() or \
+        c.kind.is_expression()
 
 
-def snippet(src_lines, extent):
-    try:
-        line = src_lines[extent.start.line - 1].strip()
-        return line[:100]
-    except IndexError:
-        return "?"
+class Harvester:
+    def __init__(self, rel, src_lines):
+        self.rel = rel
+        self.src_lines = src_lines
+        self.stmts = Counter()
+        self.bi = Counter()
+        self.tri = Counter()
+        self.exemplars = {}
+
+    def snippet(self, st):
+        try:
+            return self.src_lines[st.location.line - 1].strip()[:100]
+        except IndexError:
+            return "?"
+
+    def block(self, children, parent_loc):
+        """A braced block (or fn body): emit each child, collect n-grams."""
+        seq = []
+        for st in children:
+            if st.kind == K.COMPOUND_STMT:  # bare nested {} — flatten
+                self.block(list(st.get_children()), parent_loc)
+                continue
+            if not is_stmt_like(st):
+                continue
+            fp = self.stmt(st, parent_loc)
+            if fp is not None:
+                seq.append(fp)
+        for i in range(len(seq) - 1):
+            self.bi[(seq[i], seq[i + 1])] += 1
+        for i in range(len(seq) - 2):
+            self.tri[(seq[i], seq[i + 1], seq[i + 2])] += 1
+
+    def stmt(self, st, parent_loc):
+        loc = (st.location.line, st.location.column)
+        if loc == parent_loc:
+            return None  # macro-internal: same expansion point as parent
+        fp = stmt_fp(st, self.src_lines)
+        self.stmts[fp] += 1
+        if fp not in self.exemplars:
+            self.exemplars[fp] = (self.rel, st.location.line, self.snippet(st))
+        for b in body_children(st):
+            if b.kind == K.COMPOUND_STMT:
+                self.block(list(b.get_children()), loc)
+            elif is_stmt_like(b):
+                self.stmt(b, loc)
+        return fp
 
 
 def process(entry):
     os.chdir(entry["directory"])
     src = entry["file"]
     rel = os.path.relpath(src, entry["directory"])
-    stmts, bi, tri = Counter(), Counter(), Counter()
-    exemplars = {}
     try:
         src_lines = open(src, errors="replace").read().splitlines()
     except OSError:
@@ -137,27 +235,16 @@ def process(entry):
         tu = index.parse(src, args=tu_args(entry))
     except ci.TranslationUnitLoadError:
         return rel, None
+    h = Harvester(rel, src_lines)
     for fn in tu.cursor.get_children():
         if fn.kind != K.FUNCTION_DECL or not fn.is_definition():
             continue
         if fn.location.file is None or fn.location.file.name != src:
             continue
-        for comp in walk_compounds(fn):
-            seq = []
-            for st in comp.get_children():
-                if st.kind == K.DECL_STMT or st.kind.is_statement() or \
-                        st.kind.is_expression():
-                    fp = stmt_fp(st)
-                    seq.append(fp)
-                    stmts[fp] += 1
-                    if fp not in exemplars:
-                        exemplars[fp] = (rel, st.location.line,
-                                         snippet(src_lines, st.extent))
-            for i in range(len(seq) - 1):
-                bi[(seq[i], seq[i + 1])] += 1
-            for i in range(len(seq) - 2):
-                tri[(seq[i], seq[i + 1], seq[i + 2])] += 1
-    return rel, (stmts, bi, tri, exemplars)
+        for ch in fn.get_children():
+            if ch.kind == K.COMPOUND_STMT:
+                h.block(list(ch.get_children()), None)
+    return rel, (h.stmts, h.bi, h.tri, h.exemplars)
 
 
 def main() -> int:
@@ -167,11 +254,9 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stdout)],
     )
-    cc = json.load(open(REPO / "linux" / "compile_commands.json"))
-    entries = sorted((e for e in cc if e["file"].endswith(".c")),
-                     key=lambda e: e["file"])
+    entries = load_entries(REPO)
     jobs = max(1, mp.cpu_count() - 4)
-    logging.info("region census over %d TUs, %d workers", len(entries), jobs)
+    logging.info("region census v1.1 over %d TUs, %d workers", len(entries), jobs)
 
     stmts, bi, tri = Counter(), Counter(), Counter()
     exemplars = {}

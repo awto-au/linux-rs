@@ -102,6 +102,11 @@ def fingerprint(cursor):
         elif kind in (K.INTEGER_LITERAL, K.FLOATING_LITERAL,
                       K.STRING_LITERAL, K.CHARACTER_LITERAL):
             tok = "LIT"
+        elif kind in (K.BINARY_OPERATOR, K.COMPOUND_ASSIGNMENT_OPERATOR):
+            try:
+                tok += ":" + c.binary_operator.name
+            except AttributeError:
+                pass
         exact.append(tok)
         for fname, kinds in FEATURES.items():
             if kind in kinds:
@@ -154,7 +159,12 @@ def main() -> int:
         handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stdout)],
     )
     cc = json.load(open(REPO / "linux" / "compile_commands.json"))
-    entries = [e for e in cc if e["file"].endswith(".c")]
+    seen = set()
+    entries = []
+    for e in cc:
+        if e["file"].endswith(".c") and e["file"] not in seen:
+            seen.add(e["file"])
+            entries.append(e)
     entries.sort(key=lambda e: e["file"])
     if args.limit:
         entries = entries[: args.limit]

@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""Phase 1 v2: compositionality of the tail.
+"""Phase 1 v2.1: compositionality of the tail (corrected, matches census v1.1).
 
-Hypothesis (Dan): the expensive-looking tail isn't expensive — a singleton
-statement family is usually a novel *combination* of common sub-patterns,
-so once the head families are ruled, tail statements cost only "glue".
+Hypothesis (Dan, confirmed in v2.0): a singleton statement family is a novel
+*combination* of common sub-patterns, so tail statements cost only "glue".
 
-Measure: two passes over the corpus.
-  pass 1 — count every statement-internal subtree fingerprint corpus-wide
-           (bottom-up hash-consing; compound bodies pruned as in v1).
-  pass 2 — for every statement whose v1 family is a singleton, return its
-           subtree hash tree; classify each node: covered (subtree family
-           count >= T elsewhere) or glue. Report glue distribution.
+Corrections from the 2026-07-16 review:
+  - statement enumeration now mirrors region_census v1.1 (no macro-expansion
+    internals, brace-normalised bodies, same fingerprints);
+  - the root node of a singleton is glue BY CONSTRUCTION (its Merkle hash is
+    the whole statement, which is unique) — report non-root glue as the
+    substantive stat;
+  - iterative postorder (no RecursionError on deep expressions);
+  - results pickled to tmp/compose_census.pkl as promised.
 
-If median glue per singleton statement is a few nodes, the tail is cheap
-composition, and the Phase-3 cost model changes accordingly.
-
-Output: tmp/compose_census.pkl + tmp/compose_report.md, log tmp/compose_census.log
+Output: tmp/compose_census.pkl, tmp/compose_report.md, log tmp/compose_census.log
 """
 import hashlib
 import json
@@ -30,17 +28,18 @@ from pathlib import Path
 import clang.cindex as ci
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from region_census import stmt_fp, tu_args, walk_compounds  # noqa: E402
+from region_census import (  # noqa: E402
+    body_children, is_stmt_like, load_entries, stmt_fp, tu_args)
 
 REPO = Path(__file__).resolve().parent.parent
 LOG = REPO / "tmp" / "compose_census.log"
 OUT = REPO / "tmp" / "compose_report.md"
+PKL = REPO / "tmp" / "compose_census.pkl"
 
 K = ci.CursorKind
 LITERALS = {K.INTEGER_LITERAL, K.FLOATING_LITERAL, K.STRING_LITERAL,
             K.CHARACTER_LITERAL}
-
-SINGLETONS = None  # set in pass-2 workers via fork
+SINGLETONS = None  # broadcast to pass-2 workers via fork
 
 
 def tok(c):
@@ -59,81 +58,124 @@ def tok(c):
         t += ":" + cat
     elif kind in LITERALS:
         t = "LIT"
-    elif kind == K.BINARY_OPERATOR:
+    elif kind in (K.BINARY_OPERATOR, K.COMPOUND_ASSIGNMENT_OPERATOR):
         try:
             t += ":" + c.binary_operator.name
         except AttributeError:
             pass
+    elif kind == K.VAR_DECL:
+        t += ":" + c.type.spelling
     return t
-
-
-def subtree_hashes(stmt):
-    """Postorder (hash, parent_idx, nchildren) per node, compounds pruned."""
-    nodes = []  # (hash, parent, nchildren)
-
-    def rec(c, parent):
-        if c.kind == K.COMPOUND_STMT:
-            nodes.append((hash8("BODY"), parent, 0))
-            return len(nodes) - 1
-        child_idx = []
-        my_idx_placeholder = None  # children first (postorder), parent set later
-        kids = list(c.get_children())
-        # reserve nothing; compute children with parent fixed after append —
-        # simpler: build children into temp then append self, then patch
-        child_hashes = []
-        start = len(nodes)
-        for k in kids:
-            ci_idx = rec(k, -1)  # parent patched below
-            child_idx.append(ci_idx)
-            child_hashes.append(nodes[ci_idx][0])
-        h = hash8(tok(c) + "(" + ",".join(map(str, child_hashes)) + ")")
-        nodes.append((h, parent, len(kids)))
-        me = len(nodes) - 1
-        for ci_idx in child_idx:
-            nodes[ci_idx] = (nodes[ci_idx][0], me, nodes[ci_idx][2])
-        return me
-
-    rec(stmt, -1)
-    return nodes
 
 
 def hash8(s):
     return int.from_bytes(hashlib.sha1(s.encode()).digest()[:8], "big")
 
 
+BODY_HASH = hash8("BODY")
+
+
+def subtree_hashes(stmt):
+    """Iterative postorder Merkle hashes: [(hash, parent_idx)] per node.
+    Control bodies and compounds pruned to a BODY leaf (as in stmt_fp)."""
+    nodes = []  # (hash, parent)
+    # phase stack: (cursor, parent_out_idx_slot, pruned)
+    # two-pass: expand children first via explicit stack of frames
+    frames = [[stmt, -1, False, None, None]]  # cursor, parent, pruned, kids, hashes
+    while frames:
+        fr = frames[-1]
+        c, parent, pruned = fr[0], fr[1], fr[2]
+        if pruned or c.kind == K.COMPOUND_STMT:
+            nodes.append((BODY_HASH, parent))
+            frames.pop()
+            if frames and frames[-1][4] is not None:
+                frames[-1][4].append(BODY_HASH)
+            continue
+        if fr[3] is None:
+            fr[3] = list(c.get_children())
+            fr[4] = []
+            bodies = {b.hash for b in body_children(c)}
+            fr.append(bodies)
+            fr.append(0)
+        kids, hashes, bodies, i = fr[3], fr[4], fr[5], fr[6]
+        if i < len(kids):
+            fr[6] += 1
+            frames.append([kids[i], None, kids[i].hash in bodies, None, None])
+            # parent index unknown until self is appended; patch later via slot:
+            frames[-1][1] = ("pending", len(frames) - 2)
+            continue
+        h = hash8(tok(c) + "(" + ",".join(map(str, hashes)) + ")")
+        nodes.append((h, parent))
+        my_idx = len(nodes) - 1
+        # patch children whose parent was this frame: they recorded pending refs
+        frames.pop()
+        if frames and frames[-1][4] is not None:
+            frames[-1][4].append(h)
+        # fix pending parents: children appended before self point to frame idx
+        # simpler: second pass below resolves nothing — parents recorded as
+        # ("pending", frame_idx) need mapping; instead record parent after.
+    # Second pass: parent indices were recorded as ("pending", frame_idx) —
+    # rebuild parents structurally instead (cheap): recompute via sizes is
+    # complex; for the glue analysis only the per-node hash matters, parents
+    # are unused. Return hashes with parent=-1.
+    return [(h, -1) for h, _ in nodes]
+
+
 def iter_statements(entry):
+    """Yield statement cursors exactly as census v1.1 counts them."""
     os.chdir(entry["directory"])
     src = entry["file"]
+    try:
+        src_lines = open(src, errors="replace").read().splitlines()
+    except OSError:
+        src_lines = []
     index = ci.Index.create()
     try:
         tu = index.parse(src, args=tu_args(entry))
     except ci.TranslationUnitLoadError:
         return
+    def walk_block(children, parent_loc):
+        for st in children:
+            if st.kind == K.COMPOUND_STMT:
+                yield from walk_block(list(st.get_children()), parent_loc)
+                continue
+            if not is_stmt_like(st):
+                continue
+            yield from walk_stmt(st, parent_loc)
+    def walk_stmt(st, parent_loc):
+        loc = (st.location.line, st.location.column)
+        if loc == parent_loc:
+            return
+        yield st, src_lines
+        for b in body_children(st):
+            if b.kind == K.COMPOUND_STMT:
+                yield from walk_block(list(b.get_children()), loc)
+            elif is_stmt_like(b):
+                yield from walk_stmt(b, loc)
     for fn in tu.cursor.get_children():
         if fn.kind != K.FUNCTION_DECL or not fn.is_definition():
             continue
         if fn.location.file is None or fn.location.file.name != src:
             continue
-        for comp in walk_compounds(fn):
-            for st in comp.get_children():
-                if st.kind == K.DECL_STMT or st.kind.is_statement() or \
-                        st.kind.is_expression():
-                    yield st
+        for ch in fn.get_children():
+            if ch.kind == K.COMPOUND_STMT:
+                yield from walk_block(list(ch.get_children()), None)
 
 
 def pass1(entry):
     c = Counter()
-    for st in iter_statements(entry):
-        for h, _, _ in subtree_hashes(st):
+    for st, _ in iter_statements(entry):
+        for h, _ in subtree_hashes(st):
             c[h] += 1
     return c
 
 
 def pass2(entry):
     out = []
-    for st in iter_statements(entry):
-        if stmt_fp(st) in SINGLETONS:
-            out.append(subtree_hashes(st))
+    for st, src_lines in iter_statements(entry):
+        if stmt_fp(st, src_lines) in SINGLETONS:
+            hs = [h for h, _ in subtree_hashes(st)]
+            out.append((hs[-1] if hs else 0, hs))  # root is last in postorder
     return out
 
 
@@ -149,9 +191,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stdout)],
     )
-    cc = json.load(open(REPO / "linux" / "compile_commands.json"))
-    entries = sorted((e for e in cc if e["file"].endswith(".c")),
-                     key=lambda e: e["file"])
+    entries = load_entries(REPO)
     jobs = max(1, mp.cpu_count() - 4)
 
     logging.info("pass 1: subtree counts over %d TUs", len(entries))
@@ -175,26 +215,31 @@ def main() -> int:
         for i, res in enumerate(pool.imap_unordered(pass2, entries, chunksize=8)):
             structs.extend(res)
             if (i + 1) % 600 == 0:
-                logging.info("pass2 %d/%d TUs, %d singleton stmts collected",
+                logging.info("pass2 %d/%d TUs, %d singleton stmts",
                              i + 1, len(entries), len(structs))
     logging.info("pass 2 done: %d singleton statements", len(structs))
 
     lines = []
     w = lines.append
-    w("# Phase 1 v2 — compositionality of the tail")
+    w("# Phase 1 v2.1 — compositionality of the tail (corrected)")
     w("")
     w(f"- corpus subtree instances: {sum(counts.values()):,}; distinct: "
       f"{len(counts):,}")
     w(f"- singleton statements analysed: {len(structs):,}")
+    w("- glue = node whose subtree family has < T instances corpus-wide;")
+    w("  the ROOT of a singleton is glue by construction and reported "
+      "separately (review finding 5).")
     w("")
+    summary = {}
     for T in (5, 10, 50):
         glue_dist = Counter()
         covered_nodes = total_nodes = 0
-        for nodes in structs:
-            glue = sum(1 for h, _, _ in nodes if counts[h] < T)
-            total_nodes += len(nodes)
-            covered_nodes += len(nodes) - glue
-            glue_dist[glue] += 1
+        for root_h, hs in structs:
+            glue = sum(1 for h in hs if counts[h] < T)
+            nonroot_glue = glue - (1 if counts[root_h] < T else 0)
+            total_nodes += len(hs)
+            covered_nodes += len(hs) - glue
+            glue_dist[nonroot_glue] += 1
         n = len(structs)
         cum = 0
         med = p90 = None
@@ -204,14 +249,21 @@ def main() -> int:
                 med = g
             if p90 is None and cum >= n * 0.9:
                 p90 = g
-        for lim in (3, 5, 10):
+        for lim in (0, 1, 3, 5, 10):
             cov = sum(v for g, v in glue_dist.items() if g <= lim)
-            w(f"- T={T}: glue ≤ {lim} for {100*cov/n:.1f}% of singleton stmts")
-        w(f"- T={T}: median glue {med}, p90 {p90}; node-level coverage "
+            w(f"- T={T}: non-root glue ≤ {lim} for {100*cov/n:.1f}% of "
+              f"singleton stmts")
+        w(f"- T={T}: median non-root glue {med}, p90 {p90}; node coverage "
           f"{100*covered_nodes/total_nodes:.1f}%")
         w("")
+        summary[T] = dict(glue_dist=dict(glue_dist), median=med, p90=p90,
+                          node_coverage=covered_nodes / total_nodes)
     OUT.write_text("\n".join(lines) + "\n")
-    logging.info("wrote %s", OUT)
+    with open(PKL, "wb") as f:
+        pickle.dump({"summary": summary, "n_singletons": len(structs),
+                     "distinct_subtrees": len(counts),
+                     "subtree_instances": sum(counts.values())}, f)
+    logging.info("wrote %s and %s", OUT, PKL)
     print("\n".join(lines))
     return 0
 
