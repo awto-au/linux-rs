@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "macro-template-family-closure"
+version = 1
+tier = 1
+category = "macro"
+
+[match]
+c = "a family of small C functions, each `{ return TEMPLATE(some_fetch_expr, other_args...); }`, where TEMPLATE is a function-like macro whose sole free variable across instantiations is the FETCH (word-read/combine) expression (e.g. FIND_FIRST_BIT/FIND_NEXT_BIT/FIND_NTH_BIT in lib/find_bit.c, each instantiated ~5 times with addr[idx], addr1[idx]&addr2[idx], ~addr[idx], ...)"
+family = "MACROSTMT:function-like-macro-with-expr-param"
+constraints = ["the varying part is a pure expression over already-visible locals (idx, addr pointers) — no statement-level control flow varies between instantiations", "MUNGE/other secondary macro params that are always a no-op on the target config collapse away (document per rule 0016/int_sqrt64-style dead-arm precedent, don't implement unused generality)"]
+
+[emit]
+kind = "function"
+rust = "one private fn per macro template, generic via `impl FnMut(usize) -> T` (or similar) standing in for FETCH; each C instantiation becomes a thin #[export] wrapper passing a closure — `|idx| unsafe { *addr.add(idx) & *addr2.add(idx) }` etc."
+deviations = ["none — Rust closures reproduce the C macro's per-instantiation specialization exactly; LLVM inlines the closure same as cpp text-substitution would"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["monomorphization docs (rustc reference) — impl Trait params specialize per call site same as C macro expansion specializes per invocation"]
+
+[validation]
+instances = ["lib/find_bit.c: FIND_FIRST_BIT -> find_first_bit_generic (5 instantiations), FIND_NEXT_BIT -> find_next_bit_generic (5 instantiations), FIND_NTH_BIT -> find_nth_bit_generic (3 instantiations)"]
+oracle = "tier2.5 (bench/diff_find_bit.{c,rs}, 20000 randomized cases, byte-identical)"
+negative = ["macro instantiations that also vary control flow (extra branches, different early-return conditions) — those need per-instance functions, not one shared generic; a closure only captures a pure expression, not a differing statement shape"]
+human_review = false

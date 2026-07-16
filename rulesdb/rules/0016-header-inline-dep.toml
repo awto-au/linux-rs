@@ -18,7 +18,7 @@ derivation = "independently derived"
 evidence = []
 
 [validation]
-instances = ["lib/win_minmax.c:minmax_reset (callers of the header copy remain in C)"]
-oracle = "tier2"
+instances = ["lib/win_minmax.c:minmax_reset (callers of the header copy remain in C)", "lib/find_bit.c: fns() from <linux/bitops.h>, bitmap_read()/bitmap_get_value8() from <linux/bitmap.h> (specialised to nbits=8, its only call site)"]
+oracle = "tier2.5"
 negative = ["header inlines with memory-ordering or per-CPU semantics — those are tier 3, use a shim, never reimplement"]
 human_review = false

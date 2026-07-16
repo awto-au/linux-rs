@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "goto-shared-label-distinct-value"
+version = 1
+tier = 1
+category = "stmt"
+
+[match]
+c = "a statement-expression (GNU `({ ... })`) with two `goto`-reachable exit labels where an EARLIER label is reached with the result variable still at its ORIGINAL (pre-loop) value, and a LATER label is reached only after the result variable has been recomputed — e.g. FIND_NTH_BIT in lib/find_bit.c: `goto out` (before the FETCH/tmp update) falls straight through to `out: sz;` returning the untouched size, while `goto found` and the natural fallthrough both hit `found: sz = idx*BITS_PER_LONG + fns(tmp, nr);` first"
+family = "MACROSTMT:multi-label-goto-distinct-return-value"
+constraints = ["verify the exact statement range between each goto site and its target label — do not assume all exits of a labeled block compute the same value; C fallthrough between adjacent labels (found: falls into out:) is easy to misread as 'both labels return the same expression'"]
+
+[emit]
+kind = "rewrite"
+rust = "one `return <value>` per distinct exit semantics — do NOT collapse multiple goto sites into a single early-return unless every one of them is provably reached with the same live state; when in doubt, trace each goto site back to its label by hand and write down what's live at that point before writing the Rust"
+deviations = ["none — this is a translation-process rule (a checklist item), not a semantic transform"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["caught during this TU's own translation: `goto out` in FIND_NTH_BIT was first (wrongly) translated as `return idx*BITS_PER_LONG + fns(tmp, nr)`, matching the `found:` exit instead of `out:`'s `return size` — the tier-2.5 diff oracle did not surface it in early ad-hoc runs by chance (the mismatching branch is only hit when idx*BITS_PER_LONG+nr >= size inside the loop, a narrower input class), it was caught by manual re-derivation against the macro source before the oracle run, and confirmed absent afterward across 20000 randomized cases"]
+
+[validation]
+instances = ["lib/find_bit.c:__find_nth_bit / __find_nth_and_bit / __find_nth_and_andnot_bit (FIND_NTH_BIT's goto out vs goto found)"]
+oracle = "tier2.5"
+negative = ["single-label statement-expressions (FIND_FIRST_BIT has none; FIND_NEXT_BIT's single `out:` is reached before any reassignment on every path — safe to collapse there)"]
+human_review = false

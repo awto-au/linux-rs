@@ -1,0 +1,438 @@
+From 3fe5ca42514d4fc066bdfab3e75b8632189e2b4d Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 13:31:55 +1000
+Subject: [PATCH] lib: translate find_bit to Rust (linux-rs TU 18, macro-family
+ collapse)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile       |   9 +-
+ lib/find_bit_rs.rs | 392 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 400 insertions(+), 1 deletion(-)
+ create mode 100644 lib/find_bit_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 5e7aa446bdc6..792ff88a7c13 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -61,7 +61,7 @@ endif
+ obj-y += parser.o debug_locks.o random32.o \
+ 	 bust_spinlocks.o kasprintf.o bitmap.o scatterlist.o \
+ 	 uuid.o iov_iter.o clz_ctz.o \
+-	 bsearch.o find_bit.o lwq.o memweight.o kfifo.o \
++	 bsearch.o lwq.o memweight.o kfifo.o \
+ 	 percpu-refcount.o rhashtable.o \
+ 	 once.o refcount.o rcuref.o usercopy.o errseq.o bucket_locks.o \
+ 	 generic-radix-tree.o bitmap-str.o
+@@ -387,3 +387,10 @@ lib-y += argv_split_rs.o
+ else
+ lib-y += argv_split.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += find_bit_rs.o
++else
++obj-y += find_bit.o
++endif
+diff --git a/lib/find_bit_rs.rs b/lib/find_bit_rs.rs
+new file mode 100644
+index 000000000000..4dff97df84f2
+--- /dev/null
++++ b/lib/find_bit_rs.rs
+@@ -0,0 +1,392 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//! Bit search — Rust translation of `lib/find_bit.c`.
++//!
++//! Copyright (C) 2004 Red Hat, Inc. All Rights Reserved.
++//! Written by David Howells (dhowells@redhat.com)
++//!
++//! Copyright (C) 2008 IBM Corporation
++//! `find_last_bit` is written by Rusty Russell <rusty@rustcorp.com.au>
++//! (Inspired by David Howell's find_next_bit implementation)
++//!
++//! Rewritten by Yury Norov <yury.norov@gmail.com> to decrease
++//! size and improve performance, 2015.
++//!
++//! The C builds this whole family from three text-substitution macros
++//! (`FIND_FIRST_BIT`, `FIND_NEXT_BIT`, `FIND_NTH_BIT`) that differ only in
++//! the FETCH expression that reads/combines one or more source words (and,
++//! for `FIND_NEXT_BIT`, an optional MUNGE post-processing step used only by
++//! the big-endian `_le` variants). Rust macros can't parameterise over an
++//! arbitrary word-fetch expression as cheaply as cpp text substitution, but
++//! a closure captures exactly the same shape — `FETCH` becomes `fetch(idx)`
++//! — so the three templates become three private generic functions and
++//! every C instantiation becomes a thin `#[export]` wrapper calling one of
++//! them with a closure. Same collapse pattern as rule 0006 (fls family).
++//!
++//! `#ifdef __BIG_ENDIAN` variants (`_find_first_zero_bit_le`,
++//! `_find_next_zero_bit_le`, `_find_next_bit_le`) are omitted: this corpus
++//! targets little-endian riscv64 only (`CONFIG_CPU_BIG_ENDIAN` is not a
++//! real riscv config), same precedent as `int_sqrt64` being dropped for
++//! being BITS_PER_LONG < 64 only (lib/math/int_sqrt.c).
++
++use kernel::bindings;
++use kernel::ffi::c_ulong;
++use kernel::prelude::*;
++
++const BITS_PER_LONG: usize = c_ulong::BITS as usize;
++
++/// C: `BITMAP_FIRST_WORD_MASK(start)` — mask of bits in the first word at
++/// or after `start`.
++#[inline(always)]
++fn first_word_mask(start: usize) -> c_ulong {
++    c_ulong::MAX << (start & (BITS_PER_LONG - 1))
++}
++
++/// C: `BITMAP_LAST_WORD_MASK(nbits)` — mask of bits in the last (partial)
++/// word of a `nbits`-bit bitmap.
++#[inline(always)]
++fn last_word_mask(nbits: usize) -> c_ulong {
++    // C: ~0UL >> (-(nbits) & (BITS_PER_LONG - 1)) — `-(nbits)` is unsigned
++    // negation (rule 0004), then masked to a shift amount.
++    c_ulong::MAX >> (nbits.wrapping_neg() & (BITS_PER_LONG - 1))
++}
++
++/// C: `fns(word, n)` (`lib/bitops.h`, header `static inline`, not
++/// exported) — bit-position of the `n`'th set bit in `word`, or
++/// `BITS_PER_LONG` if there is no such bit. Reimplemented per rule
++/// 0016 (header-inline-dep); the header copy stays for its other callers.
++#[inline(always)]
++fn fns(mut word: c_ulong, mut n: c_ulong) -> c_ulong {
++    while word != 0 && n != 0 {
++        word &= word - 1;
++        n -= 1;
++    }
++    if word != 0 {
++        word.trailing_zeros() as c_ulong
++    } else {
++        BITS_PER_LONG as c_ulong
++    }
++}
++
++/// `FIND_FIRST_BIT(FETCH, size)` template (MUNGE is always a no-op for the
++/// instances kept on this target — see module docs). `fetch(idx)` computes
++/// the C FETCH expression for the word at `idx`.
++#[inline]
++fn find_first_bit_generic(size: c_ulong, mut fetch: impl FnMut(usize) -> c_ulong) -> c_ulong {
++    let mut idx = 0usize;
++    while (idx as c_ulong) * (BITS_PER_LONG as c_ulong) < size {
++        let val = fetch(idx);
++        if val != 0 {
++            return core::cmp::min(
++                idx as c_ulong * BITS_PER_LONG as c_ulong + val.trailing_zeros() as c_ulong,
++                size,
++            );
++        }
++        idx += 1;
++    }
++    size
++}
++
++/// `FIND_NEXT_BIT(FETCH, size, start)` template (MUNGE always a no-op —
++/// see module docs).
++#[inline]
++fn find_next_bit_generic(
++    size: c_ulong,
++    start: c_ulong,
++    mut fetch: impl FnMut(usize) -> c_ulong,
++) -> c_ulong {
++    if start >= size {
++        return size;
++    }
++
++    let mask = first_word_mask(start as usize);
++    let mut idx = start as usize / BITS_PER_LONG;
++
++    let mut tmp = fetch(idx) & mask;
++    while tmp == 0 {
++        if (idx + 1) as c_ulong * BITS_PER_LONG as c_ulong >= size {
++            return size;
++        }
++        idx += 1;
++        tmp = fetch(idx);
++    }
++
++    core::cmp::min(
++        idx as c_ulong * BITS_PER_LONG as c_ulong + tmp.trailing_zeros() as c_ulong,
++        size,
++    )
++}
++
++/// `FIND_NTH_BIT(FETCH, size, num)` template.
++#[inline]
++fn find_nth_bit_generic(size: c_ulong, num: c_ulong, mut fetch: impl FnMut(usize) -> c_ulong) -> c_ulong {
++    let mut nr = num;
++    let mut idx = 0usize;
++    let mut tmp: c_ulong = 0;
++
++    loop {
++        if (idx + 1) as c_ulong * BITS_PER_LONG as c_ulong > size {
++            break;
++        }
++        // C: `goto out` here returns `sz` (i.e. `size`) verbatim — distinct
++        // from the `found:` exit below, which computes `idx*BITS_PER_LONG +
++        // fns(tmp, nr)`. Losing this distinction was caught by re-checking
++        // against the macro's two labels; do not merge the two returns.
++        if idx as c_ulong * BITS_PER_LONG as c_ulong + nr >= size {
++            return size;
++        }
++
++        tmp = fetch(idx);
++        let w = tmp.count_ones() as c_ulong;
++        if w > nr {
++            return idx as c_ulong * BITS_PER_LONG as c_ulong + fns(tmp, nr);
++        }
++
++        nr -= w;
++        idx += 1;
++    }
++
++    if size % BITS_PER_LONG as c_ulong != 0 {
++        tmp = fetch(idx) & last_word_mask(size as usize);
++    }
++    idx as c_ulong * BITS_PER_LONG as c_ulong + fns(tmp, nr)
++}
++
++/// Find the first set bit in a memory region.
++///
++/// SAFETY (all `_find_*` below): `addr`(s) point to at least
++/// `ceil(size / BITS_PER_LONG)` valid `unsigned long`s, per the C
++/// `find_first_bit`/`find_next_bit`/... contract.
++#[export]
++pub unsafe extern "C" fn _find_first_bit(addr: *const c_ulong, size: c_ulong) -> c_ulong {
++    find_first_bit_generic(size, |idx| unsafe { *addr.add(idx) })
++}
++
++/// Find the first set bit in two memory regions.
++#[export]
++pub unsafe extern "C" fn _find_first_and_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    size: c_ulong,
++) -> c_ulong {
++    find_first_bit_generic(size, |idx| unsafe { *addr1.add(idx) & *addr2.add(idx) })
++}
++
++/// Find the first bit set in 1st memory region and unset in 2nd.
++#[export]
++pub unsafe extern "C" fn _find_first_andnot_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    size: c_ulong,
++) -> c_ulong {
++    find_first_bit_generic(size, |idx| unsafe { *addr1.add(idx) & !*addr2.add(idx) })
++}
++
++/// Find the first set bit in three memory regions.
++#[export]
++pub unsafe extern "C" fn _find_first_and_and_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    addr3: *const c_ulong,
++    size: c_ulong,
++) -> c_ulong {
++    find_first_bit_generic(size, |idx| unsafe {
++        *addr1.add(idx) & *addr2.add(idx) & *addr3.add(idx)
++    })
++}
++
++/// Find the first cleared bit in a memory region.
++#[export]
++pub unsafe extern "C" fn _find_first_zero_bit(addr: *const c_ulong, size: c_ulong) -> c_ulong {
++    find_first_bit_generic(size, |idx| unsafe { !*addr.add(idx) })
++}
++
++/// Find the next set bit in a memory region.
++#[export]
++pub unsafe extern "C" fn _find_next_bit(
++    addr: *const c_ulong,
++    nbits: c_ulong,
++    start: c_ulong,
++) -> c_ulong {
++    find_next_bit_generic(nbits, start, |idx| unsafe { *addr.add(idx) })
++}
++
++/// Find the N'th set bit in a memory region.
++#[export]
++pub unsafe extern "C" fn __find_nth_bit(addr: *const c_ulong, size: c_ulong, n: c_ulong) -> c_ulong {
++    find_nth_bit_generic(size, n, |idx| unsafe { *addr.add(idx) })
++}
++
++/// Find the N'th set bit in two memory regions (bitwise AND).
++#[export]
++pub unsafe extern "C" fn __find_nth_and_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    size: c_ulong,
++    n: c_ulong,
++) -> c_ulong {
++    find_nth_bit_generic(size, n, |idx| unsafe { *addr1.add(idx) & *addr2.add(idx) })
++}
++
++/// Find the N'th set bit in 2 memory regions, excluding those set in the 3rd.
++#[export]
++pub unsafe extern "C" fn __find_nth_and_andnot_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    addr3: *const c_ulong,
++    size: c_ulong,
++    n: c_ulong,
++) -> c_ulong {
++    find_nth_bit_generic(size, n, |idx| unsafe {
++        *addr1.add(idx) & *addr2.add(idx) & !*addr3.add(idx)
++    })
++}
++
++/// Find the next set bit in both memory regions.
++#[export]
++pub unsafe extern "C" fn _find_next_and_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    nbits: c_ulong,
++    start: c_ulong,
++) -> c_ulong {
++    find_next_bit_generic(nbits, start, |idx| unsafe { *addr1.add(idx) & *addr2.add(idx) })
++}
++
++/// Find the next set bit in `addr1` excluding those set in `addr2`.
++#[export]
++pub unsafe extern "C" fn _find_next_andnot_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    nbits: c_ulong,
++    start: c_ulong,
++) -> c_ulong {
++    find_next_bit_generic(nbits, start, |idx| unsafe {
++        *addr1.add(idx) & !*addr2.add(idx)
++    })
++}
++
++/// Find the next set bit in either memory region.
++#[export]
++pub unsafe extern "C" fn _find_next_or_bit(
++    addr1: *const c_ulong,
++    addr2: *const c_ulong,
++    nbits: c_ulong,
++    start: c_ulong,
++) -> c_ulong {
++    find_next_bit_generic(nbits, start, |idx| unsafe { *addr1.add(idx) | *addr2.add(idx) })
++}
++
++/// Find the next cleared bit in a memory region.
++#[export]
++pub unsafe extern "C" fn _find_next_zero_bit(
++    addr: *const c_ulong,
++    nbits: c_ulong,
++    start: c_ulong,
++) -> c_ulong {
++    find_next_bit_generic(nbits, start, |idx| unsafe { !*addr.add(idx) })
++}
++
++/// Find the last set bit in a memory region.
++///
++/// Not built from the shared macro templates in C — a standalone
++/// downward loop kept as its own function here too.
++#[export]
++pub unsafe extern "C" fn _find_last_bit(addr: *const c_ulong, size: c_ulong) -> c_ulong {
++    if size == 0 {
++        return size;
++    }
++    let mut val = last_word_mask(size as usize);
++    let mut idx = (size as usize - 1) / BITS_PER_LONG;
++
++    loop {
++        // SAFETY: per function contract, `idx < ceil(size / BITS_PER_LONG)`.
++        val &= unsafe { *addr.add(idx) };
++        if val != 0 {
++            return idx as c_ulong * BITS_PER_LONG as c_ulong
++                + (BITS_PER_LONG as u32 - 1 - val.leading_zeros()) as c_ulong;
++        }
++        val = c_ulong::MAX;
++        if idx == 0 {
++            break;
++        }
++        idx -= 1;
++    }
++    size
++}
++
++/// Find next 8-bit clump with set bits in a memory region; copies the
++/// found clump into `*clump`.
++///
++/// C calls the `find_next_bit` header inline wrapper here, which falls
++/// back to `_find_next_bit` (our `find_next_bit_generic` below) whenever
++/// `size` isn't a compile-time constant — always true at this call site,
++/// so calling our own slow-path fn directly reproduces the same value.
++/// (The inline fast path is a `small_const_nbits` optimisation of the
++/// identical result, never a semantic difference — see `<linux/find.h>`.)
++#[export]
++pub unsafe extern "C" fn find_next_clump8(
++    clump: *mut c_ulong,
++    addr: *const c_ulong,
++    size: c_ulong,
++    offset: c_ulong,
++) -> c_ulong {
++    let offset = find_next_bit_generic(size, offset, |idx| unsafe { *addr.add(idx) });
++    if offset == size {
++        return size;
++    }
++
++    let offset = (offset as usize & !7) as c_ulong; // C: round_down(offset, 8)
++    // SAFETY: `bitmap_get_value8`/`bitmap_read` header-inline (rule 0016),
++    // reimplemented below; same contract as `addr`.
++    unsafe { *clump = bitmap_read8(addr, offset as usize) };
++
++    offset
++}
++
++/// C: `bitmap_get_value8(map, start)` == `bitmap_read(map, start, 8)`
++/// (`<linux/bitmap.h>`, `static __always_inline`, not exported) —
++/// reimplemented per rule 0016; the header copy stays for its other
++/// callers. Specialised to `nbits == BITS_PER_BYTE` since that is
++/// `find_next_clump8`'s only use.
++#[inline]
++unsafe fn bitmap_read8(map: *const c_ulong, start: usize) -> c_ulong {
++    let index = start / BITS_PER_LONG;
++    let offset = start % BITS_PER_LONG;
++    let space = BITS_PER_LONG - offset;
++
++    // SAFETY: caller contract (see find_next_clump8).
++    if space >= 8 {
++        return (unsafe { *map.add(index) } >> offset) & last_word_mask(8);
++    }
++
++    let value_low = unsafe { *map.add(index) } & first_word_mask(start);
++    let value_high = unsafe { *map.add(index + 1) } & last_word_mask(start + 8);
++    (value_low >> offset) | (value_high << space)
++}
++
++/// Find a set bit at a random position.
++///
++/// Returns: a position of a random set bit; >= `size` otherwise.
++///
++/// C calls the `find_first_bit`/`find_nth_bit` header inline wrappers;
++/// `size`/`n` are runtime values here too, so (as in `find_next_clump8`)
++/// calling our own slow-path fns directly reproduces the same value.
++/// `bitmap_weight`/`get_random_u32_below` remain real cross-TU C calls —
++/// `lib/bitmap.c` and `drivers/char/random.c` are not yet translated.
++#[export]
++pub unsafe extern "C" fn find_random_bit(addr: *const c_ulong, size: c_ulong) -> c_ulong {
++    // SAFETY: `__bitmap_weight` shares find_bit's addr/size contract.
++    let w = unsafe { bindings::__bitmap_weight(addr, size as core::ffi::c_uint) };
++
++    match w {
++        0 => size,
++        // C comment: "Performance trick for single-bit bitmaps".
++        1 => find_first_bit_generic(size, |idx| unsafe { *addr.add(idx) }),
++        _ => {
++            // SAFETY: ceil > 0 given w >= 2 (get_random_u32_below requires
++            // ceil > 0, matching the C's implicit precondition here).
++            let n = unsafe { bindings::__get_random_u32_below(w) } as c_ulong;
++            find_nth_bit_generic(size, n, |idx| unsafe { *addr.add(idx) })
++        }
++    }
++}
+-- 
+2.55.0
+

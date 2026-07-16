@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "cross-tu-c-call"
+version = 1
+tier = 1
+category = "api"
+
+[match]
+c = "translated TU calls a plain exported/declared C function that lives in a DIFFERENT, not-yet-translated TU (e.g. lib/find_bit.c's find_random_bit calling __bitmap_weight from lib/bitmap.c, __get_random_u32_below from drivers/char/random.c)"
+constraints = ["the callee must be a REAL linkable symbol (EXPORT_SYMBOL'd definition or plain extern-declared function with a .o providing it) — NOT a static inline (that's rule 0016/header-inline-dep instead) and NOT a config-dependent macro (that's rule 0014/config-macro-shim instead)", "callee's header must already be reachable from rust/bindings/bindings_helper.h (directly or transitively) for bindgen to emit the binding"]
+
+[emit]
+kind = "function"
+rust = "call bindings::<name>(...) directly inside an unsafe block with a SAFETY comment stating the shared contract; no shim, no reimplementation — this is exactly how Rust-for-Linux driver code calls untranslated kernel C, and it's the whole point of doing this TU-by-TU rather than needing the callee translated first"
+deviations = ["none — identical call, identical ABI, one extra Rust->C hop that inlines away same as any other FFI call"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["lib/llist_rs.rs precedent (bindings::llist_load_acquire_first etc. — though those are within-crate kernel API, not cross-TU-translation specifically); this rule names the cross-TU-translation case explicitly since it will recur on every TU with a neighbor dependency"]
+
+[validation]
+instances = ["lib/find_bit.c:find_random_bit (bindings::__bitmap_weight, bindings::__get_random_u32_below — both real EXPORT_SYMBOL'd C functions in still-untranslated TUs)"]
+oracle = "tier1 (compiles + links; find_random_bit itself is non-deterministic so excluded from the tier-2.5 diff oracle by design, not a gap in coverage)"
+negative = ["static __always_inline header functions with no linkable symbol — rule 0016 instead", "config-dependent function-like macros — rule 0014 instead", "calling a C inline WRAPPER around the real symbol (e.g. find_next_bit() the header fast-path, vs _find_next_bit() the real symbol) — call the underlying real symbol / your own equivalent Rust fn directly, never the wrapper (see lib/find_bit.c:find_next_clump8, find_random_bit in this same TU: C calls the find_next_bit()/find_first_bit()/find_nth_bit() inline wrappers, but since size/n are always runtime values at those call sites the wrapper always takes its slow-path branch anyway — Rust calls its own already-translated slow-path fn directly, same result, no phantom binding to a static inline)"]
+human_review = false
