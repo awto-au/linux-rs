@@ -1,8 +1,8 @@
-# Status — 2026-07-16T16:40:27+10:00
+# Status — 2026-07-16T16:44:33+10:00
 
 ![status](status/status.png)
 
-- Translated TUs: **25**   ·   KUnit: **15 suites, 132 vectors** green   ·   Rules: **27** (t1 18 / t2 4 / t3 5)
+- Translated TUs: **26**   ·   KUnit: **15 suites, 132 vectors** green   ·   Rules: **27** (t1 18 / t2 4 / t3 5)
 
 ## KUnit (latest boot)
 
@@ -28,14 +28,14 @@
 
 | TU | readiness |
 |---|---|
-| lib/string.c | 89.2% |
+| lib/string.c | 90.6% |
 | lib/bitmap.c | 88.1% |
-| lib/string_helpers.c | 85.3% |
+| lib/string_helpers.c | 86.3% |
+| lib/kfifo.c | 82.2% |
 | lib/kobject_uevent.c | 81.6% |
-| lib/parser.c | 81.1% |
-| lib/kfifo.c | 80.7% |
+| lib/kstrtox.c | 79.4% |
+| lib/vsprintf.c | 78.7% |
 | lib/iomem_copy.c | 78.3% |
-| lib/vsprintf.c | 78.2% |
 | lib/strnlen_user.c | 77.8% |
 | lib/usercopy.c | 77.8% |
 
