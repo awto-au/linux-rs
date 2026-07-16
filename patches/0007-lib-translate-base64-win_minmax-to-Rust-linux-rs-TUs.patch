@@ -1,0 +1,395 @@
+From d0dc0dbbdba97850c3bcf77e65042155dc1d8f6d Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 12:25:04 +1000
+Subject: [PATCH] lib: translate base64, win_minmax to Rust (linux-rs TUs
+ 12-13)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+base64: the C recursive-macro reverse tables become a const fn computing
+identical tables at compile time; sign-extension semantics of the s8
+lookups preserved (invalid chars surface as negative val); unsigned-mask
+comparisons kept via u32 casts. win_minmax: Nichols windowed min/max;
+minmax_reset is a header static-inline invisible to bindgen —
+reimplemented verbatim (new rule pattern); timestamp arithmetic uses
+wrapping_sub as C unsigned subtraction requires.
+
+Both integrated via dev.py integrate (Makefile patcher now handles
+backslash-continuation lines and lib-y rules). Symbols verified in
+System.map from the Rust objects; full regression boot green.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |  18 +++-
+ lib/base64_rs.rs                | 179 ++++++++++++++++++++++++++++++++
+ lib/win_minmax_rs.rs            | 110 ++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   2 +
+ 4 files changed, 307 insertions(+), 2 deletions(-)
+ create mode 100644 lib/base64_rs.rs
+ create mode 100644 lib/win_minmax_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index fc31a603de08..840b1b1bb92e 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -39,7 +39,7 @@ lib-y := ctype.o string.o vsprintf.o cmdline.o \
+ 	 flex_proportions.o ratelimit.o \
+ 	 is_single_threaded.o plist.o decompress.o kobject_uevent.o \
+ 	 earlycpio.o seq_buf.o siphash.o dec_and_lock.o \
+-	 nmi_backtrace.o win_minmax.o memcat_p.o \
++	 nmi_backtrace.o memcat_p.o \
+ 	 buildid.o objpool.o iomem_copy.o sys_info.o
+ 
+ lib-$(CONFIG_UNION_FIND) += union_find.o
+@@ -62,7 +62,7 @@ obj-y += parser.o debug_locks.o random32.o \
+ 	 bust_spinlocks.o kasprintf.o bitmap.o scatterlist.o \
+ 	 uuid.o iov_iter.o clz_ctz.o \
+ 	 bsearch.o find_bit.o llist.o lwq.o memweight.o kfifo.o \
+-	 percpu-refcount.o rhashtable.o base64.o \
++	 percpu-refcount.o rhashtable.o \
+ 	 once.o refcount.o rcuref.o usercopy.o errseq.o bucket_locks.o \
+ 	 generic-radix-tree.o bitmap-str.o
+ obj-y += string_helpers.o
+@@ -352,3 +352,17 @@ obj-$(CONFIG_UCS2_STRING) += ucs2_string_rs.o
+ else
+ obj-$(CONFIG_UCS2_STRING) += ucs2_string.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += base64_rs.o
++else
++obj-y += base64.o
++endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++lib-y += win_minmax_rs.o
++else
++lib-y += win_minmax.o
++endif
+diff --git a/lib/base64_rs.rs b/lib/base64_rs.rs
+new file mode 100644
+index 000000000000..dd42c48633d2
+--- /dev/null
++++ b/lib/base64_rs.rs
+@@ -0,0 +1,179 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Base64 with multiple variants — Rust translation of `lib/base64.c`.
++//!
++//! Copyright (c) 2020 Hannes Reinecke, SUSE (original algorithm).
++//!
++//! The C builds its reverse-mapping tables with recursive initialiser
++//! macros; here a `const fn` computes the identical tables at compile
++//! time. Encode/decode walks kept faithful, including the C integer
++//! promotions that make invalid characters surface as a negative `val`.
++
++use kernel::bindings;
++use kernel::ffi::c_int;
++use kernel::prelude::*;
++
++const BASE64_TABLES: [&[u8; 64]; 3] = [
++    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
++    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
++    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+,",
++];
++
++/// Same mapping the C INIT_* macros produce: 'A'-'Z' → 0..25,
++/// 'a'-'z' → 26..51, '0'-'9' → 52..61, ch_62 → 62, ch_63 → 63, else -1.
++const fn rev_map(ch_62: u8, ch_63: u8) -> [i8; 256] {
++    let mut t = [-1i8; 256];
++    let mut v = 0usize;
++    while v < 256 {
++        let c = v as u8;
++        t[v] = if c >= b'A' && c <= b'Z' {
++            (c - b'A') as i8
++        } else if c >= b'a' && c <= b'z' {
++            (c - b'a') as i8 + 26
++        } else if c >= b'0' && c <= b'9' {
++            (c - b'0') as i8 + 52
++        } else if c == ch_62 {
++            62
++        } else if c == ch_63 {
++            63
++        } else {
++            -1
++        };
++        v += 1;
++    }
++    t
++}
++
++const BASE64_REV_MAPS: [[i8; 256]; 3] =
++    [rev_map(b'+', b'/'), rev_map(b'-', b'_'), rev_map(b'+', b',')];
++
++/// Base64-encode binary data (not NUL-terminated); returns encoded length.
++#[export]
++pub unsafe extern "C" fn base64_encode(
++    mut src: *const u8,
++    mut srclen: c_int,
++    dst: *mut kernel::ffi::c_char,
++    padding: bool,
++    variant: bindings::base64_variant,
++) -> c_int {
++    let table = BASE64_TABLES[variant as usize];
++    let mut j: usize = 0;
++
++    // SAFETY: src has srclen bytes; dst is large enough per the C API
++    // contract (BASE64_CHARS(srclen) characters).
++    unsafe {
++        let mut put = |cp: &mut usize, b: u8| {
++            *dst.add(*cp) = b as _;
++            *cp += 1;
++        };
++        while srclen >= 3 {
++            let ac: u32 =
++                (*src as u32) << 16 | (*src.add(1) as u32) << 8 | *src.add(2) as u32;
++            put(&mut j, table[(ac >> 18) as usize]);
++            put(&mut j, table[(ac >> 12) as usize & 0x3f]);
++            put(&mut j, table[(ac >> 6) as usize & 0x3f]);
++            put(&mut j, table[ac as usize & 0x3f]);
++
++            src = src.add(3);
++            srclen -= 3;
++        }
++
++        match srclen {
++            2 => {
++                let ac: u32 = (*src as u32) << 16 | (*src.add(1) as u32) << 8;
++                put(&mut j, table[(ac >> 18) as usize]);
++                put(&mut j, table[(ac >> 12) as usize & 0x3f]);
++                put(&mut j, table[(ac >> 6) as usize & 0x3f]);
++                if padding {
++                    put(&mut j, b'=');
++                }
++            }
++            1 => {
++                let ac: u32 = (*src as u32) << 16;
++                put(&mut j, table[(ac >> 18) as usize]);
++                put(&mut j, table[(ac >> 12) as usize & 0x3f]);
++                if padding {
++                    put(&mut j, b'=');
++                    put(&mut j, b'=');
++                }
++            }
++            _ => {}
++        }
++    }
++    j as c_int
++}
++
++/// Base64-decode a string; returns decoded length or -1 if invalid.
++#[export]
++pub unsafe extern "C" fn base64_decode(
++    src: *const kernel::ffi::c_char,
++    mut srclen: c_int,
++    dst: *mut u8,
++    mut padding: bool,
++    variant: bindings::base64_variant,
++) -> c_int {
++    let rev = &BASE64_REV_MAPS[variant as usize];
++    let mut s = src.cast::<u8>();
++    let mut j: usize = 0;
++
++    // SAFETY: src has srclen bytes; dst is large enough per the C API
++    // contract; table lookups are u8-indexed into 256-entry tables.
++    unsafe {
++        while srclen >= 4 {
++            // C: s8 values are promoted (sign-extended) to int before the
++            // shifts, so any -1 entry drives `val` negative.
++            let input = [
++                rev[*s as usize] as i32,
++                rev[*s.add(1) as usize] as i32,
++                rev[*s.add(2) as usize] as i32,
++                rev[*s.add(3) as usize] as i32,
++            ];
++            let val: i32 = input[0] << 18 | input[1] << 12 | input[2] << 6 | input[3];
++
++            if val < 0 {
++                if !padding || srclen != 4 || *s.add(3) != b'=' {
++                    return -1;
++                }
++                padding = false;
++                srclen = if *s.add(2) == b'=' { 2 } else { 3 };
++                break;
++            }
++
++            *dst.add(j) = (val >> 16) as u8;
++            j += 1;
++            *dst.add(j) = (val >> 8) as u8;
++            j += 1;
++            *dst.add(j) = val as u8;
++            j += 1;
++
++            s = s.add(4);
++            srclen -= 4;
++        }
++
++        if srclen == 0 {
++            return j as c_int;
++        }
++        if padding || srclen == 1 {
++            return -1;
++        }
++
++        let mut val: i32 =
++            ((rev[*s as usize] as i32) << 12) | ((rev[*s.add(1) as usize] as i32) << 6);
++        *dst.add(j) = (val >> 10) as u8;
++        j += 1;
++
++        if srclen == 2 {
++            // C compares against unsigned 0x800003ff: val converts to u32.
++            if val as u32 & 0x800003ff != 0 {
++                return -1;
++            }
++        } else {
++            val |= rev[*s.add(2) as usize] as i32;
++            if val as u32 & 0x80000003 != 0 {
++                return -1;
++            }
++            *dst.add(j) = (val >> 2) as u8;
++            j += 1;
++        }
++    }
++    j as c_int
++}
+diff --git a/lib/win_minmax_rs.rs b/lib/win_minmax_rs.rs
+new file mode 100644
+index 000000000000..eda79276a12b
+--- /dev/null
++++ b/lib/win_minmax_rs.rs
+@@ -0,0 +1,110 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Windowed min/max tracker — Rust translation of `lib/win_minmax.c`.
++//!
++//! Kathleen Nichols' algorithm: track best/2nd/3rd best over a moving time
++//! window in constant space (see the C original's commentary).
++//!
++//! `minmax_reset` is a static inline in <linux/win_minmax.h> — invisible to
++//! bindgen, so it is reimplemented here verbatim (its callers in OTHER C
++//! files keep using the header copy; both compute the same struct writes).
++//! Time deltas use wrapping arithmetic, as C unsigned subtraction does —
++//! the algorithm depends on that for timestamp wraparound.
++
++use kernel::bindings::{minmax, minmax_sample};
++use kernel::prelude::*;
++
++/// Header-inline `minmax_reset`, reimplemented (see module docs).
++#[inline]
++fn minmax_reset(m: &mut minmax, t: u32, meas: u32) -> u32 {
++    let val = minmax_sample { t, v: meas };
++
++    m.s[2] = val;
++    m.s[1] = val;
++    m.s[0] = val;
++    m.s[0].v
++}
++
++/// As time advances, update the 1st, 2nd, and 3rd choices.
++fn minmax_subwin_update(m: &mut minmax, win: u32, val: &minmax_sample) -> u32 {
++    let dt = val.t.wrapping_sub(m.s[0].t);
++
++    if dt > win {
++        // Passed the entire window without a new val: shift choices down,
++        // possibly twice (3rd choice was checked in-window on entry).
++        m.s[0] = m.s[1];
++        m.s[1] = m.s[2];
++        m.s[2] = *val;
++        if val.t.wrapping_sub(m.s[0].t) > win {
++            m.s[0] = m.s[1];
++            m.s[1] = m.s[2];
++            m.s[2] = *val;
++        }
++    } else if m.s[1].t == m.s[0].t && dt > win / 4 {
++        // A quarter of the window passed without a new val: take a 2nd
++        // choice from the 2nd quarter of the window.
++        m.s[1] = *val;
++        m.s[2] = *val;
++    } else if m.s[2].t == m.s[1].t && dt > win / 2 {
++        // Half the window passed: take a 3rd choice from the last half.
++        m.s[2] = *val;
++    }
++    m.s[0].v
++}
++
++/// Check if a new measurement updates the 1st, 2nd or 3rd choice max.
++#[export]
++pub unsafe extern "C" fn minmax_running_max(
++    m: *mut minmax,
++    win: u32,
++    t: u32,
++    meas: u32,
++) -> u32 {
++    let val = minmax_sample { t, v: meas };
++    // SAFETY: caller passes a valid minmax state (C ABI contract).
++    let m = unsafe { &mut *m };
++
++    if val.v >= m.s[0].v /* found new max? */
++        || val.t.wrapping_sub(m.s[2].t) > win
++    /* nothing left in window? */
++    {
++        return minmax_reset(m, t, meas); // forget earlier samples
++    }
++
++    if val.v >= m.s[1].v {
++        m.s[1] = val;
++        m.s[2] = val;
++    } else if val.v >= m.s[2].v {
++        m.s[2] = val;
++    }
++
++    minmax_subwin_update(m, win, &val)
++}
++
++/// Check if a new measurement updates the 1st, 2nd or 3rd choice min.
++#[export]
++pub unsafe extern "C" fn minmax_running_min(
++    m: *mut minmax,
++    win: u32,
++    t: u32,
++    meas: u32,
++) -> u32 {
++    let val = minmax_sample { t, v: meas };
++    // SAFETY: caller passes a valid minmax state (C ABI contract).
++    let m = unsafe { &mut *m };
++
++    if val.v <= m.s[0].v /* found new min? */
++        || val.t.wrapping_sub(m.s[2].t) > win
++    /* nothing left in window? */
++    {
++        return minmax_reset(m, t, meas); // forget earlier samples
++    }
++
++    if val.v <= m.s[1].v {
++        m.s[1] = val;
++        m.s[2] = val;
++    } else if val.v <= m.s[2].v {
++        m.s[2] = val;
++    }
++
++    minmax_subwin_update(m, win, &val)
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index 7586969db7b7..fa47dafa7f0f 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -26,6 +26,7 @@
+  * This workaround may not be possible in some cases, depending on how the C
+  * headers are set up.
+  */
++#include <linux/base64.h>
+ #include <linux/hrtimer_types.h>
+ 
+ #include <linux/acpi.h>
+@@ -99,6 +100,7 @@
+ #include <linux/ucs2_string.h>
+ #include <linux/usb.h>
+ #include <linux/wait.h>
++#include <linux/win_minmax.h>
+ #include <linux/workqueue.h>
+ #include <linux/xarray.h>
+ #include <trace/events/rust_sample.h>
+-- 
+2.55.0
+

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "header-inline-dep"
+version = 1
+tier = 1
+category = "api"
+
+[match]
+c = "translated TU calls a static inline defined in a header (e.g. minmax_reset in <linux/win_minmax.h>) — invisible to bindgen, no linkable symbol"
+constraints = ["the inline must be small and self-contained; reimplementation must be kept verbatim-faithful", "other C callers keep using the header copy — the two copies MUST stay semantically identical (note the header path in the Rust doc comment for future sync)"]
+
+[emit]
+kind = "rewrite"
+rust = "reimplement the inline as a private fn in the translated TU, doc-commented with its header origin; alternatively (for non-trivial inlines) add a rust/helpers shim per rule 0014"
+deviations = ["code duplication across languages until the whole family is translated — tracked by the doc comment"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/win_minmax.c:minmax_reset (callers of the header copy remain in C)"]
+oracle = "tier2"
+negative = ["header inlines with memory-ordering or per-CPU semantics — those are tier 3, use a shim, never reimplement"]
+human_review = false

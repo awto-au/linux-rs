@@ -117,9 +117,24 @@ def main() -> int:
     elif cmd == "bench":
         sh(["python3", str(S / "bench_math.py")], quiet_ok=False)
     elif cmd == "patch":
-        p = sh(["git", "-C", str(TREE), "format-patch", "-1",
-                "--start-number", rest[0], "-o", str(REPO / "patches")])
-        print("PATCH OK")
+        n = rest[0] if rest else str(len(list((REPO / "patches").glob("*.patch"))) + 1)
+        sh(["git", "-C", str(TREE), "format-patch", "-1",
+            "--start-number", n, "-o", str(REPO / "patches")])
+        print(f"PATCH OK ({n})")
+    elif cmd == "land":
+        # Post-integration chores in one shot: kernel commit + auto-numbered
+        # patch + report + project commit/push. args: <kernel-msg> [repo-msg]
+        sh(["git", "-C", str(TREE), "add", "-A"])
+        sh(["git", "-C", str(TREE), "commit", "-m", rest[0] + TRAILER])
+        n = str(len(list((REPO / "patches").glob("*.patch"))) + 1)
+        sh(["git", "-C", str(TREE), "format-patch", "-1",
+            "--start-number", n, "-o", str(REPO / "patches")])
+        sh(["python3", str(S / "report.py")], quiet_ok=False)
+        repo_msg = rest[1] if len(rest) > 1 else rest[0].splitlines()[0]
+        sh(["git", "-C", str(REPO), "add", "-A"])
+        sh(["git", "-C", str(REPO), "commit", "-m", repo_msg + TRAILER])
+        sh(["git", "-C", str(REPO), "push"])
+        print(f"LANDED (patch {n}, report, pushed)")
     elif cmd == "push":
         sh(["git", "-C", str(REPO), "add", "-A"])
         sh(["git", "-C", str(REPO), "commit", "-m", rest[0] + TRAILER])

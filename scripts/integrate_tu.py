@@ -52,14 +52,21 @@ def patch_makefile(tree: Path, obj: str):
     if f"{name}_rs.o" in text:
         logging.info("Makefile already switched for %s", name)
         return
-    # Remove the C object from whatever obj-... line holds it.
-    pat = re.compile(rf"(obj-[^\n=]*\+=[^\n]*?)\s*\b{re.escape(name)}\.o\b")
-    m = pat.search(text)
-    if m is None:
+    # Remove the C object from whatever obj-/lib- rule holds it, including
+    # backslash-continuation lines: find the token, walk back to the rule.
+    lines = text.splitlines(keepends=True)
+    tok = re.compile(rf"(\s*)\b{re.escape(name)}\.o\b")
+    idx = next((i for i, l in enumerate(lines)
+                if tok.search(l) and not l.lstrip().startswith("#")), None)
+    if idx is None:
         logging.error("could not find %s.o in %s — patch by hand", name, mk)
         raise SystemExit(1)
-    cond = m.group(0).split("+=")[0].strip()  # e.g. obj-y or obj-$(CONFIG_X)
-    text = pat.sub(m.group(1), text, count=1)
+    start = idx
+    while start > 0 and not re.match(r"^(obj|lib)-", lines[start]):
+        start -= 1
+    cond = re.split(r"[+:]?=", lines[start])[0].strip()
+    lines[idx] = tok.sub("", lines[idx], count=1)
+    text = "".join(lines)
     switch = (f"\n# linux-rs: translated TU — Rust when Rust is available.\n"
               f"ifdef CONFIG_RUST\n{cond} += {name}_rs.o\nelse\n"
               f"{cond} += {name}.o\nendif\n")
