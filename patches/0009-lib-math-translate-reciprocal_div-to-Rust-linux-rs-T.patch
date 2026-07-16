@@ -1,0 +1,155 @@
+From cf3644292da70c8b3e6408e565aa2343181e48fb Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 12:38:04 +1000
+Subject: [PATCH] lib/math: translate reciprocal_div to Rust (linux-rs TU 15)
+
+Barrett-style reciprocal division constants (reciprocal_value,
+reciprocal_value_adv). Deviation flagged and documented: C's WARN(cond,
+fmt, ...) has no formatted equivalent in the kernel crate as of v7.1
+(only condition-only warn_on!) -- shimmed as warn_on!(cond), losing the
+diagnostic message text but keeping the taint/dump behaviour. fls ->
+leading_zeros per rule 0006; do_div -> plain u64 division (truncating,
+matches C). Also: fix base64_rs.rs unused_mut warning found during this
+build.
+
+group_cpus.c deferred: CONFIG_SMP-gated, cpumask/kzalloc/topology-heavy,
+substantially more surface than its readiness score suggested -- not
+representative of our SMP=n corpus. Skipping in favour of better-fitting
+targets.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/base64_rs.rs                |  2 +-
+ lib/math/Makefile               |  9 ++++-
+ lib/math/reciprocal_div_rs.rs   | 71 +++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |  1 +
+ 4 files changed, 81 insertions(+), 2 deletions(-)
+ create mode 100644 lib/math/reciprocal_div_rs.rs
+
+diff --git a/lib/base64_rs.rs b/lib/base64_rs.rs
+index dd42c48633d2..a9f55b2fc6c6 100644
+--- a/lib/base64_rs.rs
++++ b/lib/base64_rs.rs
+@@ -61,7 +61,7 @@
+     // SAFETY: src has srclen bytes; dst is large enough per the C API
+     // contract (BASE64_CHARS(srclen) characters).
+     unsafe {
+-        let mut put = |cp: &mut usize, b: u8| {
++        let put = |cp: &mut usize, b: u8| {
+             *dst.add(*cp) = b as _;
+             *cp += 1;
+         };
+diff --git a/lib/math/Makefile b/lib/math/Makefile
+index 23b089e2964b..97e3de5d33f0 100644
+--- a/lib/math/Makefile
++++ b/lib/math/Makefile
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+-obj-y += div64.o reciprocal_div.o
++obj-y += div64.o
+ 
+ # linux-rs: translated TUs — Rust when available (gcd_key.c stays C: the
+ # static key's linker-section definition), C originals otherwise.
+@@ -22,3 +22,10 @@ obj-$(CONFIG_TEST_DIV64)	+= test_div64.o
+ obj-$(CONFIG_TEST_MULDIV64)	+= test_mul_u64_u64_div_u64.o
+ 
+ obj-y += tests/
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += reciprocal_div_rs.o
++else
++obj-y += reciprocal_div.o
++endif
+diff --git a/lib/math/reciprocal_div_rs.rs b/lib/math/reciprocal_div_rs.rs
+new file mode 100644
+index 000000000000..ebd8815483e0
+--- /dev/null
++++ b/lib/math/reciprocal_div_rs.rs
+@@ -0,0 +1,71 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Reciprocal division (Barrett-style) — Rust translation of
++//! `lib/math/reciprocal_div.c`. See `<linux/reciprocal_div.h>` for the
++//! algorithm description (magic-number division, avoiding a real divide
++//! on the hot path).
++
++use kernel::bindings;
++use kernel::prelude::*;
++use kernel::warn_on;
++
++/// Precompute the reciprocal-multiplication constants for dividing by `d`.
++#[export]
++pub unsafe extern "C" fn reciprocal_value(d: u32) -> bindings::reciprocal_value {
++    // C: l = fls(d - 1) — fls is 1-based, defined at 0 -> 0.
++    let dm1 = d.wrapping_sub(1);
++    let l: i32 = (32 - dm1.leading_zeros()) as i32;
++
++    let mut m: u64 = (1u64 << 32).wrapping_mul((1u64 << l).wrapping_sub(d as u64));
++    // C: do_div(m, d) — truncating unsigned division, remainder discarded.
++    m /= d as u64;
++    m += 1;
++
++    bindings::reciprocal_value {
++        m: m as u32,
++        sh1: core::cmp::min(l, 1) as u8,
++        sh2: core::cmp::max(l - 1, 0) as u8,
++    }
++}
++
++/// Like `reciprocal_value`, with an extra `prec` bits of precision control.
++///
++/// Caller must ensure `ceil(log2(d)) != 32` (see the C header comment);
++/// that case overflows u64 and is diagnosed here via `warn_on!`, exactly
++/// as the C `WARN()` diagnosed it — MINUS the formatted message, since the
++/// kernel crate has no `warn!(cond, fmt, args)` as of v7.1 (only
++/// condition-only `warn_on!`). Deviation tracked; upgrade when available.
++#[export]
++pub unsafe extern "C" fn reciprocal_value_adv(
++    d: u32,
++    prec: u8,
++) -> bindings::reciprocal_value_adv {
++    // ceil(log2(d))
++    let dm1 = d.wrapping_sub(1);
++    let l: u32 = 32 - dm1.leading_zeros();
++
++    warn_on!(l == 32);
++
++    let mut post_shift = l;
++    let mut mlow: u64 = (1u64 << (32 + l)) / d as u64;
++    let mut mhigh: u64 =
++        ((1u64 << (32 + l)) + (1u64 << (32 + l - prec as u32))) / d as u64;
++
++    while post_shift > 0 {
++        let lo = mlow >> 1;
++        let hi = mhigh >> 1;
++
++        if lo >= hi {
++            break;
++        }
++        mlow = lo;
++        mhigh = hi;
++        post_shift -= 1;
++    }
++
++    bindings::reciprocal_value_adv {
++        m: mhigh as u32,
++        sh: post_shift as u8,
++        exp: l as u8,
++        is_wide_m: mhigh > u32::MAX as u64,
++    }
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index d9500118165f..fa7e5dd9450b 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -85,6 +85,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/pm_opp.h>
+ #include <linux/rational.h>
++#include <linux/reciprocal_div.h>
+ #include <linux/sort.h>
+ #include <linux/poll.h>
+ #include <linux/property.h>
+-- 
+2.55.0
+
