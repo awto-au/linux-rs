@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 // Phase 0 eval: does Coccinelle find LOCKED_REGION structurally?
 // Matches a spin_lock/spin_unlock pair on the same lock expression within
 // one function — the structural family behind the LOCKED_REGION pattern.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Phase 1: aggregate tmp/functions.jsonl into the pattern census report.
 
 Answers the go/no-go question: how far does the corpus collapse when

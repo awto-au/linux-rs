@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Phase 0 evaluation: rough idiom frequency counts over the pinned corpus.
 
 Counts textual occurrences of ~12 kernel idiom markers across exactly the C

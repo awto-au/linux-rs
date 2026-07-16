@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Phase 1: per-function AST fingerprints over the pinned corpus.
 
 For every C TU in linux/compile_commands.json, parse with libclang using the

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Boot the riscv64 kernel in QEMU with the boot log at a stable path.
 
 Always writes the full serial log to tmp/qemu-boot.log (truncated per run),

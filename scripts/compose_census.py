@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Phase 1 v2.1: compositionality of the tail (corrected, matches census v1.1).
 
 Hypothesis (Dan, confirmed in v2.0): a singleton statement family is a novel

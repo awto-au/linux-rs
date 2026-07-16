@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Phase 1 v1.1: statement/region-level fingerprint census (corrected).
 
 v1.0 counted post-expansion clang-AST statements naively. The 2026-07-16

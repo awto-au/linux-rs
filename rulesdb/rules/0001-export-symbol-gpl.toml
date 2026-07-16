@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 id = "export-symbol-gpl"
 version = 1
 tier = 1

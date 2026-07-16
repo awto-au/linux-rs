@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Phase 1 v1: coverage curves + top families from tmp/region_census.pkl."""
 import logging
 import pickle

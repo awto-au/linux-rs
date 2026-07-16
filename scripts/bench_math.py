@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Build and run the host math benchmark: C originals (clang -O2) vs
 faithful Rust vs optimised Rust (rustc -O).
 
