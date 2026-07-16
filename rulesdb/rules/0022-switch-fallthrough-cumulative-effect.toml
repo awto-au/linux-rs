@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "switch-fallthrough-cumulative-effect"
+version = 1
+tier = 1
+category = "stmt"
+
+[match]
+c = "a switch statement where EVERY case in a chain falls through (via `fallthrough;` or implicit fallthrough) into ALL subsequent case bodies down to a shared tail — e.g. lib/cmdline.c:memparse's E/P/T/G/M/K suffix switch: matching 'E' executes the 'E' body AND every body below it (P, T, G, M, K) in sequence, so a statement that only appears in the LAST case (K's `endptr++`) actually runs for EVERY matched case, not just literal K"
+family = "MACROSTMT:switch-fallthrough-chain"
+constraints = ["identify the true tail behavior by asking 'what runs if I enter at the FIRST case', not 'what does this one case's block say' — the case you're reading is a fragment, not the whole story", "count accumulated side effects (e.g. how many times a shift-by-N repeats) per entry point, not just note that fallthrough happens"]
+
+[emit]
+kind = "rewrite"
+rust = "match on the matched tier to get a rank/count (e.g. how many chain-tail statements would execute), then apply the cumulative effect explicitly once — do NOT translate by copying only the literal case's own statements and ignoring what it falls into"
+deviations = ["none — this is a translation-process rule; the emitted Rust must be numerically/behaviorally identical to running the full fallthrough chain"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["caught during this TU's own translation: memparse's `endptr++` was first (wrongly) translated as conditional on `suffix == 'K'`, when the C runs it for every matched tier (E through K) via fallthrough — caught by re-deriving the fallthrough chain by hand before writing the tier-2.5 diff harness, confirmed absent afterward across 15000+35000 randomized cases across two seeds"]
+
+[validation]
+instances = ["lib/cmdline.c:memparse (E/P/T/G/M/K fallthrough chain — shift count AND endptr++ both need the 'runs for every matched tier down to K' reading)"]
+oracle = "tier2.5 (bench/diff_cmdline.{c,rs})"
+negative = ["a single case with an explicit `break` at its end (no fallthrough) — normal one-case-one-effect translation applies", "fallthrough used purely for OR'd case labels with no statements between them (e.g. `case 'E': case 'e': <stmt>`) — that's just multi-value matching, translates to a `|` pattern, not a cumulative-effect chain"]
+human_review = false
