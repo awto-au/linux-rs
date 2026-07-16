@@ -10,7 +10,10 @@ constraints = ["__fls/__ffs callers must guarantee nonzero args"]
 
 [emit]
 kind = "function"
-rust = "fls(x) -> u32::BITS - x.leading_zeros()  (defined at 0, matches C)\n__fls(x) -> BITS - 1 - x.leading_zeros()"
+# NOT A RENAME. leading_zeros() alone is NOT the translation — you must
+# apply the arithmetic transform below. `fls(x) -> x.leading_zeros()` with
+# no further change is WRONG (off by a BITS-1 offset and inverted sense).
+rust = "fls(x) -> (u32::BITS - x.leading_zeros())  (1-based MSB index; defined at x=0 -> 0, matches C)\n__fls(x) -> (u32::BITS - 1 - x.leading_zeros())  (0-based MSB index; UB at x=0 in C, defined at 0 in Rust)"
 deviations = ["Rust forms defined at 0 where C __fls/__ffs are UB — strictly safer"]
 
 [provenance]
@@ -20,5 +23,8 @@ evidence = []
 [validation]
 instances = ["lib/math/int_sqrt.c:int_sqrt (__fls)", "lib/math/int_log.c:intlog2 (fls)"]
 oracle = "tier4"
-negative = ["ffs() 1-based-with-zero POSIX variant — check each caller's off-by-one expectations"]
+negative = [
+  "ffs() 1-based-with-zero POSIX variant — check each caller's off-by-one expectations",
+  "WRONG (seen in practice, qwen2.5-coder:14b, 2026-07-16): translating fls(x) as bare `leading_zeros(x)` or `x.leading_zeros()` with no BITS offset applied — this compiles, looks plausible, and is silently off by a constant + inverted. Any translation of this rule that does not contain the subtraction `u32::BITS - ...` (or `- 1 -`) is wrong by construction; reject on sight, do not spot-check only the output value.",
+]
 human_review = false
