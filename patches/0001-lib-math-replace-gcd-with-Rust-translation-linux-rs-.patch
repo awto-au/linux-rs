@@ -1,0 +1,195 @@
+From 0b86ff556ecf6fa8b06019f99306e103e8a295a5 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 10:54:34 +1000
+Subject: [PATCH] lib/math: replace gcd() with Rust translation (linux-rs phase
+ 2, first TU)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Translate lib/math/gcd.c to Rust (gcd_rs.rs): binary GCD + even/odd
+fallback, path selected by the efficient_ffs_key static key exactly as in
+C. The key's DEFINE_STATIC_KEY_TRUE stays in a C stub (gcd_key.c) — its
+linker-section placement is not expressible from Rust; the Rust side reads
+it via static_key_count (value-equivalent to static_branch_likely; branch
+patching deferred until the kernel crate grows static_branch_likely!).
+
+The C original remains and is built when !CONFIG_RUST.
+
+Validated: builds (LLVM=1, riscv64), gcd exported via #[export] with
+compile-time signature check against <linux/gcd.h>, all 11 GCD_KUNIT_TEST
+vectors pass on qemu-system-riscv64 -M virt — a CPU without Zbb, so the
+static key is disabled at boot and the even/odd path is the one under
+test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/math/Makefile               |  10 +++-
+ lib/math/gcd_key.c              |  12 ++++
+ lib/math/gcd_rs.rs              | 103 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ 4 files changed, 125 insertions(+), 1 deletion(-)
+ create mode 100644 lib/math/gcd_key.c
+ create mode 100644 lib/math/gcd_rs.rs
+
+diff --git a/lib/math/Makefile b/lib/math/Makefile
+index 9a3850d55b79..3dfac61c3f89 100644
+--- a/lib/math/Makefile
++++ b/lib/math/Makefile
+@@ -1,5 +1,13 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+-obj-y += div64.o gcd.o lcm.o int_log.o int_pow.o int_sqrt.o reciprocal_div.o
++obj-y += div64.o lcm.o int_log.o int_pow.o int_sqrt.o reciprocal_div.o
++
++# linux-rs: translated TU — Rust gcd (plus C stub for the static key's
++# linker-section definition) when Rust is available, C original otherwise.
++ifdef CONFIG_RUST
++obj-y += gcd_rs.o gcd_key.o
++else
++obj-y += gcd.o
++endif
+ 
+ obj-$(CONFIG_CORDIC)		+= cordic.o
+ obj-$(CONFIG_POLYNOMIAL)	+= polynomial.o
+diff --git a/lib/math/gcd_key.c b/lib/math/gcd_key.c
+new file mode 100644
+index 000000000000..8da965544ed2
+--- /dev/null
++++ b/lib/math/gcd_key.c
+@@ -0,0 +1,12 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Static-key definition for gcd(), kept in C alongside the Rust
++ * translation (lib/math/gcd_rs.rs): DEFINE_STATIC_KEY_TRUE places the key
++ * in linker sections the Rust side cannot express yet. Written by
++ * arch setup code (e.g. arch/riscv/kernel/setup.c when Zbb is absent),
++ * read by gcd_rs.
++ */
++#include <linux/gcd.h>
++#include <linux/export.h>
++
++DEFINE_STATIC_KEY_TRUE(efficient_ffs_key);
+diff --git a/lib/math/gcd_rs.rs b/lib/math/gcd_rs.rs
+new file mode 100644
+index 000000000000..0806862145a7
+--- /dev/null
++++ b/lib/math/gcd_rs.rs
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Greatest common divisor — Rust translation of `lib/math/gcd.c`.
++//!
++//! linux-rs Phase 2: first translated TU. Binary (Stein) GCD when `__ffs`
++//! is efficient, even/odd halving algorithm otherwise — selected, as in C,
++//! by the `efficient_ffs_key` static key, which riscv *disables* at boot
++//! when the Zbb extension is absent (arch/riscv/kernel/setup.c). The key is
++//! read by value (`static_key_count`) rather than as a patched branch: the
++//! kernel crate has `static_branch_unlikely!` only for false-keys as of
++//! v7.1, and this config builds without CONFIG_JUMP_LABEL anyway.
++
++use kernel::bindings;
++use kernel::ffi::c_ulong;
++use kernel::prelude::*;
++
++/// `static_branch_likely(&efficient_ffs_key)`, value-equivalent form.
++#[inline]
++fn efficient_ffs() -> bool {
++    // SAFETY: `efficient_ffs_key` is a static key defined by C in gcd_rs
++    // (declared in <linux/gcd.h>); `static_key_count` only reads it.
++    unsafe {
++        bindings::static_key_count(
++            core::ptr::addr_of_mut!(bindings::efficient_ffs_key)
++                .cast::<bindings::static_key>(),
++        ) > 0
++    }
++}
++
++/// Binary GCD: fast when trailing_zeros (`__ffs`) is cheap.
++/// Callers guarantee `a != 0 && b != 0`.
++fn binary_gcd(mut a: c_ulong, mut b: c_ulong) -> c_ulong {
++    let r = a | b;
++    b >>= b.trailing_zeros();
++    if b == 1 {
++        return r & r.wrapping_neg();
++    }
++    loop {
++        a >>= a.trailing_zeros();
++        if a == 1 {
++            return r & r.wrapping_neg();
++        }
++        if a == b {
++            return a << r.trailing_zeros();
++        }
++        if a < b {
++            core::mem::swap(&mut a, &mut b);
++        }
++        a -= b;
++    }
++}
++
++/// Even/odd halving GCD: wins when bit-scan is a loop.
++/// Callers guarantee `a != 0 && b != 0`.
++fn odd_even_gcd(mut a: c_ulong, mut b: c_ulong) -> c_ulong {
++    let mut r = a | b;
++    // Isolate lsbit of r.
++    r &= r.wrapping_neg();
++
++    while b & r == 0 {
++        b >>= 1;
++    }
++    if b == r {
++        return r;
++    }
++    loop {
++        while a & r == 0 {
++            a >>= 1;
++        }
++        if a == r {
++            return r;
++        }
++        if a == b {
++            return a;
++        }
++        if a < b {
++            core::mem::swap(&mut a, &mut b);
++        }
++        a -= b;
++        a >>= 1;
++        // `a` was halved above, so `a + b` cannot exceed c_ulong::MAX —
++        // same invariant the C version relies on.
++        if a & r != 0 {
++            a += b;
++        }
++        a >>= 1;
++    }
++}
++
++/// Calculate and return the greatest common divisor of 2 unsigned longs.
++///
++/// Signature checked against the declaration in `<linux/gcd.h>` by
++/// `#[export]`; exported as `EXPORT_SYMBOL_GPL`, matching the C original.
++#[export]
++pub unsafe extern "C" fn gcd(a: c_ulong, b: c_ulong) -> c_ulong {
++    if a == 0 || b == 0 {
++        return a | b;
++    }
++    if efficient_ffs() {
++        binary_gcd(a, b)
++    } else {
++        odd_even_gcd(a, b)
++    }
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index 446dbeaf0866..7f282f8552de 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -60,6 +60,7 @@
+ #include <linux/file.h>
+ #include <linux/firmware.h>
+ #include <linux/fs.h>
++#include <linux/gcd.h>
+ #include <linux/i2c.h>
+ #include <linux/interrupt.h>
+ #include <linux/io-pgtable.h>
+-- 
+2.55.0
+

@@ -1,0 +1,24 @@
+id = "export-symbol-gpl"
+version = 1
+tier = 1
+category = "macro"
+
+[match]
+c = "EXPORT_SYMBOL_GPL(fn); /* fn defined in same TU, called by C via header */"
+family = "MACROSTMT:EXPORT_SYMBOL_GPL"
+constraints = ["symbol is a function", "C callers use a header declaration (not a vtable fn-pointer)"]
+
+[emit]
+kind = "rust-macro"
+rust = "#[export] pub unsafe extern \"C\" fn … — plus the fn's header added to rust/bindings/bindings_helper.h"
+deviations = ["#[export] verifies the signature against the C declaration at compile time (strictly better)", "all Rust symbols are auto-EXPORT_SYMBOL_GPL: plain EXPORT_SYMBOL loses its non-GPL status — flag those instances"]
+
+[provenance]
+derivation = "API-inspired"
+evidence = ["rust/macros/lib.rs export docs (v7.1)", "drivers/gpu/drm/drm_panic_qr.rs precedent"]
+
+[validation]
+instances = ["lib/math/gcd.c:gcd"]
+oracle = "tier4"
+negative = ["EXPORT_SYMBOL (non-GPL) — needs review before this rule applies", "fn called via vtable/function pointer — export macro documented as wrong there"]
+human_review = false

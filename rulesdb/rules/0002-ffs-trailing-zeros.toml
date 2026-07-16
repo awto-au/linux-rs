@@ -1,0 +1,24 @@
+id = "ffs-trailing-zeros"
+version = 1
+tier = 1
+category = "api"
+
+[match]
+c = "x >>= __ffs(x);  /* and other __ffs(nonzero) uses */"
+family = "CALL:__ffs"
+constraints = ["argument provably nonzero (C __ffs is UB at 0)"]
+
+[emit]
+kind = "function"
+rust = "x >>= x.trailing_zeros();"
+deviations = ["none for nonzero args; trailing_zeros(0) is defined (bit width) where C __ffs(0) is UB — Rust is strictly safer"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["core::primitive docs"]
+
+[validation]
+instances = ["lib/math/gcd.c:binary_gcd (3 sites)"]
+oracle = "tier4"
+negative = ["ffs()/fls() one-based variants — different off-by-one contract, separate rules"]
+human_review = false

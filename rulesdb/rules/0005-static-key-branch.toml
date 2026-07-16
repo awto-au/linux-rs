@@ -1,0 +1,31 @@
+id = "static-key-branch"
+version = 1
+tier = 3
+category = "region"
+
+[match]
+c = "DEFINE_STATIC_KEY_TRUE(k); … if (static_branch_likely(&k)) { fast } else { slow }"
+family = "MACROSTMT:static_branch_likely"
+constraints = [
+  "THE TRAP: the key looks constant but is runtime state — find every writer before translating (gcd's efficient_ffs_key is disabled by arch/riscv/kernel/setup.c when Zbb is absent, i.e. live on our shipping arch)",
+  "both branches must be translated; eliding the 'dead' one is wrong",
+]
+
+[emit]
+kind = "rewrite"
+rust = """
+// DEFINE_STATIC_KEY_* stays in a C stub (linker-section placement not
+// expressible in Rust); Rust side reads the key by value:
+//   unsafe { bindings::static_key_count(addr_of_mut!(bindings::K).cast()) > 0 }
+"""
+deviations = ["value-equivalent, but no branch patching: a plain load+branch instead of a nop-patched jump. Fine off hot paths; hot-path instances must wait for static_branch_likely! in the kernel crate (only static_branch_unlikely!/false-key exists in v7.1)"]
+
+[provenance]
+derivation = "API-inspired"
+evidence = ["rust/kernel/jump_label.rs (static_branch_unlikely!, v7.1)"]
+
+[validation]
+instances = ["lib/math/gcd.c:gcd (efficient_ffs_key)"]
+oracle = "tier4"
+negative = ["static keys in hot paths (scheduler, network fast path) — the patching optimisation IS the semantics there; do not apply the value-read form", "static_branch_unlikely on false-keys — use the existing kernel-crate macro instead"]
+human_review = true

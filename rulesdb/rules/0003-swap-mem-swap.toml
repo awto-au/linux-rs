@@ -1,0 +1,24 @@
+id = "swap-mem-swap"
+version = 1
+tier = 1
+category = "macro"
+
+[match]
+c = "swap(a, b);"
+family = "MACROSTMT:swap"
+constraints = ["operands are plain lvalues of the same type"]
+
+[emit]
+kind = "function"
+rust = "core::mem::swap(&mut a, &mut b);"
+deviations = ["none"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/math/gcd.c:binary_gcd", "lib/math/gcd.c:gcd"]
+oracle = "tier4"
+negative = ["swap() on bitfields or volatile lvalues — no direct &mut"]
+human_review = false

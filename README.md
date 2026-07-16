@@ -54,6 +54,7 @@ target-design corpus: [docs/reference-projects.md](docs/reference-projects.md).
 | 2026-07-16 | Phase 2 re-scoped: minimal **riscv64** boot path; corpus measured at **511 TUs (~16% of lab)**, slim-serial kernel **boots in QEMU** ([docs/phase2-minimal-target.md](docs/phase2-minimal-target.md)) |
 | 2026-07-16 | **Correctness review → census v1.1/v2.1.** Macro-internal inflation, brace bias, type erasure fixed. Corrected gate: **26 families = 25%, 713 = 50%** of 1.06M statements — GO stands; tail: median **1** non-root glue node ([docs/review-findings-2026-07-16.md](docs/review-findings-2026-07-16.md)) |
 | 2026-07-16 | Reference corpus added: Asterinas, Moss, Kerla, linux-0.11-rs, rCore as target-design evidence ([docs/reference-projects.md](docs/reference-projects.md)) |
+| 2026-07-16 | **First translated TU running in the kernel.** `lib/math/gcd.c` → Rust, in-tree on the riscv64 target, all 11 KUnit vectors pass on the booted kernel — including the static-key fallback path a naive translation would have dropped. 5 rules extracted ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)) |
 
 ## Layout
 

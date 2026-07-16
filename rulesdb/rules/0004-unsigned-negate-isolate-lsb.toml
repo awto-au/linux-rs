@@ -1,0 +1,23 @@
+id = "unsigned-negate-isolate-lsb"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "r & -r   /* isolate lowest set bit of unsigned r */"
+constraints = ["unsigned operand"]
+
+[emit]
+kind = "rewrite"
+rust = "r & r.wrapping_neg()   // or r.isolate_least_significant_one() when stable"
+deviations = ["none — unary minus on C unsigned is defined wrapping; Rust needs wrapping_neg explicitly (plain -r on unsigned is a compile error, which is the general rule: C unsigned arithmetic is wrapping, Rust translation must either prove no-wrap or use wrapping_* ops)"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/math/gcd.c:binary_gcd (2 sites)", "lib/math/gcd.c:gcd (1 site)"]
+oracle = "tier4"
+negative = ["signed operands — UB on INT_MIN in C, different rule"]
+human_review = false
