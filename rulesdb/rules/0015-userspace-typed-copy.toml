@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "userspace-typed-copy"
+version = 1
+tier = 2
+category = "region"
+
+[match]
+c = """
+struct foo x;
+if (copy_from_user(&x, argp, sizeof(x)))
+        return -EFAULT;
+(and the copy_to_user / get_user / put_user family)
+"""
+constraints = [
+  "destination fully overwritten on success (no partial-copy observation)",
+  "type is usercopy-safe: no kernel pointers, no uninit padding leaked back on copy_to_user",
+  "native ABI layout only — compat syscall paths use different layouts, DO NOT match",
+  "hardened-usercopy checks must still run (both stage 2 and 3 go through the same C primitives underneath)",
+]
+
+[emit]
+kind = "rewrite"
+rust = """
+stage 1 (literal): unsafe bindings::copy_from_user into MaybeUninit<T>,
+  compare returned uncopied-count != 0 -> EFAULT, assume_init after.
+stage 2 (checked, in-tree API): UserSlice::new(ptr, size_of::<T>()).reader()
+  .read::<T>()? — requires T: FromBytes (kernel::transmute), returns
+  Result<T, EFAULT-equivalent>.
+stage 3 (safe wrapper): same as stage 2 — the RfL API IS the safe wrapper;
+  no external-kernel idioms needed.
+"""
+deviations = [
+  "C returns uncopied byte COUNT; Result-based forms lose it. Only apply where the caller mapped any nonzero count to -EFAULT (the overwhelmingly common shape). Sites observing the count (partial-copy handling, e.g. some read/write loops) MUST NOT match — negative example below.",
+  "FromBytes bound rejects types with padding/pointer fields at compile time — stricter than C, which is the point; a rejected type is a review flag, not a rule failure.",
+]
+
+[provenance]
+derivation = "API-inspired"
+evidence = [
+  "rust/kernel/uaccess.rs (UserSlice/UserSliceReader::read::<T: FromBytes>, v7.1) — in-tree, GPL, the emission target",
+  "Moss TUA<T>/UserCopyable + MaybeUninit boundary (MIT — design evidence only, no code): confirms the typed-user-pointer shape works at kernel scale",
+  "survey: docs/reference-projects.md corpus B",
+]
+
+[validation]
+instances = []  # first application target: a usercopy site in the slim corpus (lib/strncpy_from_user.c is adjacent but count-observing — see negative)
+oracle = "tier1"  # design validated against in-tree API; no instance translated yet
+negative = [
+  "strncpy_from_user / copy loops that OBSERVE the uncopied count — count semantics are load-bearing, must not match",
+  "compat_ioctl paths (different struct layout)",
+  "user pointers dereferenced under pagefault_disable (different error contract)",
+]
+human_review = true
