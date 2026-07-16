@@ -3,3 +3,9 @@
 /tmp/
 __pycache__/
 target/
+
+# Derived artifact — regenerated from rulesdb/rules/*.toml + tmp/ census
+# data by scripts/build_db.py. Never hand-edited, never committed: per
+# the project's "derived artifacts have no legacy" rule, this is
+# rebuild-not-migrate. 145MB+ and grows with corpus size.
+/rulesdb/patterns.db
