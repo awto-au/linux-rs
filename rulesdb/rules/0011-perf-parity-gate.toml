@@ -36,4 +36,5 @@ catalogue = [
   "control-structure changes are logic changes: dropped early exits cost 2x on gcd (coprime probability 6/pi^2 makes ==1 exits dominant)",
   "check original file git-log for prior benchmark tournaments before proposing cleaner algorithms",
   "std intrinsic-backed routines (u64::isqrt) can legitimately beat kernel C 2x — candidates, per-function, measured",
+  "rankings are ISA-dependent: on riscv64gc (no Zbb, software bit-scan) the gcd variant ranking FLIPS vs x86 (qemu-user, relative) — the gate must run per target ISA; this mirrors the kernel's own static-key dispatch on the same question",
 ]
