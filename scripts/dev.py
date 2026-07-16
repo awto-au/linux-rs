@@ -12,6 +12,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py integrate --obj lib/foo.o --header linux/foo.h --kunit CONFIG_X --suite s
   dev.py readiness [glob]       # rank untranslated TUs
   dev.py bench                  # host benchmark (pinned methodology)
+  dev.py diff <target>          # tier-2.5 differential oracle (needs bench/diff_<target>.{c,rs})
   dev.py patch N                # format-patch HEAD -> patches/ start-number N
   dev.py push "msg"             # commit -A + push project repo
   dev.py kcommit "msg"          # commit staged files in kernel worktree
@@ -116,6 +117,8 @@ def main() -> int:
         sh(["python3", str(S / "readiness.py"), *args], quiet_ok=False)
     elif cmd == "bench":
         sh(["python3", str(S / "bench_math.py")], quiet_ok=False)
+    elif cmd == "diff":
+        sh(["python3", str(S / "diff_oracle.py"), *rest], quiet_ok=False)
     elif cmd == "patch":
         n = rest[0] if rest else str(len(list((REPO / "patches").glob("*.patch"))) + 1)
         sh(["git", "-C", str(TREE), "format-patch", "-1",
