@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "safe-lift-aref-ownership"
+version = 1
+tier = 3
+category = "region"
+
+[match]
+c = "a translated #[export] extern \"C\" fn passes a raw pointer to a refcounted C object in or out across the FFI boundary (the C object has its own get/put or refcount_t discipline already established by other rules, e.g. 0005/0024)"
+
+[emit]
+kind = "rewrite"
+rust = "wrap the boundary in ARef<T>/Arc<T> using the ForeignOwnable trait's into_foreign/from_foreign to move ownership across the raw-pointer FFI edge safely — cite rust/kernel/types.rs:51,61 (ForeignOwnable), rust/kernel/sync/arc.rs (Arc<T>/ArcBorrow), real usage in drivers/block/rnull/rnull.rs:18,77,92 (ARef<mq::Request<Self>> through queue_rq/complete) and drivers/android/binder/process.rs:436,439,442,505"
+deviations = ["representation change only — same refcount discipline, ownership now tracked by the type system instead of manual get/put pairing"]
+
+[provenance]
+derivation = "API-inspired"
+evidence = ["research pass 2026-07-16 over rust/kernel/types.rs, rust/kernel/sync/arc.rs, rnull.rs, binder/process.rs — NOT yet applied to any landed TU"]
+
+[validation]
+instances = []
+oracle = "n/a — not yet applied"
+negative = ["borrowed (non-owning) pointer crossings — use ArcBorrow, not ARef/Arc (taking ARef/Arc on a borrow silently changes lifetime/ownership semantics vs the C, exactly the kind of unlicensed deviation the project's discipline forbids)"]
+human_review = true
+
+[status]
+note = "DEFERRED — Stage-3 safety lift, future work, not applied upfront. Recorded now so the target shape is documented when that stage starts."

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "safe-lift-lock-guard"
+version = 1
+tier = 3
+category = "region"
+
+[match]
+c = "a translated TU's raw spin_lock/mutex_lock ... spin_unlock/mutex_unlock pair (already emitted unsafe-first per rules 0005/0017) fully brackets every access to one struct field, with no access to that field outside the bracketed region anywhere in the TU"
+
+[emit]
+kind = "rewrite"
+rust = "lift the field to kernel::sync::{Mutex,SpinLock}<T> and replace the lock/access/unlock triple with `let mut guard = x.lock(); ... ` (Drop unlocks) — cite rust/kernel/sync/lock.rs (Lock<T,B>/Guard, generic over a Backend trait) and real usage in drivers/block/rnull/configfs.rs:114 (Mutex<DeviceConfigInner> as a plain struct field) and drivers/android/binder/process.rs:445,458 (SpinLock<ProcessInner>, Mutex<ProcessNodeRefs>)"
+deviations = ["representation change only (raw lock calls -> Guard/Drop) — no algorithm or ordering change; this is the Stage-3 safety lift, not a translation step"]
+
+[provenance]
+derivation = "API-inspired"
+evidence = ["research pass 2026-07-16 over rust/kernel/sync/lock.rs + rnull + binder — see docs (report cited in commit); NOT yet applied to any landed TU"]
+
+[validation]
+instances = []
+oracle = "n/a — not yet applied"
+negative = ["field accessed anywhere outside the lock/unlock bracket in the same TU (partial locking) — needs manual audit before lifting, do not apply mechanically", "any tier-3 LKMM-primitive site (rule 0017) that is NOT a plain lock/unlock bracket — e.g. try_cmpxchg loops — this rule does not apply to those"]
+human_review = true
+
+[status]
+note = "DEFERRED — Stage-3 safety lift is explicitly future work per PLAN.md, done as a separate reviewed pass after unsafe-first translation, never applied upfront. Recorded now so the target shape is documented when that stage starts."

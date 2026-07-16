@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "safe-lift-refcount"
+version = 1
+tier = 3
+category = "api"
+
+[match]
+c = "a translated TU calls refcount_inc/refcount_dec/refcount_dec_and_test/refcount_set directly on a refcount_t struct field via bindings:: (unsafe-first, per the normal tier-1/2 emission)"
+
+[emit]
+kind = "rewrite"
+rust = "lift the field to kernel::sync::refcount::Refcount and call its .inc()/.dec()/.dec_and_test()/.set() methods instead of raw bindings:: calls — cite rust/kernel/sync/refcount.rs:19 (struct Refcount(Opaque<bindings::refcount_t>)), methods at :65-102, each a one-line unsafe { bindings::refcount_* } call with a SAFETY comment"
+deviations = ["representation change only — same underlying refcount_t operations, just wrapped; not a semantic change"]
+
+[provenance]
+derivation = "API-inspired"
+evidence = ["research pass 2026-07-16 over rust/kernel/sync/refcount.rs — NOT yet applied to any landed TU"]
+
+[validation]
+instances = []
+oracle = "n/a — not yet applied"
+negative = ["atomic_t used AS a refcount without refcount_t's saturation semantics — do NOT wrap in Refcount, that would silently add saturation behavior C didn't have (see PLAN.md's REFERENCE_ACQUIRE family warning: atomic_inc/refcount_inc/kref_get are NOT interchangeable)"]
+human_review = true
+
+[status]
+note = "DEFERRED — Stage-3 safety lift, future work, not applied upfront. Recorded now so the target shape is documented when that stage starts."

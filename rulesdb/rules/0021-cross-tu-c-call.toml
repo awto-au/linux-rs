@@ -15,7 +15,7 @@ deviations = ["none — identical call/read, identical ABI, one extra Rust->C ho
 
 [provenance]
 derivation = "independently derived"
-evidence = ["lib/llist_rs.rs precedent (bindings::llist_load_acquire_first etc. — though those are within-crate kernel API, not cross-TU-translation specifically); this rule names the cross-TU-translation case explicitly since it will recur on every TU with a neighbor dependency"]
+evidence = ["lib/llist_rs.rs precedent (bindings::llist_load_acquire_first etc. — though those are within-crate kernel API, not cross-TU-translation specifically); this rule names the cross-TU-translation case explicitly since it will recur on every TU with a neighbor dependency", "confirmed against upstream 2026-07-16 (research pass over rust/kernel/, rust/helpers/, rnull, nova-core, binder): rust/helpers/ctype.c ships a rust_helper_isspace shim that NO upstream code actually calls (grep across the whole tree finds zero callers) — cmdline_rs.rs's data-symbol-read idiom (bindings::_ctype direct) is strictly better for this exact case (no extra call hop, no int/bool or locale mismatch risk) and matches this rule's constraint as written. Independent confirmation the rule is correctly targeted, not a case we missed a better upstream shim for."]
 
 [validation]
 instances = ["lib/find_bit.c:find_random_bit (bindings::__bitmap_weight, bindings::__get_random_u32_below — both real EXPORT_SYMBOL'd C functions in still-untranslated TUs)", "lib/cmdline.c:next_arg's is_space() helper (bindings::_ctype — a real exported DATA array in still-untranslated lib/ctype.c, read instead of hand-transcribing the 256-entry table)"]
