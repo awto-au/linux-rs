@@ -123,6 +123,8 @@ def main() -> int:
         sh(["python3", str(S / "diff_oracle.py"), *rest], quiet_ok=False)
     elif cmd == "db":
         sh(["python3", str(S / "build_db.py")], quiet_ok=False)
+        sh(["python3", str(S / "import_cscope.py")], quiet_ok=False)
+        sh(["python3", str(S / "import_sparse.py")], quiet_ok=False, timeout=600)
     elif cmd == "q":
         sh(["python3", str(S / "query_db.py"), *rest], quiet_ok=False)
     elif cmd == "patch":

@@ -53,6 +53,54 @@ CREATE TABLE statement_families (
 );
 CREATE INDEX idx_stmtfam_count ON statement_families(instance_count DESC);
 
+-- ---- cscope cross-reference (from tmp/cscope.out, over the same 2996-TU
+-- pinned corpus as the fingerprint census — see scripts/import_cscope.py)
+--
+-- Closes the documented gap in `callees`/`call_edges` below: an AST
+-- fingerprinter has no linker/whole-program knowledge, so it cannot tell
+-- WHICH definition of a `static` function a given call resolves to when
+-- multiple TUs define a same-named static fn. cscope has real whole-
+-- corpus symbol-table knowledge and resolves this correctly (verified
+-- 2026-07-16: lib/argv_split.c's static count_argc() query-mode -3
+-- returns exactly its one real caller, no cross-TU false matches).
+
+CREATE TABLE cscope_symbols (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,      -- 'definition' | 'call' | 'assignment' | 'text'
+    file TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    context TEXT             -- the calling/enclosing function name, when cscope reports one
+);
+CREATE INDEX idx_cscope_name ON cscope_symbols(name);
+CREATE INDEX idx_cscope_kind ON cscope_symbols(kind);
+CREATE INDEX idx_cscope_file ON cscope_symbols(file);
+
+-- ---- sparse diagnostics (from a LOCALLY-BUILT sparse, not the Fedora
+-- package — see scripts/import_sparse.py and docs/patterns-db.md.
+-- Fedora's sparse 0.6.4 cannot parse this kernel version at all
+-- (rejects __typeof_unqual__, required by include/asm-generic/rwonce.h
+-- and others); upstream kernel.org sparse HEAD (mirrored locally at
+-- /mnt/2tb/git_mirror/sparse/) has __typeof_unqual__ support and parses
+-- cleanly. The build lives entirely under tmp/ (gitignored, rebuilt on
+-- demand) — never a vendored binary in this repo, per Dan's decision
+-- 2026-07-16.
+--
+-- Kernel-native semantic checks (address-space annotations, endianness,
+-- context imbalance) that generic tools have no model for at all —
+-- genuinely new information, not a re-derivation of anything else here.
+
+CREATE TABLE sparse_diagnostics (
+    id INTEGER PRIMARY KEY,
+    file TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    col INTEGER,
+    severity TEXT NOT NULL,   -- 'warning' | 'error'
+    message TEXT NOT NULL
+);
+CREATE INDEX idx_sparse_file ON sparse_diagnostics(file);
+CREATE INDEX idx_sparse_severity ON sparse_diagnostics(severity);
+
 -- ---- rule DB (from rulesdb/rules/*.toml) ----
 
 CREATE TABLE rules (
@@ -140,6 +188,26 @@ SELECT
   EXISTS (SELECT 1 FROM translated_tus t WHERE t.c_file = callee_file) AS callee_translated
 FROM call_edges;
 
+-- cscope-resolved call edges: supersedes `call_edges` for static callees
+-- (which call_edges deliberately excludes — see its comment). A cscope
+-- "call" ref's `context` column is the enclosing (caller) function; join
+-- that against a cscope "definition" ref for the same name to get a
+-- real, whole-corpus-resolved caller->definition-site edge, static or
+-- not. Still honestly ambiguous when the SAME name is `static` in TWO+
+-- files AND the caller's own file doesn't match either — those rows
+-- surface with definition_ambiguous=1 rather than guessing.
+CREATE VIEW cscope_call_edges AS
+SELECT
+  callref.file AS caller_file, callref.context AS caller_name,
+  callref.name AS callee_name, callref.line AS call_line,
+  defs.file AS callee_file, defs.line AS callee_line,
+  (SELECT COUNT(*) FROM cscope_symbols d2
+     WHERE d2.kind='definition' AND d2.name=callref.name) > 1 AS definition_ambiguous
+FROM cscope_symbols callref
+LEFT JOIN cscope_symbols defs
+  ON defs.kind='definition' AND defs.name=callref.name
+WHERE callref.kind='call';
+
 -- Which statement families in the census are NOT yet backed by any rule's
 -- match text (rough proxy via LIKE — a real matcher is scripts/readiness.py's
 -- job; this view is for quick manual "what's uncovered" queries).
@@ -157,3 +225,18 @@ ORDER BY sf.instance_count DESC;
 CREATE VIEW rule_tier_summary AS
 SELECT tier, category, COUNT(*) AS n, SUM(deferred) AS n_deferred
 FROM rules GROUP BY tier, category ORDER BY tier, category;
+
+-- sparse's genuinely high-signal subset: __user/__iomem/__rcu address-
+-- space misuse. Real-world measurement (2026-07-16, this corpus):
+-- 214,271 total diagnostics, but 214,043 are 'warning' and dominated by
+-- style noise this codebase doesn't care about (79% alone is "mixing
+-- declarations and code", a C89-vs-later style check; a further chunk
+-- is a false-positive-looking "non-constant initializer for static
+-- object" this sparse build emits on plain integer-constant-expression
+-- initializers). Only 651 rows are the address-space class sparse is
+-- actually unique for — filter to THIS view, not the raw table, for
+-- anything meant to inform a translation decision.
+CREATE VIEW sparse_address_space_findings AS
+SELECT file, line, col, severity, message FROM sparse_diagnostics
+WHERE message LIKE '%address space%'
+ORDER BY file, line;
