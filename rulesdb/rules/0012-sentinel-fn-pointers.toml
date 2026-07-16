@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "sentinel-fn-pointers"
+version = 1
+tier = 2
+category = "region"
+
+[match]
+c = "#define X (fn_ptr_t)0..N — small ints cast to fn-pointer type, compared before call; real pointers dispatched otherwise"
+constraints = ["sentinel values must be below any mappable address (kernel guarantees)", "watch for NULL aliasing sentinel 0 (sort.c: NULL == SWAP_WORDS_64, resolved before use — preserve the resolution order exactly)"]
+
+[emit]
+kind = "rewrite"
+rust = "carry the slot as usize; compare against the sentinel consts; transmute::<usize, FnType> only on the call path after sentinels are excluded"
+deviations = ["none — same representation, same comparisons; Rust just makes the int/pointer duality explicit"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/sort.c:do_swap/do_cmp/__sort_r"]
+oracle = "tier4"
+negative = ["fn-pointer tables (vtables/ops structs) — different pattern, use references into repr(C) structs"]
+human_review = true

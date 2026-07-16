@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "config-macro-shim"
+version = 1
+tier = 1
+category = "macro"
+
+[match]
+c = "call to a config-dependent function-like macro (cond_resched, might_resched, …) whose expansion varies by Kconfig"
+
+[emit]
+kind = "rust-macro"
+rust = "add rust_helper_<name>() in rust/helpers/*.c compiling the macro in C; call bindings::<name>() from Rust — config semantics stay compiled in C, one shim per macro"
+deviations = ["one extra (inlinable) call level; behaviour is config-correct by construction"]
+
+[provenance]
+derivation = "API-inspired"
+evidence = ["rust/helpers/task.c precedent (might_resched); our rust_helper_cond_resched follows it"]
+
+[validation]
+instances = ["lib/sort.c:__sort_r (cond_resched)"]
+oracle = "tier4"
+negative = ["macros whose EXPANSION captures caller context (__FILE__/__LINE__, alternatives/asm) — shim loses the call site; needs per-macro thought"]
+human_review = false

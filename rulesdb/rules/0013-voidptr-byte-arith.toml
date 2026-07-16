@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "voidptr-byte-arith"
+version = 1
+tier = 2
+category = "expr"
+
+[match]
+c = "void *base; … *(u32 *)(base + off) — GCC void* arithmetic (byte-granular) + cast-deref"
+constraints = ["bounds/alignment invariants must be stated per function (they are implicit in C callers)"]
+
+[emit]
+kind = "rewrite"
+rust = "base.cast::<u8>().add(off).cast::<T>().read()/.write(…) inside unsafe with a SAFETY comment carrying the C invariant"
+deviations = ["none semantically; alignment contract becomes explicit (use read_unaligned only where C did NOT guarantee alignment)"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/sort.c:swap_words_32/swap_words_64/swap_bytes/__sort_r"]
+oracle = "tier4"
+negative = ["overlapping ranges (memmove semantics) — read/write pairs assume disjoint a/b as C did; document per instance"]
+human_review = true

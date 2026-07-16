@@ -1,0 +1,481 @@
+From b82b89258f493e305c896ace335ef72b02b3a4ed Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 11:49:12 +1000
+Subject: [PATCH] lib/sort: replace heapsort with Rust translation (linux-rs,
+ first tier-2 TU)
+
+Faithful translation of the bottom-up heapsort incl. its tier-2
+constructs:
+- sentinel function pointers ((swap_r_func_t)0..3) kept as usize address
+  values, exactly the C representation; NULL/SWAP_WORDS_64 aliasing
+  preserved and resolved identically
+- raw void* byte-offset arithmetic via u8 pointers + add()
+- callback dispatch through transmuted fn pointers; wrapper struct repr(C)
+- cond_resched() via new rust_helper_cond_resched shim so PREEMPTION
+  config semantics stay compiled in C
+- is_aligned honours CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS via cfg
+
+Validated: builds, all four #[export] prototypes checked against
+<linux/sort.h>, ok 11 lib_sort (KUnit TEST_SORT, 1000-element random
+array through the sort() wrapper path) on qemu -M virt boot.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |   8 +-
+ lib/sort_rs.rs                  | 393 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ rust/helpers/task.c             |   7 +
+ 4 files changed, 408 insertions(+), 1 deletion(-)
+ create mode 100644 lib/sort_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index f33a24bf1c19..e9619e32fe08 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -52,7 +52,13 @@ obj-y	+= lockref.o
+ 
+ CONTEXT_ANALYSIS_rhashtable.o := y
+ 
+-obj-y += bcd.o sort.o parser.o debug_locks.o random32.o \
++# linux-rs: translated TU — Rust sort when Rust is available.
++ifdef CONFIG_RUST
++obj-y += sort_rs.o
++else
++obj-y += sort.o
++endif
++obj-y += bcd.o parser.o debug_locks.o random32.o \
+ 	 bust_spinlocks.o kasprintf.o bitmap.o scatterlist.o \
+ 	 list_sort.o uuid.o iov_iter.o clz_ctz.o \
+ 	 bsearch.o find_bit.o llist.o lwq.o memweight.o kfifo.o \
+diff --git a/lib/sort_rs.rs b/lib/sort_rs.rs
+new file mode 100644
+index 000000000000..b96a1e509bb1
+--- /dev/null
++++ b/lib/sort_rs.rs
+@@ -0,0 +1,393 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Heapsort — Rust translation of `lib/sort.c`.
++//!
++//! Bottom-up heapsort, faithful to the C: same swap-selection sentinels
++//! (small integers stored in a function-pointer-sized slot — kept here as
++//! `usize` address values, exactly the C representation), same branch-free
++//! `parent()`, same `cond_resched()` cadence (via a C helper shim, so the
++//! PREEMPTION config semantics stay in C).
++
++use core::mem::size_of;
++use kernel::bindings;
++use kernel::ffi::{c_int, c_void};
++use kernel::prelude::*;
++
++type CmpRFunc = unsafe extern "C" fn(*const c_void, *const c_void, *const c_void) -> c_int;
++type SwapRFunc = unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *const c_void);
++
++// C: #define SWAP_WORDS_64 (swap_r_func_t)0 … — sentinel values that can't
++// be confused with real pointers. NULL and SWAP_WORDS_64 share the value 0,
++// as in C; the ambiguity is resolved before use (see __sort_r).
++const SWAP_WORDS_64: usize = 0;
++const SWAP_WORDS_32: usize = 1;
++const SWAP_BYTES: usize = 2;
++const SWAP_WRAPPER: usize = 3;
++const CMP_WRAPPER: usize = 0;
++
++#[repr(C)]
++struct Wrapper {
++    cmp: bindings::cmp_func_t,
++    swap: bindings::swap_func_t,
++}
++
++/// Is this pointer & size okay for word-wide copying?
++#[inline(always)]
++fn is_aligned(base: *const c_void, size: usize, align: u8) -> bool {
++    #[allow(unused_mut)]
++    let mut lsbits = size as u8;
++    #[cfg(not(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))]
++    {
++        lsbits |= base as usize as u8;
++    }
++    lsbits & (align - 1) == 0
++}
++
++/// SAFETY: `a` and `b` point to `n` valid bytes, `n` a nonzero multiple of 4,
++/// both 4-aligned (checked by is_aligned before selection).
++unsafe fn swap_words_32(a: *mut c_void, b: *mut c_void, mut n: usize) {
++    let (a, b) = (a.cast::<u8>(), b.cast::<u8>());
++    loop {
++        n -= 4;
++        // SAFETY: per function contract; offsets stay within the elements.
++        unsafe {
++            let pa = a.add(n).cast::<u32>();
++            let pb = b.add(n).cast::<u32>();
++            let t = pa.read();
++            pa.write(pb.read());
++            pb.write(t);
++        }
++        if n == 0 {
++            break;
++        }
++    }
++}
++
++/// SAFETY: as `swap_words_32`, with multiples of 8 and 8-alignment.
++unsafe fn swap_words_64(a: *mut c_void, b: *mut c_void, mut n: usize) {
++    let (a, b) = (a.cast::<u8>(), b.cast::<u8>());
++    loop {
++        #[cfg(CONFIG_64BIT)]
++        // SAFETY: per function contract.
++        unsafe {
++            n -= 8;
++            let pa = a.add(n).cast::<u64>();
++            let pb = b.add(n).cast::<u64>();
++            let t = pa.read();
++            pa.write(pb.read());
++            pb.write(t);
++        }
++        #[cfg(not(CONFIG_64BIT))]
++        // SAFETY: per function contract. Two 32-bit transfers, as in C.
++        unsafe {
++            for _ in 0..2 {
++                n -= 4;
++                let pa = a.add(n).cast::<u32>();
++                let pb = b.add(n).cast::<u32>();
++                let t = pa.read();
++                pa.write(pb.read());
++                pb.write(t);
++            }
++        }
++        if n == 0 {
++            break;
++        }
++    }
++}
++
++/// SAFETY: `a` and `b` point to `n` valid bytes, `n` nonzero.
++unsafe fn swap_bytes(a: *mut c_void, b: *mut c_void, mut n: usize) {
++    let (a, b) = (a.cast::<u8>(), b.cast::<u8>());
++    loop {
++        n -= 1;
++        // SAFETY: per function contract.
++        unsafe {
++            let t = a.add(n).read();
++            a.add(n).write(b.add(n).read());
++            b.add(n).write(t);
++        }
++        if n == 0 {
++            break;
++        }
++    }
++}
++
++/// SAFETY: `swap` is one of the sentinels or a valid `swap_r_func_t`;
++/// `priv_` points to a `Wrapper` when `swap == SWAP_WRAPPER`.
++unsafe fn do_swap(a: *mut c_void, b: *mut c_void, size: usize, swap: usize, priv_: *const c_void) {
++    if swap == SWAP_WRAPPER {
++        // SAFETY: per function contract; wrapper.swap was verified non-NULL
++        // in __sort_r (else swap was replaced by a built-in sentinel).
++        unsafe {
++            ((*priv_.cast::<Wrapper>()).swap.unwrap_unchecked())(a, b, size as c_int);
++        }
++        return;
++    }
++
++    // SAFETY: per function contract, matching the C dispatch exactly.
++    unsafe {
++        if swap == SWAP_WORDS_64 {
++            swap_words_64(a, b, size);
++        } else if swap == SWAP_WORDS_32 {
++            swap_words_32(a, b, size);
++        } else if swap == SWAP_BYTES {
++            swap_bytes(a, b, size);
++        } else {
++            core::mem::transmute::<usize, SwapRFunc>(swap)(a, b, size as c_int, priv_);
++        }
++    }
++}
++
++/// SAFETY: `cmp` is CMP_WRAPPER or a valid `cmp_r_func_t`; `priv_` points to
++/// a `Wrapper` with non-NULL `cmp` when `cmp == CMP_WRAPPER`.
++unsafe fn do_cmp(a: *const c_void, b: *const c_void, cmp: usize, priv_: *const c_void) -> c_int {
++    // SAFETY: per function contract.
++    unsafe {
++        if cmp == CMP_WRAPPER {
++            return ((*priv_.cast::<Wrapper>()).cmp.unwrap_unchecked())(a, b);
++        }
++        core::mem::transmute::<usize, CmpRFunc>(cmp)(a, b, priv_)
++    }
++}
++
++/// Given the offset of the child, find the offset of the parent.
++/// Branch-free form of "if (i & lsbit) i -= size; return (i - size) / 2".
++#[inline(always)]
++fn parent(mut i: usize, lsbit: u32, size: usize) -> usize {
++    i -= size;
++    i -= size & (i & lsbit as usize).wrapping_neg();
++    i / 2
++}
++
++/// SAFETY: `base` points to `num * size` valid bytes; `cmp`/`swap`/`priv_`
++/// as for `do_cmp`/`do_swap`.
++unsafe fn sort_r_impl(
++    base: *mut c_void,
++    num: usize,
++    size: usize,
++    cmp_func: usize,
++    mut swap_func: usize,
++    priv_: *const c_void,
++    may_schedule: bool,
++) {
++    // Pre-scale counters for performance.
++    let mut n = num * size;
++    let mut a = (num / 2) * size;
++    let lsbit = (size & size.wrapping_neg()) as u32; // used to find parent
++    let mut shift = 0usize;
++
++    if a == 0 {
++        // num < 2 || size == 0
++        return;
++    }
++
++    let base = base.cast::<u8>();
++
++    // SAFETY: whole body upholds the C invariants; every pointer stays
++    // within [base, base + num*size).
++    unsafe {
++        // Called from 'sort' without swap function: pick the default.
++        if swap_func == SWAP_WRAPPER && (*priv_.cast::<Wrapper>()).swap.is_none() {
++            swap_func = 0; // C: swap_func = NULL
++        }
++        if swap_func == 0 {
++            swap_func = if is_aligned(base.cast(), size, 8) {
++                SWAP_WORDS_64
++            } else if is_aligned(base.cast(), size, 4) {
++                SWAP_WORDS_32
++            } else {
++                SWAP_BYTES
++            };
++        }
++
++        /*
++         * Loop invariants (as in C):
++         * 1. elements [a,n) satisfy the heap property;
++         * 2. elements [n,num*size) are sorted;
++         * 3. a <= b <= c <= d <= n (whenever valid).
++         */
++        loop {
++            let mut b;
++            let mut c;
++            let mut d;
++
++            if a != 0 {
++                // Building heap: sift down a.
++                a -= size << shift;
++            } else if n > 3 * size {
++                // Sorting: extract two largest elements.
++                n -= size;
++                do_swap(base.cast(), base.add(n).cast(), size, swap_func, priv_);
++                shift = (do_cmp(
++                    base.add(size).cast(),
++                    base.add(2 * size).cast(),
++                    cmp_func,
++                    priv_,
++                ) <= 0) as usize;
++                a = size << shift;
++                n -= size;
++                do_swap(base.add(a).cast(), base.add(n).cast(), size, swap_func, priv_);
++            } else {
++                // Sort complete.
++                break;
++            }
++
++            // Sift element at "a" down into heap (bottom-up variant).
++            b = a;
++            loop {
++                c = 2 * b + size;
++                d = c + size;
++                if d >= n {
++                    break;
++                }
++                b = if do_cmp(base.add(c).cast(), base.add(d).cast(), cmp_func, priv_) > 0 {
++                    c
++                } else {
++                    d
++                };
++            }
++            if d == n {
++                // Special case last leaf with no sibling.
++                b = c;
++            }
++
++            // Backtrack from "b" to the correct location for "a".
++            while b != a
++                && do_cmp(base.add(a).cast(), base.add(b).cast(), cmp_func, priv_) >= 0
++            {
++                b = parent(b, lsbit, size);
++            }
++            c = b; // where "a" belongs
++            while b != a {
++                // Shift it into place.
++                b = parent(b, lsbit, size);
++                do_swap(base.add(b).cast(), base.add(c).cast(), size, swap_func, priv_);
++            }
++
++            if may_schedule {
++                bindings::cond_resched();
++            }
++        }
++
++        n -= size;
++        do_swap(base.cast(), base.add(n).cast(), size, swap_func, priv_);
++        if n == size * 2
++            && do_cmp(base.cast(), base.add(size).cast(), cmp_func, priv_) > 0
++        {
++            do_swap(base.cast(), base.add(size).cast(), size, swap_func, priv_);
++        }
++    }
++}
++
++#[inline]
++fn fn_or_sentinel<T>(f: Option<T>) -> usize {
++    match f {
++        // SAFETY-free: fn pointers are just addresses.
++        Some(f) => unsafe { core::mem::transmute_copy::<T, usize>(&f) },
++        None => 0,
++    }
++}
++
++const _: () = assert!(size_of::<Option<CmpRFunc>>() == size_of::<usize>());
++
++/// Heapsort an array of elements (reentrant form; see C kernel-doc).
++#[export]
++pub unsafe extern "C" fn sort_r(
++    base: *mut c_void,
++    num: usize,
++    size: usize,
++    cmp_func: bindings::cmp_r_func_t,
++    swap_func: bindings::swap_r_func_t,
++    priv_: *const c_void,
++) {
++    // SAFETY: caller provides a valid array and function pointers (C ABI
++    // contract of sort_r).
++    unsafe {
++        sort_r_impl(
++            base,
++            num,
++            size,
++            fn_or_sentinel(cmp_func),
++            fn_or_sentinel(swap_func),
++            priv_,
++            false,
++        )
++    }
++}
++
++/// Same as `sort_r`, with periodic `cond_resched()` for larger arrays.
++#[export]
++pub unsafe extern "C" fn sort_r_nonatomic(
++    base: *mut c_void,
++    num: usize,
++    size: usize,
++    cmp_func: bindings::cmp_r_func_t,
++    swap_func: bindings::swap_r_func_t,
++    priv_: *const c_void,
++) {
++    // SAFETY: as sort_r.
++    unsafe {
++        sort_r_impl(
++            base,
++            num,
++            size,
++            fn_or_sentinel(cmp_func),
++            fn_or_sentinel(swap_func),
++            priv_,
++            true,
++        )
++    }
++}
++
++/// Heapsort an array of elements (non-reentrant form; see C kernel-doc).
++#[export]
++pub unsafe extern "C" fn sort(
++    base: *mut c_void,
++    num: usize,
++    size: usize,
++    cmp_func: bindings::cmp_func_t,
++    swap_func: bindings::swap_func_t,
++) {
++    let w = Wrapper {
++        cmp: cmp_func,
++        swap: swap_func,
++    };
++    // SAFETY: as sort_r; the wrapper lives across the call.
++    unsafe {
++        sort_r_impl(
++            base,
++            num,
++            size,
++            CMP_WRAPPER,
++            SWAP_WRAPPER,
++            core::ptr::addr_of!(w).cast(),
++            false,
++        )
++    }
++}
++
++/// Same as `sort`, with periodic `cond_resched()` for larger arrays.
++#[export]
++pub unsafe extern "C" fn sort_nonatomic(
++    base: *mut c_void,
++    num: usize,
++    size: usize,
++    cmp_func: bindings::cmp_func_t,
++    swap_func: bindings::swap_func_t,
++) {
++    let w = Wrapper {
++        cmp: cmp_func,
++        swap: swap_func,
++    };
++    // SAFETY: as sort.
++    unsafe {
++        sort_r_impl(
++            base,
++            num,
++            size,
++            CMP_WRAPPER,
++            SWAP_WRAPPER,
++            core::ptr::addr_of!(w).cast(),
++            true,
++        )
++    }
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index f28786051d76..a6e2037e4065 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -80,6 +80,7 @@
+ #include <linux/pid_namespace.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_opp.h>
++#include <linux/sort.h>
+ #include <linux/poll.h>
+ #include <linux/property.h>
+ #include <linux/pwm.h>
+diff --git a/rust/helpers/task.c b/rust/helpers/task.c
+index c0e1a06ede78..4ed6a9297cab 100644
+--- a/rust/helpers/task.c
++++ b/rust/helpers/task.c
+@@ -8,6 +8,13 @@ __rust_helper void rust_helper_might_resched(void)
+ 	might_resched();
+ }
+ 
++/* cond_resched() is a config-dependent macro (no-op under PREEMPTION);
++ * the shim compiles it in C so Rust callers get config-correct behaviour. */
++__rust_helper int rust_helper_cond_resched(void)
++{
++	return cond_resched();
++}
++
+ __rust_helper struct task_struct *rust_helper_get_current(void)
+ {
+ 	return current;
+-- 
+2.55.0
+
