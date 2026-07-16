@@ -17,7 +17,7 @@ derivation = "API-inspired"
 evidence = ["rust/helpers/task.c precedent (might_resched); our rust_helper_cond_resched follows it"]
 
 [validation]
-instances = ["lib/sort.c:__sort_r (cond_resched)"]
+instances = ["lib/sort.c:__sort_r (cond_resched)", "lib/decompress.c:decompress_method (pr_debug — kernel::print's pr_debug! needs a crate-root __LOG_PREFIX from module!{} that a per-file lib/*_rs.rs translation has no access to; shimmed the exact call site as rust_helper_pr_debug_decompress_magic in rust/helpers/print.c, one shim per distinct format string since C varargs macros can't be wrapped generically across FFI either way)"]
 oracle = "tier4"
 negative = ["macros whose EXPANSION captures caller context (__FILE__/__LINE__, alternatives/asm) — shim loses the call site; needs per-macro thought"]
 human_review = false

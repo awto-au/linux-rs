@@ -1,0 +1,228 @@
+From ae1ecd321d9eae0bd2da9851645d882659ca6809 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 16:16:22 +1000
+Subject: [PATCH] lib: translate decompress to Rust (linux-rs TU 22)
+
+Magic-number decompressor dispatch table. Every CONFIG_DECOMPRESS_*
+option is unset in our target config, so every table entry's
+decompressor slot is a NULL fn pointer here, exactly as in the C
+(#define gunzip NULL etc.) -- not dead code to skip, the table
+structure and magic-number matching (first two bytes of input) are
+live and exercised; only the individual decompressor symbols are
+absent for this config.
+
+__init/__initconst (freed after boot) expressed via #[link_section]
+matching the sections vmlinux.lds.h reserves for them -- verified via
+readelf that both .init.text and .init.rodata actually landed in the
+compiled object, not just asserted.
+
+New shim: rust_helper_pr_debug_decompress_magic (rust/helpers/print.c).
+kernel::print's pr_debug! needs a crate-root __LOG_PREFIX normally set
+by module!{}, which a per-file lib/*_rs.rs translation has no access to
+-- shimmed the exact C macro call instead (rule 0014 extended; C
+varargs macros can't be wrapped generically across FFI regardless, so
+one shim per format string is the right granularity, same as the llist
+per-operand shims).
+
+Validated: builds, boots, all suites green; decompress_method confirmed
+in System.map, section placement confirmed via readelf.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |   9 ++-
+ lib/decompress_rs.rs            | 104 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ rust/helpers/helpers.c          |   1 +
+ rust/helpers/print.c            |  21 +++++++
+ 5 files changed, 135 insertions(+), 1 deletion(-)
+ create mode 100644 lib/decompress_rs.rs
+ create mode 100644 rust/helpers/print.c
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 3daf57a15c5d..94006431e23b 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -37,7 +37,7 @@ lib-y := ctype.o string.o vsprintf.o \
+ 	 rbtree.o radix-tree.o timerqueue.o xarray.o \
+ 	 maple_tree.o idr.o extable.o irq_regs.o \
+ 	 flex_proportions.o ratelimit.o \
+-	 is_single_threaded.o plist.o decompress.o kobject_uevent.o \
++	 is_single_threaded.o plist.o kobject_uevent.o \
+ 	 earlycpio.o seq_buf.o siphash.o dec_and_lock.o \
+ 	 nmi_backtrace.o \
+ 	 buildid.o objpool.o iomem_copy.o sys_info.o
+@@ -415,3 +415,10 @@ obj-$(CONFIG_GENERIC_CSUM) += checksum_rs.o
+ else
+ obj-$(CONFIG_GENERIC_CSUM) += checksum.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++lib-y += decompress_rs.o
++else
++lib-y += decompress.o
++endif
+diff --git a/lib/decompress_rs.rs b/lib/decompress_rs.rs
+new file mode 100644
+index 000000000000..da4a6f186907
+--- /dev/null
++++ b/lib/decompress_rs.rs
+@@ -0,0 +1,104 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Detect the decompression method based on magic number — Rust
++//! translation of `lib/decompress.c`.
++//!
++//! Every `CONFIG_DECOMPRESS_*` option is unset in our target config, so
++//! every table entry's decompressor slot is a NULL function pointer here,
++//! exactly as it is in the C (`#define gunzip NULL` etc.) — this is not
++//! dead code to skip, the table STRUCTURE and magic-number matching are
++//! live and exercised; only the individual decompressor symbols are
++//! absent for this config.
++//!
++//! `__init`/`__initconst` (freed after boot) expressed via
++//! `#[link_section]` matching the sections `include/asm-generic/
++//! vmlinux.lds.h` reserves for them — the closest faithful Rust
++//! equivalent; the kernel crate has no higher-level wrapper for this yet
++//! (checked 2026-07-16, no precedent found).
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_long, c_uchar, c_ulong};
++use kernel::prelude::*;
++
++type DecompressFn = Option<
++    unsafe extern "C" fn(
++        *mut c_uchar,
++        c_long,
++        Option<unsafe extern "C" fn(*mut kernel::ffi::c_void, c_ulong) -> c_long>,
++        Option<unsafe extern "C" fn(*mut kernel::ffi::c_void, c_ulong) -> c_long>,
++        *mut c_uchar,
++        *mut c_long,
++        Option<unsafe extern "C" fn(*mut c_char)>,
++    ) -> kernel::ffi::c_int,
++>;
++
++#[repr(C)]
++struct CompressFormat {
++    magic: [u8; 2],
++    name: *const c_char,
++    decompressor: DecompressFn,
++}
++// SAFETY: a `*const c_char` to a 'static string literal is Sync (never
++// mutated); this table is never written after initialisation, matching
++// the C `static const` + __initconst placement.
++unsafe impl Sync for CompressFormat {}
++
++macro_rules! fmt {
++    ($m0:expr, $m1:expr, $name:expr) => {
++        CompressFormat {
++            magic: [$m0, $m1],
++            name: concat!($name, "\0").as_ptr().cast(),
++            decompressor: None, // every CONFIG_DECOMPRESS_* is unset for this target
++        }
++    };
++}
++
++#[link_section = ".init.rodata"]
++static COMPRESSED_FORMATS: [CompressFormat; 9] = [
++    fmt!(0x1f, 0x8b, "gzip"),
++    fmt!(0x1f, 0x9e, "gzip"),
++    fmt!(0x42, 0x5a, "bzip2"),
++    fmt!(0x5d, 0x00, "lzma"),
++    fmt!(0xfd, 0x37, "xz"),
++    fmt!(0x89, 0x4c, "lzo"),
++    fmt!(0x02, 0x21, "lz4"),
++    fmt!(0x28, 0xb5, "zstd"),
++    // sentinel: name == NULL terminates the C original's `cf->name` loop
++    CompressFormat { magic: [0, 0], name: core::ptr::null(), decompressor: None },
++];
++
++/// Detect the decompressor for `inbuf`/`len` by magic number.
++///
++/// # Safety
++/// `inbuf` points to `len` valid bytes when `len >= 2`; `name`, if
++/// non-NULL, is a valid `*mut *const c_char` to write the format name into.
++#[link_section = ".init.text"]
++#[export]
++pub unsafe extern "C" fn decompress_method(
++    inbuf: *const c_uchar,
++    len: c_long,
++    name: *mut *const c_char,
++) -> DecompressFn {
++    if len < 2 {
++        // SAFETY: caller contract (name is a valid out-pointer if non-NULL).
++        if !name.is_null() {
++            unsafe { *name = core::ptr::null() };
++        }
++        return None; // Need at least this much...
++    }
++
++    // SAFETY: len >= 2 checked above; caller guarantees `len` valid bytes.
++    let (b0, b1) = unsafe { (*inbuf, *inbuf.add(1)) };
++    // SAFETY: pr_debug has no preconditions; the shim just formats+logs.
++    unsafe { bindings::pr_debug_decompress_magic(b0, b1) };
++
++    let cf = COMPRESSED_FORMATS
++        .iter()
++        .find(|cf| !cf.name.is_null() && cf.magic == [b0, b1])
++        .unwrap_or_else(|| COMPRESSED_FORMATS.last().unwrap()); // sentinel: name == NULL
++
++    // SAFETY: caller contract.
++    if !name.is_null() {
++        unsafe { *name = cf.name };
++    }
++    cf.decompressor
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index ad14cce3a868..ba53481c79ed 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -27,6 +27,7 @@
+  * headers are set up.
+  */
+ #include <linux/base64.h>
++#include <linux/decompress/generic.h>
+ #include <linux/hrtimer_types.h>
+ 
+ #include <linux/acpi.h>
+diff --git a/rust/helpers/helpers.c b/rust/helpers/helpers.c
+index 0f17efd90a46..dbd28c2f3ffe 100644
+--- a/rust/helpers/helpers.c
++++ b/rust/helpers/helpers.c
+@@ -78,6 +78,7 @@
+ #include "pid_namespace.c"
+ #include "platform.c"
+ #include "poll.c"
++#include "print.c"
+ #include "processor.c"
+ #include "property.c"
+ #include "pwm.c"
+diff --git a/rust/helpers/print.c b/rust/helpers/print.c
+new file mode 100644
+index 000000000000..ecff4f5bbc7a
+--- /dev/null
++++ b/rust/helpers/print.c
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <linux/printk.h>
++
++/*
++ * pr_debug() is a config-dependent macro (compiles to nothing unless
++ * DEBUG is defined for this TU, or dynamic debug is in play) — rule
++ * 0014. The kernel crate's own pr_debug! requires a crate-root
++ * __LOG_PREFIX (set once via module!{}), which a per-file lib/*_rs.rs
++ * translation has no access to; shimming the exact C macro call here
++ * keeps the config-correct compiled-to-nothing-by-default behaviour
++ * without requiring every translated TU to become its own "module".
++ * One shim per distinct format string, same convention as other
++ * rust_helper_* primitives (e.g. llist's per-operand try_cmpxchg shims)
++ * — not a general varargs pr_debug (C macros can't be wrapped generically
++ * across the FFI boundary either way).
++ */
++__rust_helper void rust_helper_pr_debug_decompress_magic(unsigned char b0, unsigned char b1)
++{
++	pr_debug("Compressed data magic: %#.2x %#.2x\n", b0, b1);
++}
+-- 
+2.55.0
+
