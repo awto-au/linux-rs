@@ -1,0 +1,866 @@
+From fe3a0714e989cf3d4b9770093d2e9b8bbfef40e3 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 16:51:31 +1000
+Subject: [PATCH] lib: translate string to Rust (linux-rs TU 27)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/string_rs.rs | 846 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 846 insertions(+)
+ create mode 100644 lib/string_rs.rs
+
+diff --git a/lib/string_rs.rs b/lib/string_rs.rs
+new file mode 100644
+index 000000000000..78155aafc23e
+--- /dev/null
++++ b/lib/string_rs.rs
+@@ -0,0 +1,846 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Library string routines — Rust translation of `lib/string.c`.
++//!
++//! Scope: riscv64 (this target, KASAN off) arch-overrides `memset`,
++//! `memcpy`, `memmove`, `strcmp`, `strlen`, `strncmp`, `strnlen`,
++//! `strchr`, `strrchr` via real assembly in `arch/riscv/lib/*.S`
++//! (`arch/riscv/include/asm/string.h`'s `__HAVE_ARCH_*` defines,
++//! confirmed against `System.map`: all nine already resolve outside
++//! `lib/string.o`) — rule 0026, none of those nine are translated here.
++//! Everything else in the C original (no `__HAVE_ARCH_*` guard on
++//! riscv, or an `#ifndef` that stays unguarded) is translated.
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_int, c_void};
++use kernel::prelude::*;
++
++/// `tolower(c)` (`<linux/ctype.h>`) — depends on the real `_ctype[]`
++/// table this TU doesn't own; same header-inline pattern as
++/// lib/hexdump_rs.rs's `isprint`, rule 0016.
++///
++/// # Safety
++/// `c` must be a value the real 256-entry `_ctype[]` table covers.
++#[inline]
++unsafe fn tolower(c: c_char) -> c_char {
++    const CTYPE_U: u8 = 0x01;
++    let idx = c as u8 as usize;
++    // SAFETY: per function contract.
++    let mask = unsafe { *bindings::_ctype.as_ptr().add(idx) };
++    if mask & CTYPE_U != 0 {
++        (c as u8).wrapping_sub(b'A' - b'a') as c_char
++    } else {
++        c
++    }
++}
++
++/// Case insensitive, length-limited string comparison.
++///
++/// # Safety
++/// `s1`/`s2` are valid NUL-terminated C strings, each at least `len`
++/// bytes readable (or shorter if NUL-terminated first).
++#[export]
++pub unsafe extern "C" fn strncasecmp(s1: *const c_char, s2: *const c_char, len: usize) -> c_int {
++    if len == 0 {
++        return 0;
++    }
++    let mut s1 = s1;
++    let mut s2 = s2;
++    let mut remaining = len;
++    let mut c1: u8;
++    let mut c2: u8;
++    // SAFETY: per function contract; the loop stops at the first NUL or
++    // after `len` bytes, matching the C's own do/while exactly.
++    unsafe {
++        loop {
++            c1 = *s1 as u8;
++            s1 = s1.add(1);
++            c2 = *s2 as u8;
++            s2 = s2.add(1);
++            if c1 == 0 || c2 == 0 {
++                break;
++            }
++            if c1 == c2 {
++                remaining -= 1;
++                if remaining == 0 {
++                    break;
++                }
++                continue;
++            }
++            c1 = tolower(c1 as c_char) as u8;
++            c2 = tolower(c2 as c_char) as u8;
++            if c1 != c2 {
++                break;
++            }
++            remaining -= 1;
++            if remaining == 0 {
++                break;
++            }
++        }
++    }
++    c1 as c_int - c2 as c_int
++}
++
++/// Case insensitive string comparison.
++///
++/// # Safety
++/// `s1`/`s2` are valid NUL-terminated C strings.
++#[export]
++pub unsafe extern "C" fn strcasecmp(s1: *const c_char, s2: *const c_char) -> c_int {
++    let mut s1 = s1;
++    let mut s2 = s2;
++    let mut c1: c_int;
++    let mut c2: c_int;
++    // SAFETY: per function contract.
++    unsafe {
++        loop {
++            c1 = tolower(*s1) as c_int;
++            s1 = s1.add(1);
++            c2 = tolower(*s2) as c_int;
++            s2 = s2.add(1);
++            if !(c1 == c2 && c1 != 0) {
++                break;
++            }
++        }
++    }
++    c1 - c2
++}
++
++/// Copy a NUL-terminated string from `src` to `dest`.
++///
++/// # Safety
++/// `src` is a valid NUL-terminated C string; `dest` has room for
++/// `strlen(src) + 1` bytes.
++#[export]
++pub unsafe extern "C" fn strcpy(dest: *mut c_char, src: *const c_char) -> *mut c_char {
++    let tmp = dest;
++    let mut dest = dest;
++    let mut src = src;
++    // SAFETY: per function contract.
++    unsafe {
++        loop {
++            let c = *src;
++            src = src.add(1);
++            *dest = c;
++            dest = dest.add(1);
++            if c == 0 {
++                break;
++            }
++        }
++    }
++    tmp
++}
++
++/// Copy at most `count` bytes from `src` to `dest`, NUL-padding if
++/// `src` is shorter (does NOT guarantee NUL-termination if `src` is
++/// `count` bytes or longer — same as libc `strncpy`).
++///
++/// # Safety
++/// `dest` has room for `count` bytes; `src` is a valid NUL-terminated
++/// C string with at least as many readable bytes as get copied.
++#[export]
++pub unsafe extern "C" fn strncpy(dest: *mut c_char, src: *const c_char, mut count: usize) -> *mut c_char {
++    let mut tmp = dest;
++    let mut src = src;
++    // SAFETY: per function contract.
++    unsafe {
++        while count != 0 {
++            let c = *src;
++            *tmp = c;
++            if c != 0 {
++                src = src.add(1);
++            }
++            tmp = tmp.add(1);
++            count -= 1;
++        }
++    }
++    dest
++}
++
++const ALLBUTLAST_BYTE_MASK: usize = !0usize >> 8;
++
++/// `has_zero`/`prep_zero_mask`/`create_zero_mask`/`find_zero`/
++/// `zero_bytemask` (`arch/riscv/include/asm/word-at-a-time.h`) and
++/// `fls64` (`include/asm-generic/bitops/fls64.h`, `BITS_PER_LONG==64`
++/// arm) — plain header-inlines, rule 0016. `prep_zero_mask` is
++/// literally `return bits;` on riscv (no-op), so it's folded away.
++#[inline]
++fn has_zero(val: usize, one_bits: usize, high_bits: usize) -> usize {
++    ((val.wrapping_sub(one_bits)) & !val) & high_bits
++}
++#[inline]
++fn create_zero_mask(bits: usize) -> usize {
++    let bits = bits.wrapping_sub(1) & !bits;
++    bits >> 7
++}
++#[inline]
++fn fls64(x: u64) -> i32 {
++    if x == 0 {
++        0
++    } else {
++        (63 - x.leading_zeros() as i32) + 1
++    }
++}
++#[inline]
++fn find_zero(mask: usize) -> usize {
++    (fls64(mask as u64) >> 3) as usize
++}
++
++/// `read_word_at_a_time` (`include/asm-generic/rwonce.h`) — the
++/// `kasan_check_read`/`kcsan_check_read` calls are no-ops with
++/// `CONFIG_KASAN`/`CONFIG_KCSAN` both off in this config, leaving a
++/// plain unaligned word read. `CONFIG_DCACHE_WORD_ACCESS` is unset in
++/// this config, so `load_unaligned_zeropad`'s page-boundary-safe
++/// exception-table path never applies here — this is the only live
++/// arm of `sized_strscpy`'s `#ifdef CONFIG_DCACHE_WORD_ACCESS`.
++///
++/// # Safety
++/// `addr` has `size_of::<usize>()` valid bytes readable.
++#[inline]
++unsafe fn read_word_at_a_time(addr: *const u8) -> usize {
++    // SAFETY: per function contract.
++    unsafe { addr.cast::<usize>().read_unaligned() }
++}
++
++/// Copy a NUL-terminated string from `src` into the `count`-byte buffer
++/// `dest`, using word-at-a-time scanning where safe. Returns the copied
++/// length (excl. NUL) on success, or `-E2BIG` if `src` didn't fit.
++///
++/// # Safety
++/// `dest` has room for `count` bytes; `src` is a valid NUL-terminated
++/// C string, or if unterminated within `count` bytes, at least `count`
++/// bytes are readable without crossing an unmapped page (word-at-a-time
++/// path is only taken when both `src`/`dest` are `usize`-aligned, per
++/// the `CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS`-off `max = 0` fallback
++/// below — this target has no `#else` branch taken since
++/// `CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS` IS set on riscv64, so the
++/// page-boundary-limiting branch is the live one; caller must still
++/// honor the same word-at-a-time-vs-byte-at-a-time contract the C has).
++#[export]
++pub unsafe extern "C" fn sized_strscpy(dest: *mut c_char, src: *const c_char, count: usize) -> isize {
++    const ONE_BITS: usize = usize::MAX / 0xff;
++    const HIGH_BITS: usize = ONE_BITS * 0x80;
++
++    let mut max = count;
++    let mut res: isize = 0;
++
++    if count == 0 || count > i32::MAX as usize {
++        return -(bindings::E2BIG as isize);
++    }
++
++    // CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS is set on riscv64: if src
++    // is unaligned, don't cross a page boundary (next page may be
++    // unmapped).
++    if (src as usize) & (core::mem::size_of::<usize>() - 1) != 0 {
++        // SAFETY: bindings::PAGE_SIZE is a real kernel constant.
++        let page_size = bindings::PAGE_SIZE;
++        let limit = page_size - ((src as usize) & (page_size - 1));
++        if limit < max {
++            max = limit;
++        }
++    }
++
++    // CONFIG_KMSAN is off in this config, so the `max = 0` disable path
++    // never triggers.
++
++    let src_u8 = src.cast::<u8>();
++    let dest_u8 = dest.cast::<u8>();
++    let mut count = count;
++
++    // SAFETY: every access below stays within `max`/`count` bytes of
++    // `src`/`dest`, matching the C's own bounds exactly; `max <= count`
++    // always, and the alignment/page-limit check above already ensures
++    // the word-at-a-time reads below don't cross into an unmapped page.
++    unsafe {
++        while max >= core::mem::size_of::<usize>() {
++            let c = read_word_at_a_time(src_u8.offset(res));
++            let mask = has_zero(c, ONE_BITS, HIGH_BITS);
++            if mask != 0 {
++                let data = create_zero_mask(mask);
++                let bytemask = data; // zero_bytemask(mask) == mask on riscv
++                (dest_u8.offset(res) as *mut usize).write_unaligned(c & bytemask);
++                return res + find_zero(data) as isize;
++            }
++            count -= core::mem::size_of::<usize>();
++            if count == 0 {
++                let c = c & ALLBUTLAST_BYTE_MASK;
++                (dest_u8.offset(res) as *mut usize).write_unaligned(c);
++                return -(bindings::E2BIG as isize);
++            }
++            (dest_u8.offset(res) as *mut usize).write_unaligned(c);
++            res += core::mem::size_of::<usize>() as isize;
++            max -= core::mem::size_of::<usize>();
++        }
++
++        while count > 1 {
++            let c = *src_u8.offset(res);
++            *dest_u8.offset(res) = c;
++            if c == 0 {
++                return res;
++            }
++            res += 1;
++            count -= 1;
++        }
++
++        // Force NUL-termination.
++        *dest_u8.offset(res) = 0;
++
++        // Return E2BIG if the source didn't stop.
++        if *src_u8.offset(res) != 0 {
++            -(bindings::E2BIG as isize)
++        } else {
++            res
++        }
++    }
++}
++
++/// Copy `src` (incl. NUL) into `dest`, returning a pointer to the new
++/// NUL terminator in `dest`. Unsafe/unbounded, like the C.
++///
++/// # Safety
++/// `src` is a valid NUL-terminated C string; `dest` has room for
++/// `strlen(src) + 1` bytes; `dest`/`src` do not overlap.
++#[export]
++pub unsafe extern "C" fn stpcpy(dest: *mut c_char, src: *const c_char) -> *mut c_char {
++    let mut dest = dest;
++    let mut src = src;
++    // SAFETY: per function contract.
++    unsafe {
++        loop {
++            let c = *src;
++            src = src.add(1);
++            *dest = c;
++            dest = dest.add(1);
++            if c == 0 {
++                break;
++            }
++        }
++        dest.sub(1)
++    }
++}
++
++/// Append `src` (incl. NUL) to the end of `dest`.
++///
++/// # Safety
++/// `dest` is a valid NUL-terminated C string with room to grow by
++/// `strlen(src)` bytes; `src` is a valid NUL-terminated C string.
++#[export]
++pub unsafe extern "C" fn strcat(dest: *mut c_char, src: *const c_char) -> *mut c_char {
++    let tmp = dest;
++    let mut dest = dest;
++    let mut src = src;
++    // SAFETY: per function contract.
++    unsafe {
++        while *dest != 0 {
++            dest = dest.add(1);
++        }
++        loop {
++            let c = *src;
++            src = src.add(1);
++            *dest = c;
++            dest = dest.add(1);
++            if c == 0 {
++                break;
++            }
++        }
++    }
++    tmp
++}
++
++/// Append at most `count` bytes of `src` to the end of `dest`, always
++/// NUL-terminating.
++///
++/// # Safety
++/// `dest` is a valid NUL-terminated C string with room to grow by up to
++/// `count + 1` bytes; `src` is a valid NUL-terminated C string with at
++/// least `count` readable bytes (or shorter if NUL-terminated first).
++#[export]
++pub unsafe extern "C" fn strncat(dest: *mut c_char, src: *const c_char, mut count: usize) -> *mut c_char {
++    let tmp = dest;
++    let mut dest = dest;
++    let mut src = src;
++    if count != 0 {
++        // SAFETY: per function contract.
++        unsafe {
++            while *dest != 0 {
++                dest = dest.add(1);
++            }
++            loop {
++                let c = *src;
++                src = src.add(1);
++                *dest = c;
++                dest = dest.add(1);
++                if c == 0 {
++                    break;
++                }
++                count -= 1;
++                if count == 0 {
++                    *dest = 0;
++                    break;
++                }
++            }
++        }
++    }
++    tmp
++}
++
++/// Append `src` to `dest` (a `count`-byte buffer), NUL-terminating.
++/// `dest` must already contain a NUL-terminated string strictly shorter
++/// than `count`. Returns `strlen(dest) + strlen(src)` (pre-truncation).
++///
++/// # Safety
++/// `dest` is a valid NUL-terminated C string within a `count`-byte
++/// buffer; `src` is a valid NUL-terminated C string.
++#[export]
++pub unsafe extern "C" fn strlcat(dest: *mut c_char, src: *const c_char, count: usize) -> usize {
++    // SAFETY: per function contract.
++    unsafe {
++        let dsize = bindings::strlen(dest);
++        let len = bindings::strlen(src);
++        let res = dsize + len;
++
++        // C: BUG_ON(dsize >= count); — BUG_ON(cond) == `if (unlikely(cond))
++        // BUG();` (branch hint dropped, rule 0007).
++        if dsize >= count {
++            // SAFETY: BUG() never returns.
++            bindings::BUG();
++        }
++
++        let dest = dest.add(dsize);
++        let count = count - dsize;
++        let mut len = len;
++        if len >= count {
++            len = count - 1;
++        }
++        bindings::memcpy(dest.cast(), src.cast(), len);
++        *dest.add(len) = 0;
++        res
++    }
++}
++
++/// Find and return a character in a string, or the terminating NUL.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string.
++#[export]
++pub unsafe extern "C" fn strchrnul(s: *const c_char, c: c_int) -> *mut c_char {
++    let target = c as c_char;
++    let mut s = s;
++    // SAFETY: per function contract.
++    unsafe {
++        while *s != 0 && *s != target {
++            s = s.add(1);
++        }
++        s as *mut c_char
++    }
++}
++
++/// Find and return a character in a length-limited string, or the last
++/// character of the string.
++///
++/// # Safety
++/// `s` has at least `count` valid readable bytes, or is NUL-terminated
++/// sooner.
++#[export]
++pub unsafe extern "C" fn strnchrnul(s: *const c_char, mut count: usize, c: c_int) -> *mut c_char {
++    let target = c as c_char;
++    let mut s = s;
++    // SAFETY: per function contract.
++    unsafe {
++        while count != 0 {
++            count -= 1;
++            if *s == 0 || *s == target {
++                break;
++            }
++            s = s.add(1);
++        }
++        s as *mut c_char
++    }
++}
++
++/// Find a character in a length-limited string.
++///
++/// # Safety
++/// `s` has at least `count` valid readable bytes, or is NUL-terminated
++/// sooner.
++#[export]
++pub unsafe extern "C" fn strnchr(s: *const c_char, mut count: usize, c: c_int) -> *mut c_char {
++    let target = c as c_char;
++    let mut s = s;
++    // SAFETY: per function contract.
++    unsafe {
++        while count != 0 {
++            count -= 1;
++            if *s == target {
++                return s as *mut c_char;
++            }
++            if *s == 0 {
++                break;
++            }
++            s = s.add(1);
++        }
++        core::ptr::null_mut()
++    }
++}
++
++/// Calculate the length of the initial substring of `s` which only
++/// contains characters in `accept`.
++///
++/// # Safety
++/// `s`/`accept` are valid NUL-terminated C strings.
++#[export]
++pub unsafe extern "C" fn strspn(s: *const c_char, accept: *const c_char) -> usize {
++    let mut p = s;
++    // SAFETY: per function contract.
++    unsafe {
++        while *p != 0 {
++            if bindings::strchr(accept, *p as c_int).is_null() {
++                break;
++            }
++            p = p.add(1);
++        }
++        p.offset_from(s) as usize
++    }
++}
++
++/// Calculate the length of the initial substring of `s` which does not
++/// contain characters in `reject`.
++///
++/// # Safety
++/// `s`/`reject` are valid NUL-terminated C strings.
++#[export]
++pub unsafe extern "C" fn strcspn(s: *const c_char, reject: *const c_char) -> usize {
++    let mut p = s;
++    // SAFETY: per function contract.
++    unsafe {
++        while *p != 0 {
++            if !bindings::strchr(reject, *p as c_int).is_null() {
++                break;
++            }
++            p = p.add(1);
++        }
++        p.offset_from(s) as usize
++    }
++}
++
++/// Find the first occurrence in `cs` of any character in `ct`.
++///
++/// # Safety
++/// `cs`/`ct` are valid NUL-terminated C strings.
++#[export]
++pub unsafe extern "C" fn strpbrk(cs: *const c_char, ct: *const c_char) -> *mut c_char {
++    let mut sc = cs;
++    // SAFETY: per function contract.
++    unsafe {
++        while *sc != 0 {
++            if !bindings::strchr(ct, *sc as c_int).is_null() {
++                return sc as *mut c_char;
++            }
++            sc = sc.add(1);
++        }
++        core::ptr::null_mut()
++    }
++}
++
++/// Split a string into tokens on any character in `ct`. Updates `*s`
++/// to point after the token, ready for the next call.
++///
++/// # Safety
++/// `*s` is null or a valid NUL-terminated C string; `ct` is a valid
++/// NUL-terminated C string.
++#[export]
++pub unsafe extern "C" fn strsep(s: *mut *mut c_char, ct: *const c_char) -> *mut c_char {
++    // SAFETY: per function contract.
++    unsafe {
++        let sbegin = *s;
++        if sbegin.is_null() {
++            return core::ptr::null_mut();
++        }
++        let mut end = bindings::strpbrk(sbegin, ct);
++        if !end.is_null() {
++            *end = 0;
++            end = end.add(1);
++        }
++        *s = end;
++        sbegin
++    }
++}
++
++/// Fill a memory area with a `u16` value. `count` is the number of
++/// `u16`s to store, not bytes.
++///
++/// # Safety
++/// `s` has room for `count` `u16`s.
++#[export]
++pub unsafe extern "C" fn memset16(s: *mut u16, v: u16, count: usize) -> *mut u16 {
++    let mut xs = s;
++    // SAFETY: per function contract.
++    unsafe {
++        for _ in 0..count {
++            *xs = v;
++            xs = xs.add(1);
++        }
++    }
++    s
++}
++
++/// Fill a memory area with a `u32` value. `count` is the number of
++/// `u32`s to store, not bytes.
++///
++/// # Safety
++/// `s` has room for `count` `u32`s.
++#[export]
++pub unsafe extern "C" fn memset32(s: *mut u32, v: u32, count: usize) -> *mut u32 {
++    let mut xs = s;
++    // SAFETY: per function contract.
++    unsafe {
++        for _ in 0..count {
++            *xs = v;
++            xs = xs.add(1);
++        }
++    }
++    s
++}
++
++/// Fill a memory area with a `u64` value. `count` is the number of
++/// `u64`s to store, not bytes.
++///
++/// # Safety
++/// `s` has room for `count` `u64`s.
++#[export]
++pub unsafe extern "C" fn memset64(s: *mut u64, v: u64, count: usize) -> *mut u64 {
++    let mut xs = s;
++    // SAFETY: per function contract.
++    unsafe {
++        for _ in 0..count {
++            *xs = v;
++            xs = xs.add(1);
++        }
++    }
++    s
++}
++
++/// Compare two memory areas.
++///
++/// # Safety
++/// `cs`/`ct` each have at least `count` valid readable bytes.
++#[export]
++pub unsafe extern "C" fn memcmp(cs: *const c_void, ct: *const c_void, count: usize) -> c_int {
++    // CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS word-at-a-time fast path
++    // is set on riscv64 — translated faithfully rather than skipped,
++    // since (unlike sized_strscpy's page-boundary case) this file's
++    // own get_unaligned() read has no page-crossing hazard to guard.
++    let mut count = count;
++    let mut su1 = cs.cast::<u8>();
++    let mut su2 = ct.cast::<u8>();
++
++    // SAFETY: per function contract; the word-at-a-time loop only
++    // advances while `count >= size_of::<usize>()` bytes remain
++    // readable at both `su1`/`su2`, matching the C's own bound.
++    unsafe {
++        if count >= core::mem::size_of::<usize>() {
++            let mut u1 = su1.cast::<usize>();
++            let mut u2 = su2.cast::<usize>();
++            loop {
++                if u1.read_unaligned() != u2.read_unaligned() {
++                    break;
++                }
++                u1 = u1.add(1);
++                u2 = u2.add(1);
++                count -= core::mem::size_of::<usize>();
++                if count < core::mem::size_of::<usize>() {
++                    break;
++                }
++            }
++            su1 = u1.cast();
++            su2 = u2.cast();
++        }
++
++        let mut res: c_int = 0;
++        while count > 0 {
++            res = *su1 as c_int - *su2 as c_int;
++            if res != 0 {
++                break;
++            }
++            su1 = su1.add(1);
++            su2 = su2.add(1);
++            count -= 1;
++        }
++        res
++    }
++}
++
++/// Returns 0 iff the buffers have identical contents.
++///
++/// # Safety
++/// `a`/`b` each have at least `len` valid readable bytes.
++#[export]
++pub unsafe extern "C" fn bcmp(a: *const c_void, b: *const c_void, len: usize) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { memcmp(a, b, len) }
++}
++
++/// Find a character in an area of memory; returns 1 byte past the area
++/// if not found.
++///
++/// # Safety
++/// `addr` has at least `size` valid readable bytes.
++#[export]
++pub unsafe extern "C" fn memscan(addr: *mut c_void, c: c_int, mut size: usize) -> *mut c_void {
++    let mut p = addr.cast::<u8>();
++    let target = c as u8;
++    // SAFETY: per function contract.
++    unsafe {
++        while size != 0 {
++            if *p == target {
++                return p.cast();
++            }
++            p = p.add(1);
++            size -= 1;
++        }
++        p.cast()
++    }
++}
++
++/// Find the first occurrence of NUL-terminated `s2` within
++/// NUL-terminated `s1`.
++///
++/// # Safety
++/// `s1`/`s2` are valid NUL-terminated C strings.
++#[export]
++pub unsafe extern "C" fn strstr(s1: *const c_char, s2: *const c_char) -> *mut c_char {
++    // SAFETY: per function contract.
++    unsafe {
++        let l2 = bindings::strlen(s2);
++        if l2 == 0 {
++            return s1 as *mut c_char;
++        }
++        let mut l1 = bindings::strlen(s1);
++        let mut s1 = s1;
++        while l1 >= l2 {
++            l1 -= 1;
++            if memcmp(s1.cast(), s2.cast(), l2) == 0 {
++                return s1 as *mut c_char;
++            }
++            s1 = s1.add(1);
++        }
++        core::ptr::null_mut()
++    }
++}
++
++/// Find the first occurrence of NUL-terminated `s2` within the first
++/// `len` bytes of `s1`.
++///
++/// # Safety
++/// `s2` is a valid NUL-terminated C string; `s1` has at least `len`
++/// valid readable bytes.
++#[export]
++pub unsafe extern "C" fn strnstr(s1: *const c_char, s2: *const c_char, len: usize) -> *mut c_char {
++    // SAFETY: per function contract.
++    unsafe {
++        let l2 = bindings::strlen(s2);
++        if l2 == 0 {
++            return s1 as *mut c_char;
++        }
++        let mut len = len;
++        let mut s1 = s1;
++        while len >= l2 {
++            len -= 1;
++            if memcmp(s1.cast(), s2.cast(), l2) == 0 {
++                return s1 as *mut c_char;
++            }
++            s1 = s1.add(1);
++        }
++        core::ptr::null_mut()
++    }
++}
++
++/// Find a character in an area of memory; returns NULL if not found.
++///
++/// # Safety
++/// `s` has at least `n` valid readable bytes.
++#[export]
++pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, mut n: usize) -> *mut c_void {
++    let mut p = s.cast::<u8>();
++    let target = c as u8;
++    // SAFETY: per function contract.
++    unsafe {
++        while n != 0 {
++            n -= 1;
++            if target == *p {
++                return p as *mut c_void;
++            }
++            p = p.add(1);
++        }
++        core::ptr::null_mut()
++    }
++}
++
++/// Scan `bytes` bytes at `start` for the first one that isn't `value`.
++///
++/// # Safety
++/// `start` has at least `bytes` valid readable bytes.
++unsafe fn check_bytes8(start: *const u8, value: u8, bytes: u32) -> *mut u8 {
++    let mut start = start;
++    let mut bytes = bytes;
++    // SAFETY: per function contract.
++    unsafe {
++        while bytes != 0 {
++            if *start != value {
++                return start as *mut u8;
++            }
++            start = start.add(1);
++            bytes -= 1;
++        }
++        core::ptr::null_mut()
++    }
++}
++
++/// Find the address of the first byte in `start[..bytes]` that is not
++/// `c`, or NULL if the whole buffer contains just `c`.
++///
++/// # Safety
++/// `start` has at least `bytes` valid readable bytes.
++#[export]
++pub unsafe extern "C" fn memchr_inv(start: *const c_void, c: c_int, bytes: usize) -> *mut c_void {
++    let value = c as u8;
++
++    if bytes <= 16 {
++        // SAFETY: per function contract.
++        return unsafe { check_bytes8(start.cast(), value, bytes as u32).cast() };
++    }
++
++    // CONFIG_ARCH_HAS_FAST_MULTIPLIER + BITS_PER_LONG==64 arm (riscv64
++    // has a hardware multiplier).
++    let mut value64: u64 = value as u64;
++    value64 = value64.wrapping_mul(0x0101010101010101);
++
++    let mut start = start.cast::<u8>();
++    let mut bytes = bytes;
++
++    // SAFETY: per function contract; every access below stays within
++    // the `bytes`-byte region at `start`, matching the C's own bounds.
++    unsafe {
++        let mut prefix = (start as usize) % 8;
++        if prefix != 0 {
++            prefix = 8 - prefix;
++            let r = check_bytes8(start, value, prefix as u32);
++            if !r.is_null() {
++                return r.cast();
++            }
++            start = start.add(prefix);
++            bytes -= prefix;
++        }
++
++        let mut words = bytes / 8;
++
++        while words != 0 {
++            if start.cast::<u64>().read_unaligned() != value64 {
++                return check_bytes8(start, value, 8).cast();
++            }
++            start = start.add(8);
++            words -= 1;
++        }
++
++        check_bytes8(start, value, (bytes % 8) as u32).cast()
++    }
++}
+-- 
+2.55.0
+
