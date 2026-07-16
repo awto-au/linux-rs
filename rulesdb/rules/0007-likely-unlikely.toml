@@ -1,0 +1,22 @@
+id = "likely-unlikely"
+version = 1
+tier = 1
+category = "macro"
+
+[match]
+c = "if (unlikely(cond)) …  /  if (likely(cond)) …"
+
+[emit]
+kind = "vanishes"
+rust = "plain if cond — hint dropped"
+deviations = ["branch-prediction hint lost (no stable core::hint equivalent); value semantics identical. Revisit per-instance if a profiled hot path regresses"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/math/int_log.c:intlog2", "lib/math/int_log.c:intlog10"]
+oracle = "tier4"
+negative = []
+human_review = false

@@ -83,6 +83,7 @@ target ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)).
 | 2026-07-16 | **Correctness review → census v1.1/v2.1.** Macro-internal inflation, brace bias, type erasure fixed. Corrected gate: **26 families = 25%, 713 = 50%** of 1.06M statements — GO stands; tail: median **1** non-root glue node ([docs/review-findings-2026-07-16.md](docs/review-findings-2026-07-16.md)) |
 | 2026-07-16 | Reference corpus added: Asterinas, Moss, Kerla, linux-0.11-rs, rCore as target-design evidence ([docs/reference-projects.md](docs/reference-projects.md)) |
 | 2026-07-16 | **First translated TU running in the kernel.** `lib/math/gcd.c` → Rust, in-tree on the riscv64 target, all 11 KUnit vectors pass on the booted kernel — including the static-key fallback path a naive translation would have dropped. 5 rules extracted ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)) |
+| 2026-07-16 | **Batch 2: five Rust TUs in the booted kernel, 58/58 KUnit vectors.** lcm/int_log/int_pow/int_sqrt; first Rust→Rust cross-TU call; rules 0006–0010. Benchmark: **faithful Rust ≡ C** at equal opt level; `isqrt` optimised lane 2.1× — but "idiomatic" gcd 2× slower, so per-function measurement gates the lane ([docs/phase2-batch2-and-bench.md](docs/phase2-batch2-and-bench.md)) |
 
 ## Layout
 

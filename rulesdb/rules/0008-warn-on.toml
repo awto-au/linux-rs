@@ -1,0 +1,23 @@
+id = "warn-on"
+version = 1
+tier = 1
+category = "macro"
+
+[match]
+c = "WARN_ON(cond) / WARN_ON_ONCE(cond)"
+family = "MACROSTMT:WARN_ON"
+
+[emit]
+kind = "rust-macro"
+rust = "kernel::warn_on!(cond)  (needs `use kernel::warn_on;` — NOT in prelude as of v7.1)"
+deviations = ["none — real __WARN_FLAGS path with TAINT_WARN"]
+
+[provenance]
+derivation = "API-inspired"
+evidence = ["rust/kernel/bug.rs (v7.1)"]
+
+[validation]
+instances = ["lib/math/int_log.c:intlog2", "lib/math/int_log.c:intlog10 (KUnit exercises the WARN path: log(0) vectors)"]
+oracle = "tier4"
+negative = ["WARN_ON_ONCE — once-semantics not yet in kernel crate; separate rule when needed"]
+human_review = false

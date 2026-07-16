@@ -1,0 +1,23 @@
+id = "unsigned-wrap-mul"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "a * b / a *= b on unsigned types where overflow is possible"
+constraints = ["translator must decide per site: prove no-overflow (then plain op) or preserve C wrap (then wrapping_*)"]
+
+[emit]
+kind = "rewrite"
+rust = "a.wrapping_mul(b) — C unsigned arithmetic wraps by definition; kernel Rust builds can carry overflow checks, so implicit wrap must be explicit"
+deviations = ["none — this preserves C semantics exactly"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/math/int_pow.c:int_pow (result, base)", "lib/math/lcm.c:lcm ((a/gcd)*b)", "lib/math/int_log.c:intlog2 (interpolation product)"]
+oracle = "tier4"
+negative = ["sites with kernel overflow annotations (check_mul_overflow) — different rule"]
+human_review = false

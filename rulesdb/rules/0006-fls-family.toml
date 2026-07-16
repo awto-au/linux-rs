@@ -1,0 +1,23 @@
+id = "fls-family"
+version = 1
+tier = 1
+category = "api"
+
+[match]
+c = "fls(x) /* 1-based, fls(0)==0 */; __fls(x) /* 0-based, UB at 0 */; fls64/__ffs64 variants"
+constraints = ["__fls/__ffs callers must guarantee nonzero args"]
+
+[emit]
+kind = "function"
+rust = "fls(x) -> u32::BITS - x.leading_zeros()  (defined at 0, matches C)\n__fls(x) -> BITS - 1 - x.leading_zeros()"
+deviations = ["Rust forms defined at 0 where C __fls/__ffs are UB — strictly safer"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/math/int_sqrt.c:int_sqrt (__fls)", "lib/math/int_log.c:intlog2 (fls)"]
+oracle = "tier4"
+negative = ["ffs() 1-based-with-zero POSIX variant — check each caller's off-by-one expectations"]
+human_review = false

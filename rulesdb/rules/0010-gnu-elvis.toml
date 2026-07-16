@@ -1,0 +1,22 @@
+id = "gnu-elvis"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "x ? : y   /* GNU ?: — x, evaluated once, else y */"
+
+[emit]
+kind = "rewrite"
+rust = "if x != 0 { x } else { y } — bind x first if the operand has side effects (C evaluates it once)"
+deviations = ["none"]
+
+[provenance]
+derivation = "independently derived"
+evidence = []
+
+[validation]
+instances = ["lib/math/lcm.c:lcm_not_zero"]
+oracle = "tier4"
+negative = ["pointer-typed elvis (NULL fallback) — same shape, translate against Option/is_null instead"]
+human_review = false

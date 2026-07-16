@@ -178,6 +178,30 @@ The old Phase-2 `lib/` targets (sort/CRC, KUnit differential) remain the
 oracle-tier-3 test vehicle — pure functions are still where differential
 testing is cheapest — but the headline target is the rv64 boot path.
 
+### Phase 2.5 — the pure-leaf optimisation lane (Dan, 2026-07-16)
+
+For **pure leaf functions only** — no I/O, no MMIO, no shared-memory access,
+no locks, no allocation; arguments in, value out; exactly the `lib/math`
+class — a third variant is permitted alongside the faithful translation:
+
+1. **faithful** (the default lane; differential baseline, always exists)
+2. **safe-lifted** (Stage-3 representation change, no algorithm change)
+3. **optimised** (pure leaves ONLY): idiomatic/fast Rust, algorithm may
+   differ, produced by a *dedicated subagent* per function
+
+The optimised lane does not weaken the discipline because purity makes
+exhaustive validation cheap: the C original and both Rust versions can be
+compiled host-side and property-tested against each other over millions of
+random + boundary inputs (proptest/quickcheck style), plus the in-kernel
+KUnit vectors. Kbuild keeps variants switchable (faithful default;
+optimised opt-in per symbol after its differential record is clean).
+
+Purity detection is mechanisable from census data we already extract:
+no asm/volatile/statics-writes, no pointer-typed parameters (or only
+`const` reads), and a callee set that is itself pure — a fixpoint over the
+call graph. That census cut is the work queue for the optimisation
+subagent.
+
 ### Phase 3 — the learning loop (exit: agent-invented rules validated at scale)
 
 Wire the miss path: cluster unmatched subtrees → agent proposes general rule
