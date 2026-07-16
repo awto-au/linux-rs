@@ -1,0 +1,931 @@
+From d7a097320267ef842e06577e35df5738f4fb5910 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Fri, 17 Jul 2026 08:47:00 +1000
+Subject: [PATCH] lib: translate bitmap (partial) to Rust (linux-rs TU 28)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile     |  14 +-
+ lib/bitmap.c     |  12 +
+ lib/bitmap_rs.rs | 836 +++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 860 insertions(+), 2 deletions(-)
+ create mode 100644 lib/bitmap_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 7f05face4ad1..9cda643b691f 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -59,12 +59,22 @@ else
+ obj-y += sort.o bcd.o list_sort.o
+ endif
+ obj-y += debug_locks.o random32.o \
+-	 bust_spinlocks.o kasprintf.o bitmap.o scatterlist.o \
++	 bust_spinlocks.o scatterlist.o \
+ 	 uuid.o iov_iter.o clz_ctz.o \
+ 	 bsearch.o lwq.o kfifo.o \
+ 	 percpu-refcount.o rhashtable.o \
+ 	 once.o refcount.o rcuref.o usercopy.o errseq.o bucket_locks.o \
+-	 generic-radix-tree.o bitmap-str.o
++	 generic-radix-tree.o bitmap-str.o kasprintf.o
++
++# linux-rs: PARTIAL translation — bitmap.c always builds (it still owns
++# the allocator-touching functions: bitmap_alloc/bitmap_free/
++# devm_bitmap_*, guarded out of bitmap_rs.rs below), plus bitmap_rs.o
++# under CONFIG_RUST for the 27 functions translated so far (guarded out
++# of bitmap.c via #ifdef CONFIG_RUST to avoid duplicate EXPORT_SYMBOLs).
++obj-y += bitmap.o
++ifdef CONFIG_RUST
++obj-y += bitmap_rs.o
++endif
+ obj-y += string_helpers.o
+ obj-y +=
+ obj-$(CONFIG_TEST_HEXDUMP) += test_hexdump.o
+diff --git a/lib/bitmap.c b/lib/bitmap.c
+index b9bfa157e095..eddc64746462 100644
+--- a/lib/bitmap.c
++++ b/lib/bitmap.c
+@@ -34,6 +34,14 @@
+  * for the best explanations of this ordering.
+  */
+ 
++/*
++ * linux-rs: PARTIAL translation — the functions from here through
++ * bitmap_bitremap() (below) are translated in bitmap_rs.rs; guarded out
++ * here under CONFIG_RUST to avoid duplicate EXPORT_SYMBOLs. See
++ * bitmap_rs.rs's module doc for the exact scope and why the remaining
++ * functions (allocator-touching, CONFIG_NUMA-gated) are still C-only.
++ */
++#ifndef CONFIG_RUST
+ bool __bitmap_equal(const unsigned long *bitmap1,
+ 		    const unsigned long *bitmap2, unsigned int bits)
+ {
+@@ -568,6 +576,7 @@ int bitmap_bitremap(int oldbit, const unsigned long *old,
+ 		return find_nth_bit(new, bits, n % w);
+ }
+ EXPORT_SYMBOL(bitmap_bitremap);
++#endif /* !CONFIG_RUST */
+ 
+ #ifdef CONFIG_NUMA
+ /**
+@@ -794,6 +803,8 @@ unsigned long *devm_bitmap_zalloc(struct device *dev,
+ EXPORT_SYMBOL_GPL(devm_bitmap_zalloc);
+ 
+ #if BITS_PER_LONG == 64
++/* linux-rs: translated in bitmap_rs.rs, see that file's module doc. */
++#ifndef CONFIG_RUST
+ /**
+  * bitmap_from_arr32 - copy the contents of u32 array of bits to bitmap
+  *	@bitmap: array of unsigned longs, the destination bitmap
+@@ -839,6 +850,7 @@ void bitmap_to_arr32(u32 *buf, const unsigned long *bitmap, unsigned int nbits)
+ 		buf[halfwords - 1] &= (u32) (UINT_MAX >> ((-nbits) & 31));
+ }
+ EXPORT_SYMBOL(bitmap_to_arr32);
++#endif /* !CONFIG_RUST */
+ #endif
+ 
+ #if BITS_PER_LONG == 32
+diff --git a/lib/bitmap_rs.rs b/lib/bitmap_rs.rs
+new file mode 100644
+index 000000000000..c23ea0622e0e
+--- /dev/null
++++ b/lib/bitmap_rs.rs
+@@ -0,0 +1,836 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Helper functions for bitmap.h — Rust translation of `lib/bitmap.c`.
++//!
++//! Scope: 27 of 35 functions — the pure bit-manipulation core plus the
++//! set_bit/test_bit-based remap trio. Deferred to a follow-up pass:
++//! - `bitmap_alloc`/`bitmap_zalloc`/`bitmap_alloc_node`/
++//!   `bitmap_zalloc_node`/`bitmap_free`/`devm_bitmap_alloc`/
++//!   `devm_bitmap_zalloc` — `kmalloc_array`/`kmalloc_array_node`/
++//!   `devm_add_action_or_reset` are config-dependent macro/allocation-
++//!   profiling-hook chains (`alloc_hooks(...)`) not yet exposed by
++//!   bindgen; needs its own scoped investigation (rule 0014 territory).
++//! - `bitmap_onto`/`bitmap_fold` — `#ifdef CONFIG_NUMA`, unset in this
++//!   config: dead code for this target (ordinary config-gating).
++//! - `bitmap_from_arr64`/`bitmap_to_arr64` — `#if BITS_PER_LONG == 32`:
++//!   dead code on this riscv64 (`BITS_PER_LONG == 64`) target.
++//!
++//! `find_next_bit`/`find_next_zero_bit`/`find_nth_bit`
++//! (`include/linux/find.h`) are header-inlines whose `small_const_nbits`
++//! fast path requires `__builtin_constant_p` on `size` — never true at
++//! any call site in this file (all runtime values) — so every call here
++//! goes through the real, already-translated `bindings::_find_next_bit`
++//! / `_find_next_zero_bit` / `__find_nth_bit` (lib/find_bit_rs.rs,
++//! landed TU) directly; rule 0021 cross-TU call, rule 0016 for the
++//! (dead-at-runtime) inline wrapper itself.
++//!
++//! `set_bit` is a real riscv atomic-instruction (AMO) op, but the
++//! Rust-for-Linux kernel crate ALREADY exposes it as `bindings::set_bit`
++//! (via `rust/helpers/bitops.c`'s `rust_helper_set_bit`, upstream
++//! infrastructure — not something this project added) — used directly,
++//! no new shim needed. `test_bit` reduces to `generic_test_bit`, a
++//! single aligned-word load with no read-modify-write; reimplemented
++//! directly per rule 0016 rather than round-tripping through a shim for
++//! a plain read.
++
++use kernel::bindings;
++use kernel::ffi::{c_int, c_uint, c_ulong};
++use kernel::prelude::*;
++
++const BITS_PER_LONG: u32 = usize::BITS;
++
++/// `BITS_TO_LONGS(nr)` (`include/linux/bitops.h`) — header-inline, rule 0016.
++#[inline]
++fn bits_to_longs(nr: usize) -> usize {
++    nr.div_ceil(BITS_PER_LONG as usize)
++}
++
++/// `BIT_WORD(nr)` (`include/linux/bits.h`) — header-inline, rule 0016.
++#[inline]
++fn bit_word(nr: usize) -> usize {
++    nr / BITS_PER_LONG as usize
++}
++
++/// `BITMAP_FIRST_WORD_MASK(start)`/`BITMAP_LAST_WORD_MASK(nbits)`
++/// (`include/linux/bitmap.h`) — header-inlines, rule 0016.
++#[inline]
++fn bitmap_first_word_mask(start: usize) -> usize {
++    usize::MAX << (start & (BITS_PER_LONG as usize - 1))
++}
++#[inline]
++fn bitmap_last_word_mask(nbits: usize) -> usize {
++    usize::MAX >> (nbits.wrapping_neg() & (BITS_PER_LONG as usize - 1))
++}
++
++/// `__ALIGN_MASK(x, mask)` (`include/vdso/align.h`) — header-inline,
++/// rule 0016.
++#[inline]
++fn align_mask(x: usize, mask: usize) -> usize {
++    (x.wrapping_add(mask)) & !mask
++}
++
++/// `hweight_long(w)` (`include/linux/bitops.h`) — on a 64-bit target
++/// reduces to `hweight64(w)` = `__arch_hweight64(w)` =
++/// `__sw_hweight64(w)` (software popcount; `w` is never
++/// `__builtin_constant_p` at our call sites, so the `__const_hweight64`
++/// arm is dead) — exactly `u64::count_ones()`. Header-inline, rule 0016.
++#[inline]
++fn hweight_long(w: usize) -> u32 {
++    (w as u64).count_ones()
++}
++
++/// `test_bit(nr, addr)` -> `generic_test_bit`
++/// (`include/asm-generic/bitops/generic-non-atomic.h`) — a single
++/// aligned-word load, no read-modify-write; reimplemented directly,
++/// rule 0016.
++///
++/// # Safety
++/// `addr` has at least `bit_word(nr) + 1` valid `usize`s readable.
++#[inline]
++unsafe fn test_bit(nr: usize, addr: *const c_ulong) -> bool {
++    // SAFETY: per function contract.
++    let word = unsafe { *addr.add(bit_word(nr)) };
++    (word >> (nr & (BITS_PER_LONG as usize - 1))) & 1 != 0
++}
++
++/// `bitmap_zero(dst, nbits)` (`include/linux/bitmap.h`) — header-inline
++/// (`memset(dst, 0, ...)` for a non-BITMAP_SMALL size, which every call
++/// site here is), rule 0016.
++///
++/// # Safety
++/// `dst` has at least `bits_to_longs(nbits)` valid `usize`s.
++#[inline]
++unsafe fn bitmap_zero(dst: *mut c_ulong, nbits: usize) {
++    // SAFETY: per function contract.
++    unsafe {
++        core::ptr::write_bytes(dst, 0, bits_to_longs(nbits));
++    }
++}
++
++/// Find ordinal of the set bit at position `pos` in `buf` (of `nbits`
++/// bits): if bit `pos` is the n-th set bit, returns n; returns -1 if
++/// `pos` isn't set or is out of range.
++///
++/// # Safety
++/// `buf` has at least `bits_to_longs(nbits)` valid `usize`s.
++unsafe fn bitmap_pos_to_ord(buf: *const c_ulong, pos: c_uint, nbits: c_uint) -> c_int {
++    // SAFETY: per function contract.
++    unsafe {
++        if pos >= nbits || !test_bit(pos as usize, buf) {
++            return -1;
++        }
++        bitmap_weight_generic(pos as usize, |idx| *buf.add(idx)) as c_int
++    }
++}
++
++/// Apply the mapping defined by `old`/`new` (see kernel-doc in
++/// `lib/bitmap.c`) to `src`, writing the result to `dst`.
++///
++/// # Safety
++/// `dst`/`src`/`old`/`new` each have at least `bits_to_longs(nbits)`
++/// valid `usize`s; `dst` may equal `src` (handled as a no-op, matching
++/// the C's own `if (dst == src) return;` guard).
++#[export]
++pub unsafe extern "C" fn bitmap_remap(
++    dst: *mut c_ulong,
++    src: *const c_ulong,
++    old: *const c_ulong,
++    new: *const c_ulong,
++    nbits: c_uint,
++) {
++    if dst as *const c_ulong == src {
++        return;
++    }
++    // SAFETY: per function contract.
++    unsafe {
++        bitmap_zero(dst, nbits as usize);
++
++        let w = bitmap_weight_generic(nbits as usize, |idx| *new.add(idx));
++
++        // for_each_set_bit(oldbit, src, nbits) (include/linux/find.h):
++        // oldbit = find_first_bit(src, nbits), then find_next_bit from
++        // oldbit+1, until oldbit >= nbits. find_first_bit's own
++        // small_const_nbits fast path is dead here too (runtime nbits),
++        // so it calls _find_first_bit directly — same reasoning as the
++        // find_next_bit family in this file's module doc.
++        let mut oldbit = bindings::_find_first_bit(src, nbits as c_ulong);
++        while oldbit < nbits as c_ulong {
++            let n = bitmap_pos_to_ord(old, oldbit as c_uint, nbits);
++            if n < 0 || w == 0 {
++                bindings::set_bit(oldbit as usize, dst);
++            } else {
++                let target = bindings::__find_nth_bit(new, nbits as c_ulong, (n as u32 % w) as c_ulong);
++                bindings::set_bit(target as usize, dst);
++            }
++            oldbit = bindings::_find_next_bit(src, nbits as c_ulong, oldbit + 1);
++        }
++    }
++}
++
++/// Apply the mapping defined by `old`/`new` to a single bit position
++/// `oldbit`, returning the mapped position (see kernel-doc in
++/// `lib/bitmap.c`).
++///
++/// # Safety
++/// `old`/`new` each have at least `bits_to_longs(bits)` valid `usize`s.
++#[export]
++pub unsafe extern "C" fn bitmap_bitremap(
++    oldbit: c_int,
++    old: *const c_ulong,
++    new: *const c_ulong,
++    bits: c_int,
++) -> c_int {
++    // SAFETY: per function contract.
++    unsafe {
++        let w = bitmap_weight_generic(bits as usize, |idx| *new.add(idx)) as c_int;
++        let n = bitmap_pos_to_ord(old, oldbit as c_uint, bits as c_uint);
++        if n < 0 || w == 0 {
++            oldbit
++        } else {
++            bindings::__find_nth_bit(new, bits as c_ulong, (n % w) as c_ulong) as c_int
++        }
++    }
++}
++
++/// Compare two `bits`-bit bitmaps for equality.
++///
++/// # Safety
++/// `bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)` valid
++/// `usize`s readable.
++#[export]
++pub unsafe extern "C" fn __bitmap_equal(
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> bool {
++    let bits = bits as usize;
++    let lim = bits / BITS_PER_LONG as usize;
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..lim {
++            if *bitmap1.add(k) != *bitmap2.add(k) {
++                return false;
++            }
++        }
++        if bits % BITS_PER_LONG as usize != 0
++            && (*bitmap1.add(lim) ^ *bitmap2.add(lim)) & bitmap_last_word_mask(bits) as c_ulong != 0
++        {
++            return false;
++        }
++    }
++    true
++}
++
++/// True iff `bitmap1 | bitmap2 == bitmap3` over `bits` bits.
++///
++/// # Safety
++/// `bitmap1`/`bitmap2`/`bitmap3` each have at least `bits_to_longs(bits)`
++/// valid `usize`s readable.
++#[export]
++pub unsafe extern "C" fn __bitmap_or_equal(
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bitmap3: *const c_ulong,
++    bits: c_uint,
++) -> bool {
++    let bits = bits as usize;
++    let lim = bits / BITS_PER_LONG as usize;
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..lim {
++            if (*bitmap1.add(k) | *bitmap2.add(k)) != *bitmap3.add(k) {
++                return false;
++            }
++        }
++        if bits % BITS_PER_LONG as usize == 0 {
++            return true;
++        }
++        let tmp = (*bitmap1.add(lim) | *bitmap2.add(lim)) ^ *bitmap3.add(lim);
++        (tmp & bitmap_last_word_mask(bits) as c_ulong) == 0
++    }
++}
++
++/// `dst = ~src` over `bits` bits (word-granular; tail bits are 'don't
++/// care', matching the C exactly).
++///
++/// # Safety
++/// `dst`/`src` each have at least `bits_to_longs(bits)` valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_complement(dst: *mut c_ulong, src: *const c_ulong, bits: c_uint) {
++    let lim = bits_to_longs(bits as usize);
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..lim {
++            *dst.add(k) = !*src.add(k);
++        }
++    }
++}
++
++/// Logical right shift (division) of the `nbits`-bit bitmap `src` by
++/// `shift`, written to `dst`.
++///
++/// # Safety
++/// `dst`/`src` each have at least `bits_to_longs(nbits)` valid `usize`s;
++/// `dst` may equal `src` (in-place shift is supported, matching the C).
++#[export]
++pub unsafe extern "C" fn __bitmap_shift_right(
++    dst: *mut c_ulong,
++    src: *const c_ulong,
++    shift: c_uint,
++    nbits: c_uint,
++) {
++    let lim = bits_to_longs(nbits as usize);
++    let off = shift as usize / BITS_PER_LONG as usize;
++    let rem = shift as usize % BITS_PER_LONG as usize;
++    let mask = bitmap_last_word_mask(nbits as usize) as c_ulong;
++
++    // SAFETY: per function contract; every index into src/dst below is
++    // < lim, matching the C's own loop bound exactly.
++    unsafe {
++        let mut k = 0usize;
++        while off + k < lim {
++            let upper: c_ulong;
++            if rem == 0 || off + k + 1 >= lim {
++                upper = 0;
++            } else {
++                let mut u = *src.add(off + k + 1);
++                if off + k + 1 == lim - 1 {
++                    u &= mask;
++                }
++                upper = u << (BITS_PER_LONG as usize - rem);
++            }
++            let mut lower = *src.add(off + k);
++            if off + k == lim - 1 {
++                lower &= mask;
++            }
++            lower >>= rem;
++            *dst.add(k) = lower | upper;
++            k += 1;
++        }
++        if off != 0 {
++            core::ptr::write_bytes(dst.add(lim - off), 0, off);
++        }
++    }
++}
++
++/// Logical left shift (multiplication) of the `nbits`-bit bitmap `src`
++/// by `shift`, written to `dst`.
++///
++/// # Safety
++/// `dst`/`src` each have at least `bits_to_longs(nbits)` valid `usize`s;
++/// `dst` may equal `src` (in-place shift is supported, matching the C).
++#[export]
++pub unsafe extern "C" fn __bitmap_shift_left(
++    dst: *mut c_ulong,
++    src: *const c_ulong,
++    shift: c_uint,
++    nbits: c_uint,
++) {
++    let lim = bits_to_longs(nbits as usize) as isize;
++    let off = (shift / BITS_PER_LONG) as isize;
++    let rem = (shift % BITS_PER_LONG) as usize;
++
++    // SAFETY: per function contract; k ranges within [0, lim), matching
++    // the C's own signed-countdown loop exactly.
++    unsafe {
++        let mut k = lim - off - 1;
++        while k >= 0 {
++            let lower = if rem != 0 && k > 0 {
++                *src.add((k - 1) as usize) >> (BITS_PER_LONG as usize - rem)
++            } else {
++                0
++            };
++            let upper = *src.add(k as usize) << rem;
++            *dst.add((k + off) as usize) = lower | upper;
++            k -= 1;
++        }
++        if off != 0 {
++            core::ptr::write_bytes(dst, 0, off as usize);
++        }
++    }
++}
++
++/// Remove the `[first, first+cut)` bit region from `src` and right-shift
++/// the remaining bits into `dst` (which may overlap `src`).
++///
++/// # Safety
++/// `dst`/`src` each have at least `bits_to_longs(nbits)` valid `usize`s.
++#[export]
++pub unsafe extern "C" fn bitmap_cut(
++    dst: *mut c_ulong,
++    src: *const c_ulong,
++    first: c_uint,
++    mut cut: c_uint,
++    nbits: c_uint,
++) {
++    let len = bits_to_longs(nbits as usize);
++    let first = first as usize;
++    let mut keep: c_ulong = 0;
++
++    // SAFETY: per function contract.
++    unsafe {
++        if first % BITS_PER_LONG as usize != 0 {
++            keep = *src.add(first / BITS_PER_LONG as usize)
++                & (c_ulong::MAX >> (BITS_PER_LONG as usize - first % BITS_PER_LONG as usize));
++        }
++
++        bindings::memmove(dst.cast(), src.cast(), len * core::mem::size_of::<c_ulong>());
++
++        while cut > 0 {
++            cut -= 1;
++            let mut i = first / BITS_PER_LONG as usize;
++            while i < len {
++                let carry = if i < len - 1 { *dst.add(i + 1) & 1 } else { 0 };
++                *dst.add(i) = (*dst.add(i) >> 1) | (carry << (BITS_PER_LONG as usize - 1));
++                i += 1;
++            }
++        }
++
++        *dst.add(first / BITS_PER_LONG as usize) &= c_ulong::MAX << (first % BITS_PER_LONG as usize);
++        *dst.add(first / BITS_PER_LONG as usize) |= keep;
++    }
++}
++
++/// `dst = bitmap1 & bitmap2` over `bits` bits. Returns true iff any bit
++/// in `dst` ends up set.
++///
++/// # Safety
++/// `dst`/`bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)`
++/// valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_and(
++    dst: *mut c_ulong,
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> bool {
++    let bits = bits as usize;
++    let lim = bits / BITS_PER_LONG as usize;
++    let mut result: c_ulong = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..lim {
++            let v = *bitmap1.add(k) & *bitmap2.add(k);
++            *dst.add(k) = v;
++            result |= v;
++        }
++        if bits % BITS_PER_LONG as usize != 0 {
++            let v = *bitmap1.add(lim) & *bitmap2.add(lim) & bitmap_last_word_mask(bits) as c_ulong;
++            *dst.add(lim) = v;
++            result |= v;
++        }
++    }
++    result != 0
++}
++
++/// `dst = bitmap1 | bitmap2` over `bits` bits.
++///
++/// # Safety
++/// `dst`/`bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)`
++/// valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_or(
++    dst: *mut c_ulong,
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) {
++    let nr = bits_to_longs(bits as usize);
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..nr {
++            *dst.add(k) = *bitmap1.add(k) | *bitmap2.add(k);
++        }
++    }
++}
++
++/// `dst = bitmap1 ^ bitmap2` over `bits` bits.
++///
++/// # Safety
++/// `dst`/`bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)`
++/// valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_xor(
++    dst: *mut c_ulong,
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) {
++    let nr = bits_to_longs(bits as usize);
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..nr {
++            *dst.add(k) = *bitmap1.add(k) ^ *bitmap2.add(k);
++        }
++    }
++}
++
++/// `dst = bitmap1 & ~bitmap2` over `bits` bits. Returns true iff any bit
++/// in `dst` ends up set.
++///
++/// # Safety
++/// `dst`/`bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)`
++/// valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_andnot(
++    dst: *mut c_ulong,
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> bool {
++    let bits = bits as usize;
++    let lim = bits / BITS_PER_LONG as usize;
++    let mut result: c_ulong = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..lim {
++            let v = *bitmap1.add(k) & !*bitmap2.add(k);
++            *dst.add(k) = v;
++            result |= v;
++        }
++        if bits % BITS_PER_LONG as usize != 0 {
++            let v = *bitmap1.add(lim) & !*bitmap2.add(lim) & bitmap_last_word_mask(bits) as c_ulong;
++            *dst.add(lim) = v;
++            result |= v;
++        }
++    }
++    result != 0
++}
++
++/// `dst = (old & ~mask) | (new & mask)` over `nbits` bits.
++///
++/// # Safety
++/// `dst`/`old`/`new`/`mask` each have at least `bits_to_longs(nbits)`
++/// valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_replace(
++    dst: *mut c_ulong,
++    old: *const c_ulong,
++    new: *const c_ulong,
++    mask: *const c_ulong,
++    nbits: c_uint,
++) {
++    let nr = bits_to_longs(nbits as usize);
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..nr {
++            *dst.add(k) = (*old.add(k) & !*mask.add(k)) | (*new.add(k) & *mask.add(k));
++        }
++    }
++}
++
++/// True iff `bitmap1 & bitmap2` has any bit set, over `bits` bits.
++///
++/// # Safety
++/// `bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)` valid
++/// `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_intersects(
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> bool {
++    let bits = bits as usize;
++    let lim = bits / BITS_PER_LONG as usize;
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..lim {
++            if *bitmap1.add(k) & *bitmap2.add(k) != 0 {
++                return true;
++            }
++        }
++        if bits % BITS_PER_LONG as usize != 0
++            && (*bitmap1.add(lim) & *bitmap2.add(lim)) & bitmap_last_word_mask(bits) as c_ulong != 0
++        {
++            return true;
++        }
++    }
++    false
++}
++
++/// True iff `bitmap1` is a subset of `bitmap2`, over `bits` bits.
++///
++/// # Safety
++/// `bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)` valid
++/// `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_subset(
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> bool {
++    let bits = bits as usize;
++    let lim = bits / BITS_PER_LONG as usize;
++    // SAFETY: per function contract.
++    unsafe {
++        for k in 0..lim {
++            if *bitmap1.add(k) & !*bitmap2.add(k) != 0 {
++                return false;
++            }
++        }
++        if bits % BITS_PER_LONG as usize != 0
++            && (*bitmap1.add(lim) & !*bitmap2.add(lim)) & bitmap_last_word_mask(bits) as c_ulong != 0
++        {
++            return false;
++        }
++    }
++    true
++}
++
++/// `BITMAP_WEIGHT(FETCH, bits)` (this file's own macro) — reimplemented
++/// as a closure-taking helper since Rust has no textual-macro
++/// equivalent; each `FETCH` C usage below (a plain index or a
++/// side-effecting `dst[idx] = ...; dst[idx]` compound) becomes its own
++/// closure capturing exactly the same reads/writes in the same order.
++#[inline]
++fn bitmap_weight_generic(bits: usize, mut fetch: impl FnMut(usize) -> c_ulong) -> u32 {
++    let mut w = 0u32;
++    for idx in 0..bits / BITS_PER_LONG as usize {
++        w += hweight_long(fetch(idx) as usize);
++    }
++    if bits % BITS_PER_LONG as usize != 0 {
++        let idx = bits / BITS_PER_LONG as usize;
++        w += hweight_long((fetch(idx) & bitmap_last_word_mask(bits) as c_ulong) as usize);
++    }
++    w
++}
++
++/// Count the set bits in `bitmap` over `bits` bits.
++///
++/// # Safety
++/// `bitmap` has at least `bits_to_longs(bits)` valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_weight(bitmap: *const c_ulong, bits: c_uint) -> c_uint {
++    // SAFETY: per function contract.
++    bitmap_weight_generic(bits as usize, |idx| unsafe { *bitmap.add(idx) })
++}
++
++/// Count the set bits in `bitmap1 & bitmap2` over `bits` bits.
++///
++/// # Safety
++/// `bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)` valid
++/// `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_weight_and(
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> c_uint {
++    // SAFETY: per function contract.
++    bitmap_weight_generic(bits as usize, |idx| unsafe {
++        *bitmap1.add(idx) & *bitmap2.add(idx)
++    })
++}
++
++/// Count the set bits in `bitmap1 & ~bitmap2` over `bits` bits.
++///
++/// # Safety
++/// `bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)` valid
++/// `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_weight_andnot(
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> c_uint {
++    // SAFETY: per function contract.
++    bitmap_weight_generic(bits as usize, |idx| unsafe {
++        *bitmap1.add(idx) & !*bitmap2.add(idx)
++    })
++}
++
++/// `dst = bitmap1 | bitmap2`; returns the popcount of `dst`, over `bits` bits.
++///
++/// # Safety
++/// `dst`/`bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)`
++/// valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_weighted_or(
++    dst: *mut c_ulong,
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> c_uint {
++    // SAFETY: per function contract.
++    bitmap_weight_generic(bits as usize, |idx| unsafe {
++        let v = *bitmap1.add(idx) | *bitmap2.add(idx);
++        *dst.add(idx) = v;
++        v
++    })
++}
++
++/// `dst = bitmap1 ^ bitmap2`; returns the popcount of `dst`, over `bits` bits.
++///
++/// # Safety
++/// `dst`/`bitmap1`/`bitmap2` each have at least `bits_to_longs(bits)`
++/// valid `usize`s.
++#[export]
++pub unsafe extern "C" fn __bitmap_weighted_xor(
++    dst: *mut c_ulong,
++    bitmap1: *const c_ulong,
++    bitmap2: *const c_ulong,
++    bits: c_uint,
++) -> c_uint {
++    // SAFETY: per function contract.
++    bitmap_weight_generic(bits as usize, |idx| unsafe {
++        let v = *bitmap1.add(idx) ^ *bitmap2.add(idx);
++        *dst.add(idx) = v;
++        v
++    })
++}
++
++/// Set `len` bits starting at bit `start` in `map` (non-atomic,
++/// word-granular fast path — does NOT call the atomic `set_bit`).
++///
++/// # Safety
++/// `map` has enough valid `usize`s to cover bits `[start, start+len)`.
++#[export]
++pub unsafe extern "C" fn __bitmap_set(map: *mut c_ulong, start: c_uint, len: c_int) {
++    let start = start as usize;
++    let size = start as isize + len as isize;
++    let mut bits_to_set = BITS_PER_LONG as isize - (start % BITS_PER_LONG as usize) as isize;
++    let mut mask_to_set = bitmap_first_word_mask(start) as c_ulong;
++    let mut len = len as isize;
++
++    // SAFETY: per function contract; `p` walks exactly the words the C
++    // does (BIT_WORD(start) initial offset, +1 per loop iteration).
++    unsafe {
++        let mut p = map.add(bit_word(start));
++        while len - bits_to_set >= 0 {
++            *p |= mask_to_set;
++            len -= bits_to_set;
++            bits_to_set = BITS_PER_LONG as isize;
++            mask_to_set = c_ulong::MAX;
++            p = p.add(1);
++        }
++        if len != 0 {
++            mask_to_set &= bitmap_last_word_mask(size as usize) as c_ulong;
++            *p |= mask_to_set;
++        }
++    }
++}
++
++/// Clear `len` bits starting at bit `start` in `map` (non-atomic,
++/// word-granular fast path — does NOT call the atomic `clear_bit`).
++///
++/// # Safety
++/// `map` has enough valid `usize`s to cover bits `[start, start+len)`.
++#[export]
++pub unsafe extern "C" fn __bitmap_clear(map: *mut c_ulong, start: c_uint, len: c_int) {
++    let start = start as usize;
++    let size = start as isize + len as isize;
++    let mut bits_to_clear = BITS_PER_LONG as isize - (start % BITS_PER_LONG as usize) as isize;
++    let mut mask_to_clear = bitmap_first_word_mask(start) as c_ulong;
++    let mut len = len as isize;
++
++    // SAFETY: per function contract; `p` walks exactly the words the C
++    // does (BIT_WORD(start) initial offset, +1 per loop iteration).
++    unsafe {
++        let mut p = map.add(bit_word(start));
++        while len - bits_to_clear >= 0 {
++            *p &= !mask_to_clear;
++            len -= bits_to_clear;
++            bits_to_clear = BITS_PER_LONG as isize;
++            mask_to_clear = c_ulong::MAX;
++            p = p.add(1);
++        }
++        if len != 0 {
++            mask_to_clear &= bitmap_last_word_mask(size as usize) as c_ulong;
++            *p &= !mask_to_clear;
++        }
++    }
++}
++
++/// Find a contiguous, aligned zero area of `nr` bits in `map` (of
++/// `size` bits), searching from `start`.
++///
++/// # Safety
++/// `map` has at least `bits_to_longs(size)` valid `usize`s.
++#[export]
++pub unsafe extern "C" fn bitmap_find_next_zero_area_off(
++    map: *mut c_ulong,
++    size: c_ulong,
++    mut start: c_ulong,
++    nr: c_uint,
++    align_mask_: c_ulong,
++    align_offset: c_ulong,
++) -> c_ulong {
++    loop {
++        // SAFETY: per function contract; `bindings::_find_next_zero_bit`
++        // /`_find_next_bit` are this project's already-translated
++        // lib/find_bit_rs.rs exports (rule 0021 cross-TU call).
++        let mut index = unsafe { bindings::_find_next_zero_bit(map, size, start) };
++
++        // Align allocation.
++        index = align_mask((index + align_offset) as usize, align_mask_ as usize) as c_ulong
++            - align_offset;
++
++        let end = index + nr as c_ulong;
++        if end > size {
++            return end;
++        }
++        // SAFETY: per function contract.
++        let i = unsafe { bindings::_find_next_bit(map, end, index) };
++        if i < end {
++            start = i + 1;
++            continue;
++        }
++        return index;
++    }
++}
++
++/// Copy a `u32` array (host byte order) into a bitmap.
++///
++/// # Safety
++/// `bitmap` has at least `bits_to_longs(nbits)` valid `usize`s; `buf`
++/// has at least `nbits.div_ceil(32)` valid `u32`s.
++#[export]
++pub unsafe extern "C" fn bitmap_from_arr32(bitmap: *mut c_ulong, buf: *const u32, nbits: c_uint) {
++    let halfwords = (nbits as usize).div_ceil(32);
++    // SAFETY: per function contract; `i` and `i+1` (when read) both stay
++    // < halfwords, matching the C's own `++i < halfwords` guard exactly.
++    unsafe {
++        let mut i = 0usize;
++        while i < halfwords {
++            *bitmap.add(i / 2) = *buf.add(i) as c_ulong;
++            i += 1;
++            if i < halfwords {
++                *bitmap.add(i / 2) |= (*buf.add(i) as c_ulong) << 32;
++            }
++            i += 1;
++        }
++
++        // Clear tail bits in last word beyond nbits.
++        if (nbits as usize) % BITS_PER_LONG as usize != 0 {
++            *bitmap.add((halfwords - 1) / 2) &= bitmap_last_word_mask(nbits as usize) as c_ulong;
++        }
++    }
++}
++
++/// Copy a bitmap into a `u32` array (host byte order).
++///
++/// # Safety
++/// `buf` has at least `nbits.div_ceil(32)` valid `u32`s; `bitmap` has at
++/// least `bits_to_longs(nbits)` valid `usize`s.
++#[export]
++pub unsafe extern "C" fn bitmap_to_arr32(buf: *mut u32, bitmap: *const c_ulong, nbits: c_uint) {
++    let halfwords = (nbits as usize).div_ceil(32);
++    // SAFETY: per function contract; matches bitmap_from_arr32's own
++    // `++i < halfwords` guard exactly.
++    unsafe {
++        let mut i = 0usize;
++        while i < halfwords {
++            *buf.add(i) = (*bitmap.add(i / 2) & u32::MAX as c_ulong) as u32;
++            i += 1;
++            if i < halfwords {
++                *buf.add(i) = (*bitmap.add(i / 2) >> 32) as u32;
++            }
++            i += 1;
++        }
++
++        // Clear tail bits in last element of array beyond nbits.
++        if (nbits as usize) % BITS_PER_LONG as usize != 0 {
++            *buf.add(halfwords - 1) &=
++                (u32::MAX as u64 >> (nbits.wrapping_neg() & 31)) as u32;
++        }
++    }
++}
+-- 
+2.55.0
+
