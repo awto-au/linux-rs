@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "arch-override-dead-generic"
+version = 1
+tier = 1
+category = "process"
+
+[match]
+c = "a function in the C original is wrapped in #ifndef <name> ... #endif, and the target arch's asm/<header>.h does '#define <name> <name>' + provides its own extern/inline implementation — the generic version in THIS file never compiles for the target arch at all (verify: grep the arch header for a #define matching the #ifndef guard name, before assuming the function is real)"
+family = "MACROSTMT:ifndef-arch-override"
+constraints = [
+  "do NOT translate the guarded-out function — it is not part of the build for this target, translating it would add a symbol that never existed in the C build (a fabricated addition, not a translation)",
+  "if OTHER functions in the same TU call the guarded-out name (e.g. csum_partial calling do_csum), they must call the REAL arch implementation via bindings::<name> (rule 0021 cross-TU-call), not a locally reimplemented copy — the arch version may have materially different behavior/performance characteristics (see lib/checksum.c: arch/riscv/lib/csum.c's do_csum is a whole separate word-aligned-fast-path implementation, not equivalent line-for-line to the generic one)",
+  "verify via System.map after build: the symbol's address must NOT be inside this TU's .o — if it links into checksum_rs.o instead of arch/riscv/lib/csum.o, the arch override didn't take and something is wrong",
+]
+
+[emit]
+kind = "vanishes"
+rust = "skip the function entirely; document in the module doc comment WHY (cite the arch header's #define + real implementation file)"
+deviations = ["none — this is scope reduction to match the actual C build, not a semantic change to anything that does build"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["caught during lib/checksum.c translation: riscv overrides BOTH do_csum and ip_fast_csum via arch/riscv/include/asm/checksum.h + arch/riscv/lib/csum.c; first draft translated do_csum/ip_fast_csum as if they were real, causing a link error only caught because ip_fast_csum's #[export] failed against a header prototype that riscv's asm-generic/checksum.h #ifndef also excludes — a lucky catch, not a systematic one; this rule exists so future TUs check the arch header FIRST"]
+
+[validation]
+instances = ["lib/checksum.c: do_csum + ip_fast_csum skipped (arch/riscv/lib/csum.c owns both); csum_partial/ip_compute_csum translated calling bindings::do_csum (the real, riscv, symbol)"]
+oracle = "tier4"
+negative = ["#ifdef/#ifndef gates on CONFIG_ options (e.g. BITS_PER_LONG==32) — that's ordinary dead-code-for-this-config, already covered by existing per-TU practice, not this rule specifically", "arch overrides that are THEMSELVES translated later — once arch/riscv/lib/csum.c is translated, csum_partial's bindings::do_csum call becomes a same-language call again, no change needed to csum_partial itself"]
+human_review = false

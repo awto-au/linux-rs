@@ -1,0 +1,170 @@
+From 4b6fb04ef3c18c08196ecae3deea142522fe0b06 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 16:10:20 +1000
+Subject: [PATCH] lib: translate checksum to Rust (linux-rs TU 21)
+
+IP/TCP/UDP checksum routines. Real finding during translation: riscv
+overrides BOTH do_csum and ip_fast_csum via arch/riscv/include/asm/
+checksum.h (#define + real implementation in arch/riscv/lib/csum.c) --
+lib/checksum.c's own generic versions of those two are #ifndef-guarded
+out and never compile for our target at all. Only csum_partial,
+ip_compute_csum, and csum_tcpudp_nofold actually build; the first two
+call the REAL (arch) do_csum via bindings::do_csum per rule 0021, not a
+reimplementation -- riscv's do_csum is a materially different
+word-aligned-fast-path implementation, not equivalent to the generic
+byte-at-a-time version that would have been wrong to translate as if
+it were live code.
+
+New rule 0026 (arch-override-dead-generic): before translating any
+#ifndef-guarded function, check whether the target arch's asm/ header
+#defines it away -- this is the same class of mistake as translating
+dead #ifdef code, but crosses into a different TU (the arch override
+provides the REAL implementation elsewhere) rather than being simply
+absent.
+
+Validated: builds, boots, all suites green (incl. bitops 34/34,
+cmdline 4/4 -- picked up new since TU 19/20 landed by the earlier
+background agent). Symbols verified in System.map: csum_partial/
+ip_compute_csum/csum_tcpudp_nofold link from checksum_rs.o; do_csum
+links from arch/riscv/lib/csum.o, confirming the arch override took.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |  9 +++-
+ lib/checksum_rs.rs              | 87 +++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |  1 +
+ 3 files changed, 96 insertions(+), 1 deletion(-)
+ create mode 100644 lib/checksum_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 747d97c8f044..3daf57a15c5d 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -224,7 +224,7 @@ obj-$(CONFIG_NLATTR) += nlattr.o
+ 
+ obj-$(CONFIG_LRU_CACHE) += lru_cache.o
+ 
+-obj-$(CONFIG_GENERIC_CSUM) += checksum.o
++obj-$(CONFIG_GENERIC_CSUM) +=
+ 
+ obj-$(CONFIG_GENERIC_ATOMIC64) += atomic64.o
+ 
+@@ -408,3 +408,10 @@ obj-y += memweight_rs.o
+ else
+ obj-y += memweight.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-$(CONFIG_GENERIC_CSUM) += checksum_rs.o
++else
++obj-$(CONFIG_GENERIC_CSUM) += checksum.o
++endif
+diff --git a/lib/checksum_rs.rs b/lib/checksum_rs.rs
+new file mode 100644
+index 000000000000..375e0d300888
+--- /dev/null
++++ b/lib/checksum_rs.rs
+@@ -0,0 +1,87 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++//! IP/TCP/UDP checksumming routines — Rust translation of `lib/checksum.c`.
++//!
++//! Authors (original C): Jorge Cwik, Arnt Gulbrandsen, Tom May, Andreas
++//! Schwab; revised by Kenneth Albanowski.
++//!
++//! **riscv provides its own `do_csum` and `ip_fast_csum`**
++//! (`arch/riscv/include/asm/checksum.h`: `#define do_csum do_csum` /
++//! `#define ip_fast_csum ip_fast_csum`, real implementation in
++//! `arch/riscv/lib/csum.c`), which `#ifndef`-guards `lib/checksum.c`'s
++//! own generic `do_csum`/`ip_fast_csum` out of the build entirely on
++//! this arch — they are dead code here, not translated (same "riscv
++//! overrides the generic path" shape as `int_sqrt64`'s `BITS_PER_LONG`
++//! guard). Only `csum_partial`, `ip_compute_csum`, and
++//! `csum_tcpudp_nofold` actually compile for our target; they call the
++//! real (arch) `do_csum` via `bindings::do_csum`, per rule 0021
++//! (cross-TU C call — `do_csum` lives in a different, untranslated TU).
++//!
++//! `__sum16`/`__wsum`/`__be32` are sparse-only `__bitwise` annotations,
++//! invisible to bindgen; they collapse to plain `u16`/`u32` here exactly
++//! as they do for the C build.
++
++use kernel::bindings;
++use kernel::ffi::{c_int, c_void};
++use kernel::prelude::*;
++
++/// Header-inline `from64to32` (only used by `csum_tcpudp_nofold` in this
++/// TU), reimplemented per rule 0016.
++#[inline]
++fn from64to32(mut x: u64) -> u32 {
++    // add up 32-bit and 32-bit for 32+c bit
++    x = (x & 0xffffffff).wrapping_add(x >> 32);
++    // add up carry..
++    x = (x & 0xffffffff).wrapping_add(x >> 32);
++    x as u32
++}
++
++/// Computes the checksum of a memory block at `buff`, adding in `wsum`.
++///
++/// # Safety
++/// `buff` points to `len` valid bytes when `len > 0` (C ABI contract);
++/// must be called with even `len` except for the last fragment.
++#[export]
++pub unsafe extern "C" fn csum_partial(buff: *const c_void, len: c_int, wsum: u32) -> u32 {
++    // SAFETY: per function contract; do_csum is the real (arch) symbol,
++    // same contract.
++    let result_csum = unsafe { bindings::do_csum(buff.cast(), len) };
++    let mut result = result_csum;
++
++    // add in old sum, and carry..
++    result = result.wrapping_add(wsum);
++    if wsum > result {
++        result = result.wrapping_add(1);
++    }
++    result
++}
++
++/// Miscellaneous IP-like checksum (e.g. ICMP).
++///
++/// # Safety
++/// `buff` points to `len` valid bytes when `len > 0` (C ABI contract).
++#[export]
++pub unsafe extern "C" fn ip_compute_csum(buff: *const c_void, len: c_int) -> u16 {
++    // SAFETY: per function contract.
++    let sum = unsafe { bindings::do_csum(buff.cast(), len) };
++    !(sum as u16)
++}
++
++/// TCP/UDP pseudo-header checksum, unfolded (32-bit result).
++#[export]
++pub unsafe extern "C" fn csum_tcpudp_nofold(
++    saddr: u32,
++    daddr: u32,
++    len: u32,
++    proto: u8,
++    sum: u32,
++) -> u32 {
++    let mut s: u64 = sum as u64;
++
++    s += saddr as u64;
++    s += daddr as u64;
++    // __LITTLE_ENDIAN branch — riscv is always LE, matches the C's
++    // #ifdef __LITTLE_ENDIAN arm exactly.
++    s += ((proto as u32).wrapping_add(len) as u64) << 8;
++
++    from64to32(s)
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index eb75b37aa2a5..ad14cce3a868 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -107,6 +107,7 @@
+ #include <linux/wait.h>
+ #include <linux/win_minmax.h>
+ #include <linux/workqueue.h>
++#include <net/checksum.h>
+ #include <linux/xarray.h>
+ #include <trace/events/rust_sample.h>
+ 
+-- 
+2.55.0
+
