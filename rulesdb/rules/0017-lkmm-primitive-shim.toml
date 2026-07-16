@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "lkmm-primitive-shim"
+version = 1
+tier = 3
+category = "region"
+
+[match]
+c = "lock-free code built from LKMM primitives: smp_load_acquire / smp_store_release / READ_ONCE / WRITE_ONCE / try_cmpxchg / cmpxchg loops on shared fields"
+constraints = [
+  "one C shim PER primitive PER operand type/field — NEVER genericised (the operand type and location are part of the ordering contract)",
+  "the shim compiles the C macro, so LKMM semantics hold by construction",
+  "try_cmpxchg shims must preserve the update-old-on-failure contract",
+  "control flow may be translated; ordering may NOT be reimplemented in Rust core::sync::atomic (different memory model)",
+  "future lift target is kernel::sync::atomic (LKMM-backed) — a separate, human-reviewed change",
+]
+
+[emit]
+kind = "rewrite"
+rust = "rust/helpers/<subsystem>.c shims (rule 0014 pattern) + translated control flow calling bindings::<shim>"
+deviations = ["a call boundary where C had an inlined macro — LTO/inlining recovers most of it; ordering unchanged"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["rust/helpers precedent; kernel::sync::atomic exists but ergonomics for C-shared struct fields not yet established in v7.1"]
+
+[validation]
+instances = ["lib/llist.c:llist_del_first", "lib/llist.c:llist_del_first_this"]
+oracle = "tier4"  # boot exercises llist via vmalloc deferred-free / workqueue paths
+negative = ["seqlocks, RCU dereference chains, per-CPU ops — separate rules, do not stretch this one", "any site where the C relied on the primitive being inlined for ordering wrt surrounding non-shim accesses — review individually"]
+human_review = true

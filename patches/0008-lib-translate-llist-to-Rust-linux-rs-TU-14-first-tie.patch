@@ -1,0 +1,220 @@
+From b24f1806bcb2aec79645a5c247e53b27d054dcd7 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 12:32:35 +1000
+Subject: [PATCH] =?UTF-8?q?lib:=20translate=20llist=20to=20Rust=20(linux-r?=
+ =?UTF-8?q?s=20TU=2014=20=E2=80=94=20first=20tier-3,=20LKMM=20via=20shims)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Lock-less list, the first concurrency TU. Per rule 0017: the LKMM
+primitives (smp_load_acquire, READ_ONCE, try_cmpxchg incl. its
+update-old-on-failure contract) stay compiled in C as per-primitive,
+per-operand shims in rust/helpers/llist.c; only control flow is
+translated. Ordering is NOT reimplemented in Rust — kernel::sync::atomic
+lift is a separate, human-reviewed future step.
+
+Validated: full regression boot green; note the boot itself exercises
+llist (vmalloc deferred-free, workqueue paths), so this is live runtime
+validation, not just suites. Symbols verified from llist_rs.o.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                                  |  9 +-
+ ...sort_rs.long-type-10615849954176688067.txt |  1 +
+ lib/llist_rs.rs                               | 86 +++++++++++++++++++
+ rust/bindings/bindings_helper.h               |  1 +
+ rust/helpers/helpers.c                        |  1 +
+ rust/helpers/llist.c                          | 31 +++++++
+ 6 files changed, 128 insertions(+), 1 deletion(-)
+ create mode 100644 lib/list_sort_rs.long-type-10615849954176688067.txt
+ create mode 100644 lib/llist_rs.rs
+ create mode 100644 rust/helpers/llist.c
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 840b1b1bb92e..446976dca4a0 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -61,7 +61,7 @@ endif
+ obj-y += parser.o debug_locks.o random32.o \
+ 	 bust_spinlocks.o kasprintf.o bitmap.o scatterlist.o \
+ 	 uuid.o iov_iter.o clz_ctz.o \
+-	 bsearch.o find_bit.o llist.o lwq.o memweight.o kfifo.o \
++	 bsearch.o find_bit.o lwq.o memweight.o kfifo.o \
+ 	 percpu-refcount.o rhashtable.o \
+ 	 once.o refcount.o rcuref.o usercopy.o errseq.o bucket_locks.o \
+ 	 generic-radix-tree.o bitmap-str.o
+@@ -366,3 +366,10 @@ lib-y += win_minmax_rs.o
+ else
+ lib-y += win_minmax.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += llist_rs.o
++else
++obj-y += llist.o
++endif
+diff --git a/lib/list_sort_rs.long-type-10615849954176688067.txt b/lib/list_sort_rs.long-type-10615849954176688067.txt
+new file mode 100644
+index 000000000000..743990c1c2e4
+--- /dev/null
++++ b/lib/list_sort_rs.long-type-10615849954176688067.txt
+@@ -0,0 +1 @@
++unsafe extern "C" fn(*mut c_void, *mut bindings::bindings_raw::list_head, Option<unsafe extern "C" fn(*mut c_void, *const bindings::bindings_raw::list_head, *const bindings::bindings_raw::list_head) -> i32>) {bindings::bindings_raw::list_sort}
+diff --git a/lib/llist_rs.rs b/lib/llist_rs.rs
+new file mode 100644
+index 000000000000..35e2b1fd964e
+--- /dev/null
++++ b/lib/llist_rs.rs
+@@ -0,0 +1,86 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Lock-less NULL-terminated singly linked list — Rust translation of
++//! `lib/llist.c`.
++//!
++//! Copyright 2010,2011 Intel Corp. (original algorithm, Huang Ying).
++//!
++//! TIER 3 (concurrency): the LKMM ordering primitives — `smp_load_acquire`,
++//! `READ_ONCE`, `try_cmpxchg` — stay compiled in C via per-primitive shims
++//! (rust/helpers/llist.c, rule 0014), so memory-ordering semantics are the
++//! C macros' by construction. Only control flow is translated. Lifting to
++//! `kernel::sync::atomic` (same LKMM model) is a later, separately-reviewed
++//! step. Concurrency contracts (single consumer for `llist_del_first`, …)
++//! are the C kernel-doc's, unchanged.
++
++use kernel::bindings::{self, llist_head, llist_node};
++use kernel::prelude::*;
++
++/// Delete the first entry of a lock-less list; NULL if empty.
++///
++/// Only ONE `llist_del_first` user may run concurrently with multiple
++/// `llist_add` users (see C kernel-doc for the ABA reasoning).
++#[export]
++pub unsafe extern "C" fn llist_del_first(head: *mut llist_head) -> *mut llist_node {
++    // SAFETY: head is a valid llist_head (C ABI contract); all shared-
++    // memory accesses go through the LKMM shims.
++    unsafe {
++        let mut entry = bindings::llist_load_acquire_first(head);
++        loop {
++            if entry.is_null() {
++                return core::ptr::null_mut();
++            }
++            let next = bindings::llist_read_once_next(entry);
++            // try_cmpxchg updates `entry` on failure, as in C.
++            if bindings::llist_try_cmpxchg_first(head, &mut entry, next) {
++                break;
++            }
++        }
++        entry
++    }
++}
++
++/// Delete `this` if it is the first entry; returns whether it was.
++///
++/// Multiple callers may run concurrently with `llist_add` callers,
++/// provided every caller offers a different `this`.
++#[export]
++pub unsafe extern "C" fn llist_del_first_this(
++    head: *mut llist_head,
++    this: *mut llist_node,
++) -> bool {
++    // SAFETY: as llist_del_first.
++    unsafe {
++        // C comment: acquire ensures ordering wrt try_cmpxchg in
++        // llist_del_first().
++        let mut entry = bindings::llist_load_acquire_first(head);
++        loop {
++            if entry != this {
++                return false;
++            }
++            let next = bindings::llist_read_once_next(entry);
++            if bindings::llist_try_cmpxchg_first(head, &mut entry, next) {
++                break;
++            }
++        }
++        true
++    }
++}
++
++/// Reverse the order of a (detached) llist chain; returns the new first
++/// entry. Pure pointer reversal — the chain is private to the caller, so
++/// no ordering primitives are involved (as in C).
++#[export]
++pub unsafe extern "C" fn llist_reverse_order(mut head: *mut llist_node) -> *mut llist_node {
++    let mut new_head: *mut llist_node = core::ptr::null_mut();
++
++    // SAFETY: caller owns the detached chain (C ABI contract).
++    unsafe {
++        while !head.is_null() {
++            let tmp = head;
++            head = (*head).next;
++            (*tmp).next = new_head;
++            new_head = tmp;
++        }
++    }
++    new_head
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index fa47dafa7f0f..d9500118165f 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -73,6 +73,7 @@
+ #include <linux/jump_label.h>
+ #include <linux/lcm.h>
+ #include <linux/list_sort.h>
++#include <linux/llist.h>
+ #include <linux/math.h>
+ #include <linux/mdio.h>
+ #include <linux/mm.h>
+diff --git a/rust/helpers/helpers.c b/rust/helpers/helpers.c
+index 625921e27dfb..ddf1737657ca 100644
+--- a/rust/helpers/helpers.c
++++ b/rust/helpers/helpers.c
+@@ -67,6 +67,7 @@
+ #include "jump_label.c"
+ #include "kunit.c"
+ #include "list.c"
++#include "llist.c"
+ #include "maple_tree.c"
+ #include "mm.c"
+ #include "mutex.c"
+diff --git a/rust/helpers/llist.c b/rust/helpers/llist.c
+new file mode 100644
+index 000000000000..41061331dc50
+--- /dev/null
++++ b/rust/helpers/llist.c
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <linux/llist.h>
++
++/* linux-rs rule 0014 (tier 3): LKMM ordering primitives for the translated
++ * lib/llist_rs.rs stay compiled in C, one shim per primitive per operand
++ * type — never genericised. Ordering semantics are those of the C macros
++ * by construction:
++ *   - smp_load_acquire on the list head
++ *   - READ_ONCE on a node's next pointer
++ *   - try_cmpxchg on the list head (updates *old on failure, as C does)
++ */
++__rust_helper struct llist_node *
++rust_helper_llist_load_acquire_first(struct llist_head *head)
++{
++	return smp_load_acquire(&head->first);
++}
++
++__rust_helper struct llist_node *
++rust_helper_llist_read_once_next(struct llist_node *node)
++{
++	return READ_ONCE(node->next);
++}
++
++__rust_helper bool
++rust_helper_llist_try_cmpxchg_first(struct llist_head *head,
++				    struct llist_node **entry,
++				    struct llist_node *next)
++{
++	return try_cmpxchg(&head->first, entry, next);
++}
+-- 
+2.55.0
+
