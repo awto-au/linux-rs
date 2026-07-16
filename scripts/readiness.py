@@ -23,10 +23,12 @@ from region_census import load_entries, process  # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 LOG = REPO / "tmp" / "readiness.log"
 
-TRANSLATED = [
-    "lib/math/gcd.c", "lib/math/lcm.c", "lib/math/int_log.c",
-    "lib/math/int_pow.c", "lib/math/int_sqrt.c", "lib/sort.c",
-]
+def translated_tus(tree: Path):
+    """Derive the translated set from <name>_rs.rs files in the worktree."""
+    return sorted(
+        str(f.relative_to(tree)).replace("_rs.rs", ".c")
+        for f in tree.glob("lib/**/*_rs.rs")
+    )
 
 
 def toks(fp):
@@ -51,8 +53,9 @@ def main() -> int:
         rel = e["file"].split(f"/{args.tree}/")[-1]
         by_rel[rel] = e
 
+    translated = translated_tus(REPO / args.tree)
     vocab = set()
-    for rel in TRANSLATED:
+    for rel in translated:
         e = by_rel.get(rel)
         if e is None:
             logging.warning("translated TU not in corpus: %s", rel)
@@ -62,11 +65,11 @@ def main() -> int:
             for fp in res[0]:
                 vocab |= toks(fp)
     logging.info("covered vocabulary: %d tokens from %d translated TUs",
-                 len(vocab), len(TRANSLATED))
+                 len(vocab), len(translated))
 
     rows = []
     for rel, e in sorted(by_rel.items()):
-        if rel in TRANSLATED or not fnmatch.fnmatch(rel, args.glob):
+        if rel in translated or not fnmatch.fnmatch(rel, args.glob):
             continue
         _, res = process(e)
         if not res:

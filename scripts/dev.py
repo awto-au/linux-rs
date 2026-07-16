@@ -99,6 +99,9 @@ def main() -> int:
     elif cmd == "check":
         kmake()
         boot()
+        sh(["python3", str(S / "report.py")], quiet_ok=False)
+    elif cmd == "report":
+        sh(["python3", str(S / "report.py")], quiet_ok=False)
     elif cmd == "config":
         opts = [a for a in rest if a != "-e"]
         sh([str(TREE / "scripts/config"), "--file", str(TREE / ".config"),

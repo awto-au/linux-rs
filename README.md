@@ -73,6 +73,9 @@ target ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)).
 
 ## Status
 
+**Live dashboard: [docs/STATUS.md](docs/STATUS.md)** — graphs + tables
+regenerated on every validated boot (`dev.py check`).
+
 | Date | Milestone |
 |---|---|
 | 2026-07-16 | Phase 0 complete: kernel v7.1 pinned, x86_64 defconfig+RUST, LLVM=1 build + QEMU boot verified, Rust-for-Linux working, coccinelle/c2rust evaluated ([docs/phase0-evals.md](docs/phase0-evals.md)) |
