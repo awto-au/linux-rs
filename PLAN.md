@@ -151,13 +151,32 @@ hundreds-not-tens-of-thousands of families, the thesis fails and we stop
 having spent no translation effort. The census is independently publishable/
 useful even then.
 
-### Phase 2 — one target end-to-end (exit: Rust translation running in-tree)
+### Phase 2 — the minimal riscv64 boot path (exit: Rust translation running in-tree)
 
-Target: `lib/` leaf functions (e.g. `lib/sort.c`, a CRC, string helpers) —
-pure, KUnit-testable, no concurrency. Emit unsafe-first Rust (via c2rust or
-our emitter per Phase 0 verdict), integrate via kbuild, pass oracle tiers
-1–4. Every manual fix made along the way must land as a **rule**, not a
-file patch — this phase forces the DB schema to be real.
+(Re-scoped 2026-07-16 per Dan: go straight at the shipping target's code
+path instead of an x86 `lib/` detour.)
+
+1. **Trim the corpus first.** Start from `ARCH=riscv` tinyconfig (rv64) and
+   cut everything not needed to prove life: no serial/TTY (aliveness =
+   heartbeat via GPIO/CSR poke from a kernel timer, not a console), no
+   block/net/USB/filesystems beyond the unavoidable VFS core, no modules,
+   no SMP, printk off or deferred. Measure the resulting corpus (TUs,
+   lines, statement families vs the lab corpus) — this is the *actual*
+   first-pass translation set. Deferred-and-added-later list documented.
+2. **Translate on that path, unsafe-first** (c2rust baseline + our rules),
+   file-by-file in-tree replacement, oracle tiers 1–4 (boot = heartbeat
+   observed under QEMU `-M virt` first; FPGA later).
+3. **Safe-version attempt using the kernel crate's rules**: for each
+   translated file, attempt a second version lifted onto Rust-for-Linux
+   `kernel` crate abstractions (locks→`Guard`, refcounts, `pr_*`) — the
+   Stage-3 safety lift run early on a small corpus, to find out what the
+   safe-wrapper rules need *before* Phase 3 scales them.
+4. Every manual fix must land as a **rule**, not a file patch — this phase
+   forces the DB schema to be real.
+
+The old Phase-2 `lib/` targets (sort/CRC, KUnit differential) remain the
+oracle-tier-3 test vehicle — pure functions are still where differential
+testing is cheapest — but the headline target is the rv64 boot path.
 
 ### Phase 3 — the learning loop (exit: agent-invented rules validated at scale)
 

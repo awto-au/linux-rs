@@ -43,6 +43,8 @@ nothing).
 | 2026-07-16 | Phase 0 complete: kernel v7.1 pinned, x86_64 defconfig+RUST, LLVM=1 build + QEMU boot verified, Rust-for-Linux working, coccinelle/c2rust evaluated ([docs/phase0-evals.md](docs/phase0-evals.md)) |
 | 2026-07-16 | Phase 1 v0 census: 85,773 functions fingerprinted in 76 s. Whole functions do **not** collapse (8.4%); external call vocabulary does (top-2000 APIs cover 51% of functions' call surface) ([docs/phase1-census-v0.md](docs/phase1-census-v0.md)) |
 | 2026-07-16 | **Phase 1 v1 census — GATE: GO.** 1.44M statement instances → 199 families cover 50%, 15 cover 25% ([docs/phase1-census-v1.md](docs/phase1-census-v1.md)) |
+| 2026-07-16 | **Phase 1 v2: tail is cheap composition.** Singleton statements have median **2** novel glue nodes; 91% of their AST is already-common subtrees ([docs/phase1-census-v2-composition.md](docs/phase1-census-v2-composition.md)) |
+| 2026-07-16 | Phase 2 re-scoped: minimal **riscv64** boot path (aliveness heartbeat, no serial), config-trim measurement first ([PLAN.md](PLAN.md)) |
 
 ## Layout
 
