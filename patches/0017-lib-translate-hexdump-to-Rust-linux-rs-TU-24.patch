@@ -1,0 +1,507 @@
+From ebe3740bc5206fa3bc58ada5a25e7f84d1d7bb41 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 16:30:49 +1000
+Subject: [PATCH] lib: translate hexdump to Rust (linux-rs TU 24)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |   9 +-
+ lib/hexdump_rs.rs               | 412 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ rust/helpers/print.c            |  28 +++
+ 4 files changed, 449 insertions(+), 1 deletion(-)
+ create mode 100644 lib/hexdump_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index b782127c5d13..1074f81590dd 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -66,7 +66,7 @@ obj-y += parser.o debug_locks.o random32.o \
+ 	 once.o refcount.o rcuref.o usercopy.o errseq.o bucket_locks.o \
+ 	 generic-radix-tree.o bitmap-str.o
+ obj-y += string_helpers.o
+-obj-y += hexdump.o
++obj-y +=
+ obj-$(CONFIG_TEST_HEXDUMP) += test_hexdump.o
+ obj-y += kstrtox.o
+ obj-$(CONFIG_FIND_BIT_BENCHMARK) += find_bit_benchmark.o
+@@ -429,3 +429,10 @@ lib-y += earlycpio_rs.o
+ else
+ lib-y += earlycpio.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += hexdump_rs.o
++else
++obj-y += hexdump.o
++endif
+diff --git a/lib/hexdump_rs.rs b/lib/hexdump_rs.rs
+new file mode 100644
+index 000000000000..015d9c118280
+--- /dev/null
++++ b/lib/hexdump_rs.rs
+@@ -0,0 +1,412 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Hex/ASCII dump helpers — Rust translation of `lib/hexdump.c`.
++//!
++//! Scope: `hex_to_bin`, `hex2bin`, `bin2hex`, `hex_dump_to_buffer` — the
++//! substantial, KUnit-exercisable core. `print_hex_dump` (thin `printk`-
++//! calling wrapper, `#ifdef CONFIG_PRINTK`) is deliberately left for a
++//! follow-up pass; scope note, not an oversight.
++//!
++//! `hex_to_bin`'s bit-trick is intentionally branchless/data-independent
++//! ("used to load cryptographic keys", per the C's own comment) —
++//! translated as the EXACT same arithmetic, not "simplified" to an if/
++//! match, which would reintroduce the timing-dependent branches the C
++//! deliberately avoids.
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_int, c_void};
++use kernel::prelude::*;
++
++/// Lowercase hex digit lookup table (`EXPORT_SYMBOL(hex_asc)` in the C).
++///
++/// `#[export]` (rust/macros/export.rs) only accepts `ItemFn` — it can't
++/// bindgen-typecheck a `static`. Other callers (`lib/vsprintf.c`,
++/// `lib/seq_buf.c`, still C) need the real `hex_asc` symbol to exist, so
++/// this is `#[no_mangle]` directly; in this non-modular kernel that's
++/// sufficient for `EXPORT_SYMBOL`'s only real effect (a resolvable
++/// `System.map` symbol), same as `#[export]` gives translated functions.
++#[no_mangle]
++pub static hex_asc: [u8; 17] = *b"0123456789abcdef\0";
++/// Uppercase hex digit lookup table (`EXPORT_SYMBOL(hex_asc_upper)`).
++#[no_mangle]
++pub static hex_asc_upper: [u8; 17] = *b"0123456789ABCDEF\0";
++
++/// `_P|_U|_L|_D|_SP` character-class bits (`<linux/ctype.h>`) needed by
++/// `isprint()`'s header-inline expansion, rule 0016.
++const CTYPE_P: u8 = 0x10;
++const CTYPE_U: u8 = 0x01;
++const CTYPE_L: u8 = 0x02;
++const CTYPE_D: u8 = 0x04;
++const CTYPE_SP: u8 = 0x80;
++
++/// `isprint(c)`/`isascii(c)` (`<linux/ctype.h>`), reimplemented per rule
++/// 0016. `isprint` indexes the real `_ctype[]` table (owned by
++/// `lib/ctype.c`, exposed by bindgen as `bindings::_ctype`) via
++/// `__ismask`'s exact `(int)(unsigned char)(x)` cast chain — same
++/// out-of-this-TU-bounds pointer indexing the C macro itself does.
++///
++/// # Safety
++/// `c` must be a value the real `_ctype[]` table (256 entries, indexed
++/// 0..=255 by `__ismask`'s cast) covers — true for any `u8`/`c_int`
++/// value that itself came from a `(unsigned char)`, as all call sites
++/// in this file do.
++#[inline]
++unsafe fn isprint(c: c_int) -> bool {
++    let idx = c as u8 as usize;
++    // SAFETY: per function contract; matches __ismask(x)'s own indexing.
++    let mask = unsafe { *bindings::_ctype.as_ptr().add(idx) };
++    (mask & (CTYPE_P | CTYPE_U | CTYPE_L | CTYPE_D | CTYPE_SP)) != 0
++}
++#[inline]
++fn isascii(c: c_int) -> bool {
++    (c as u32 as u8 as c_int) <= 0x7f
++}
++
++/// Header-inline `hex_asc_hi`/`hex_asc_lo`/`hex_byte_pack`
++/// (`<linux/hex.h>`), reimplemented per rule 0016 against our own
++/// `HEX_ASC` (this TU owns the real `hex_asc` symbol).
++#[inline]
++fn hex_asc_lo(x: u8) -> u8 {
++    hex_asc[(x & 0x0f) as usize]
++}
++#[inline]
++fn hex_asc_hi(x: u8) -> u8 {
++    hex_asc[((x & 0xf0) >> 4) as usize]
++}
++#[inline]
++unsafe fn hex_byte_pack(buf: *mut u8, byte: u8) -> *mut u8 {
++    // SAFETY: caller guarantees room for 2 bytes at `buf`.
++    unsafe {
++        *buf = hex_asc_hi(byte);
++        *buf.add(1) = hex_asc_lo(byte);
++        buf.add(2)
++    }
++}
++
++/// Convert a hex digit to its value, or -1 on bad input. Deliberately
++/// branchless (see module docs) — exact same bit arithmetic as the C.
++#[export]
++pub unsafe extern "C" fn hex_to_bin(ch: u8) -> c_int {
++    let cu = ch & 0xdf;
++    -1 + ((ch.wrapping_sub(b'0').wrapping_add(1)) as i32
++        & (((ch.wrapping_sub(b'9').wrapping_sub(1))
++            & (b'0'.wrapping_sub(1).wrapping_sub(ch))) as u32
++            >> 8) as i32)
++        + ((cu.wrapping_sub(b'A').wrapping_add(11)) as i32
++            & (((cu.wrapping_sub(b'F').wrapping_sub(1))
++                & (b'A'.wrapping_sub(1).wrapping_sub(cu))) as u32
++                >> 8) as i32)
++}
++
++/// Convert an ASCII hex string to binary. 0 on success, -EINVAL on bad input.
++///
++/// # Safety
++/// `dst` has room for `count` bytes; `src` has `2 * count` valid bytes.
++#[export]
++pub unsafe extern "C" fn hex2bin(dst: *mut u8, src: *const c_char, mut count: usize) -> c_int {
++    // SAFETY: per function contract; each iteration reads 2 bytes from
++    // src and writes 1 to dst, matching the C's own pointer walk.
++    unsafe {
++        let mut src = src.cast::<u8>();
++        let mut dst = dst;
++        while count > 0 {
++            count -= 1;
++            let hi = hex_to_bin(*src);
++            src = src.add(1);
++            if hi < 0 {
++                return -(bindings::EINVAL as c_int);
++            }
++            let lo = hex_to_bin(*src);
++            src = src.add(1);
++            if lo < 0 {
++                return -(bindings::EINVAL as c_int);
++            }
++            *dst = ((hi << 4) | lo) as u8;
++            dst = dst.add(1);
++        }
++    }
++    0
++}
++
++/// Convert binary data to an ASCII hex string; returns the end of `dst`.
++///
++/// # Safety
++/// `dst` has room for `2 * count` bytes; `src` has `count` valid bytes.
++#[export]
++pub unsafe extern "C" fn bin2hex(dst: *mut c_char, src: *const c_void, mut count: usize) -> *mut c_char {
++    // SAFETY: per function contract.
++    unsafe {
++        let mut dst = dst.cast::<u8>();
++        let mut src = src.cast::<u8>();
++        while count > 0 {
++            count -= 1;
++            dst = hex_byte_pack(dst, *src);
++            src = src.add(1);
++        }
++        dst.cast()
++    }
++}
++
++/// Convert one line (`rowsize` bytes) of data to a hex+ASCII dump in
++/// `linebuf`. Returns bytes written (excl. NUL), or the would-be length
++/// if truncated — see the C kernel-doc for the exact truncation contract.
++///
++/// # Safety
++/// `buf` has `len` valid bytes; `linebuf` has `linebuflen` valid bytes.
++#[export]
++pub unsafe extern "C" fn hex_dump_to_buffer(
++    buf: *const c_void,
++    mut len: usize,
++    mut rowsize: c_int,
++    mut groupsize: c_int,
++    linebuf: *mut c_char,
++    linebuflen: usize,
++    ascii: bool,
++) -> c_int {
++    if rowsize != 16 && rowsize != 32 {
++        rowsize = 16;
++    }
++    if len > rowsize as usize {
++        len = rowsize as usize; // limit to one line at a time
++    }
++    if !(groupsize > 0 && groupsize & (groupsize - 1) == 0) || groupsize > 8 {
++        groupsize = 1;
++    }
++    if len % groupsize as usize != 0 {
++        groupsize = 1; // no mixed size output
++    }
++
++    let ngroups = (len / groupsize as usize) as c_int;
++    let ascii_column = rowsize * 2 + rowsize / groupsize + 1;
++    let ptr = buf.cast::<u8>();
++    let linebuf_u8 = linebuf.cast::<u8>();
++
++    // SAFETY: every write below is bounds-checked against `linebuflen`
++    // immediately before, matching the C's own goto-overflow checks
++    // exactly (same check, same order, same truncation return value).
++    unsafe {
++        if linebuflen == 0 {
++            return overflow1(ascii, ascii_column, len as c_int, groupsize, ngroups);
++        }
++        if len == 0 {
++            *linebuf_u8 = 0;
++            return 0;
++        }
++
++        let mut lx: usize = 0;
++        let fmt8 = c"%s%16.16llx";
++        let fmt4 = c"%s%8.8x";
++        let fmt2 = c"%s%4.4x";
++        let sep = c" ";
++        let empty = c"";
++
++        if groupsize == 8 {
++            for j in 0..ngroups {
++                let v = ptr.add((j * 8) as usize).cast::<u64>().read_unaligned();
++                let ret = bindings::snprintf(
++                    linebuf.add(lx),
++                    linebuflen - lx,
++                    fmt8.as_ptr(),
++                    if j != 0 { sep.as_ptr() } else { empty.as_ptr() },
++                    v,
++                );
++                if ret as usize >= linebuflen - lx {
++                    return overflow1(ascii, ascii_column, len as c_int, groupsize, ngroups);
++                }
++                lx += ret as usize;
++            }
++        } else if groupsize == 4 {
++            for j in 0..ngroups {
++                let v = ptr.add((j * 4) as usize).cast::<u32>().read_unaligned();
++                let ret = bindings::snprintf(
++                    linebuf.add(lx),
++                    linebuflen - lx,
++                    fmt4.as_ptr(),
++                    if j != 0 { sep.as_ptr() } else { empty.as_ptr() },
++                    v,
++                );
++                if ret as usize >= linebuflen - lx {
++                    return overflow1(ascii, ascii_column, len as c_int, groupsize, ngroups);
++                }
++                lx += ret as usize;
++            }
++        } else if groupsize == 2 {
++            for j in 0..ngroups {
++                let v = ptr.add((j * 2) as usize).cast::<u16>().read_unaligned();
++                let ret = bindings::snprintf(
++                    linebuf.add(lx),
++                    linebuflen - lx,
++                    fmt2.as_ptr(),
++                    if j != 0 { sep.as_ptr() } else { empty.as_ptr() },
++                    v as c_int,
++                );
++                if ret as usize >= linebuflen - lx {
++                    return overflow1(ascii, ascii_column, len as c_int, groupsize, ngroups);
++                }
++                lx += ret as usize;
++            }
++        } else {
++            let mut j = 0usize;
++            while j < len {
++                if linebuflen < lx + 2 {
++                    return overflow2(linebuf_u8, &mut lx, ascii, ascii_column, len as c_int,
++                                     groupsize, ngroups);
++                }
++                let ch = *ptr.add(j);
++                *linebuf_u8.add(lx) = hex_asc_hi(ch);
++                lx += 1;
++                if linebuflen < lx + 2 {
++                    return overflow2(linebuf_u8, &mut lx, ascii, ascii_column, len as c_int,
++                                     groupsize, ngroups);
++                }
++                *linebuf_u8.add(lx) = hex_asc_lo(ch);
++                lx += 1;
++                if linebuflen < lx + 2 {
++                    return overflow2(linebuf_u8, &mut lx, ascii, ascii_column, len as c_int,
++                                     groupsize, ngroups);
++                }
++                *linebuf_u8.add(lx) = b' ';
++                lx += 1;
++                j += 1;
++            }
++            if j != 0 {
++                lx -= 1;
++            }
++        }
++        if !ascii {
++            *linebuf_u8.add(lx) = 0;
++            return lx as c_int;
++        }
++
++        while lx < ascii_column as usize {
++            if linebuflen < lx + 2 {
++                return overflow2(linebuf_u8, &mut lx, ascii, ascii_column, len as c_int,
++                                 groupsize, ngroups);
++            }
++            *linebuf_u8.add(lx) = b' ';
++            lx += 1;
++        }
++        for j in 0..len {
++            if linebuflen < lx + 2 {
++                return overflow2(linebuf_u8, &mut lx, ascii, ascii_column, len as c_int,
++                                 groupsize, ngroups);
++            }
++            let ch = *ptr.add(j);
++            *linebuf_u8.add(lx) = if isascii(ch as c_int) && isprint(ch as c_int) {
++                ch
++            } else {
++                b'.'
++            };
++            lx += 1;
++        }
++        *linebuf_u8.add(lx) = 0;
++        lx as c_int
++    }
++}
++
++const DUMP_PREFIX_NONE: c_int = 0;
++const DUMP_PREFIX_ADDRESS: c_int = 1;
++const DUMP_PREFIX_OFFSET: c_int = 2;
++
++/// Print a hex+ASCII dump of `buf` to the kernel log, one line at a time.
++/// `CONFIG_PRINTK`-gated in the C (`#ifdef CONFIG_PRINTK`); this kernel
++/// config has it set, and `mm/debug.c`'s `__dump_folio` calls it
++/// directly, so the symbol must exist unconditionally here.
++///
++/// # Safety
++/// `level`/`prefix_str` are valid NUL-terminated C strings; `buf` has
++/// `len` valid bytes.
++#[export]
++pub unsafe extern "C" fn print_hex_dump(
++    level: *const c_char,
++    prefix_str: *const c_char,
++    prefix_type: c_int,
++    mut rowsize: c_int,
++    groupsize: c_int,
++    buf: *const c_void,
++    len: usize,
++    ascii: bool,
++) -> () {
++    if rowsize != 16 && rowsize != 32 {
++        rowsize = 16;
++    }
++
++    let ptr = buf.cast::<u8>();
++    let mut remaining = len as isize;
++    // 32 * 3 + 2 + 32 + 1, exactly the C's `linebuf[32 * 3 + 2 + 32 + 1]`.
++    let mut linebuf = [0 as c_char; 32 * 3 + 2 + 32 + 1];
++
++    let mut i: usize = 0;
++    while (i as isize) < len as isize {
++        let linelen = core::cmp::min(remaining, rowsize as isize) as c_int;
++        remaining -= rowsize as isize;
++
++        // SAFETY: `ptr.add(i)` stays within the `len`-byte buffer per
++        // the caller contract (loop bound is `i < len`); `linebuf` is a
++        // fixed-size local the callee bounds-checks against its length.
++        unsafe {
++            hex_dump_to_buffer(
++                ptr.add(i).cast(),
++                linelen as usize,
++                rowsize,
++                groupsize,
++                linebuf.as_mut_ptr(),
++                linebuf.len(),
++                ascii,
++            );
++
++            match prefix_type {
++                DUMP_PREFIX_ADDRESS => {
++                    bindings::printk_hex_dump_address(
++                        level,
++                        prefix_str,
++                        ptr.add(i).cast(),
++                        linebuf.as_ptr(),
++                    );
++                }
++                DUMP_PREFIX_OFFSET => {
++                    bindings::printk_hex_dump_offset(
++                        level,
++                        prefix_str,
++                        i as c_int,
++                        linebuf.as_ptr(),
++                    );
++                }
++                DUMP_PREFIX_NONE | _ => {
++                    bindings::printk_hex_dump_none(level, prefix_str, linebuf.as_ptr());
++                }
++            }
++        }
++
++        i += rowsize as usize;
++    }
++}
++
++/// `overflow1:` label — the truncated-length return value.
++#[inline]
++fn overflow1(ascii: bool, ascii_column: c_int, len: c_int, groupsize: c_int, ngroups: c_int) -> c_int {
++    if ascii {
++        ascii_column + len
++    } else {
++        (groupsize * 2 + 1) * ngroups - 1
++    }
++}
++
++/// `overflow2:` label — NUL-terminate at the truncation point, then fall
++/// through to `overflow1`'s return value (exactly the C's fallthrough).
++#[inline]
++unsafe fn overflow2(
++    linebuf_u8: *mut u8,
++    lx: &mut usize,
++    ascii: bool,
++    ascii_column: c_int,
++    len: c_int,
++    groupsize: c_int,
++    ngroups: c_int,
++) -> c_int {
++    // SAFETY: caller has already bounds-checked room for 1 byte at `lx`.
++    unsafe {
++        *linebuf_u8.add(*lx) = 0;
++    }
++    *lx += 1;
++    overflow1(ascii, ascii_column, len, groupsize, ngroups)
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index e45bb4c8a541..7d6fb6128a04 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -29,6 +29,7 @@
+ #include <linux/base64.h>
+ #include <linux/decompress/generic.h>
+ #include <linux/earlycpio.h>
++#include <linux/hex.h>
+ #include <linux/hrtimer_types.h>
+ 
+ #include <linux/acpi.h>
+diff --git a/rust/helpers/print.c b/rust/helpers/print.c
+index 17d33bda1b34..9a16bfd0d832 100644
+--- a/rust/helpers/print.c
++++ b/rust/helpers/print.c
+@@ -20,3 +20,31 @@ __rust_helper void rust_helper_pr_warn_cpio_name_too_long(const char *p, int max
+ {
+ 	pr_warn("File %s exceeding MAX_CPIO_FILE_NAME [%d]\n", p, max);
+ }
++
++/*
++ * printk(fmt, ...) is itself printk_index_wrap(_printk, fmt, ...) — a
++ * build-time-indexing macro, same rule 0014 story as pr_debug/pr_warn
++ * above. One shim per print_hex_dump() switch branch (lib/hexdump.c).
++ */
++__rust_helper void rust_helper_printk_hex_dump_address(const char *level,
++							 const char *prefix_str,
++							 const void *addr,
++							 const char *linebuf)
++{
++	printk("%s%s%p: %s\n", level, prefix_str, addr, linebuf);
++}
++
++__rust_helper void rust_helper_printk_hex_dump_offset(const char *level,
++							const char *prefix_str,
++							int offset,
++							const char *linebuf)
++{
++	printk("%s%s%.8x: %s\n", level, prefix_str, offset, linebuf);
++}
++
++__rust_helper void rust_helper_printk_hex_dump_none(const char *level,
++						      const char *prefix_str,
++						      const char *linebuf)
++{
++	printk("%s%s%s\n", level, prefix_str, linebuf);
++}
+-- 
+2.55.0
+

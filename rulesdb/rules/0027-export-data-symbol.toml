@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "export-data-symbol"
+version = 1
+tier = 1
+category = "export"
+
+[match]
+c = "EXPORT_SYMBOL(x) where x is data (array/struct/scalar), not a function — e.g. hex_asc[]/hex_asc_upper[] in lib/hexdump.c"
+
+[emit]
+kind = "no-mangle-static"
+rust = "#[no_mangle] pub static <name>: T = ...; — the #[export] proc-macro (rust/macros/export.rs) only accepts syn::ItemFn, so it cannot bindgen-typecheck a static's type against the C declaration the way it does for functions. In this non-modular kernel EXPORT_SYMBOL's only real effect is a resolvable System.map symbol, which #[no_mangle] gives directly."
+deviations = ["no compile-time signature check against the bindgen declaration (unlike #[export] on functions) — verify the C type by hand (array length/element type) and confirm via System.map (nm/readelf) post-build that the symbol lands with the expected size"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = ["lib/hexdump.c: hex_asc[]/hex_asc_upper[] EXPORT_SYMBOL'd data, still referenced by not-yet-translated lib/vsprintf.c and lib/seq_buf.c — #[export] rejected the static with a syn ItemFn parse error, no existing rule covered it"]
+
+[validation]
+instances = ["lib/hexdump.c:hex_asc, hex_asc_upper (lib/hexdump_rs.rs)"]
+oracle = "tier4"
+negative = ["EXPORT_SYMBOL on a function — use #[export] as normal, it DOES typecheck those"]
+human_review = false
