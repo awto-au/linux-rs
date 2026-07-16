@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "c-abi-allocator-contract"
+version = 1
+tier = 2
+category = "api"
+
+[match]
+c = "a translated fn allocates with kmalloc/kmalloc_array/kzalloc and returns the raw pointer across the C ABI to a caller that frees it with kfree() (directly, or via a paired free fn like argv_free)"
+constraints = ["the allocation is caller-visible: some OTHER C (or future Rust) code calls kfree() on this pointer — the allocator is part of the function's ABI contract, not an implementation detail"]
+
+[emit]
+kind = "rewrite"
+rust = "shim kmalloc_array (rust/helpers/slab.c) and call it directly, returning a raw pointer — do NOT use kernel::alloc::{KVec,KBox} here, their Drop calls a different deallocator"
+deviations = ["none — this is the C allocator by construction, same as C"]
+
+[provenance]
+derivation = "independently derived"
+evidence = ["rust/helpers/slab.c precedent (krealloc_node_align, kvrealloc_node_align)"]
+
+[validation]
+instances = ["lib/memcat_p.c:__memcat_p", "lib/argv_split.c:argv_split (+ argv_free's matching kfree)"]
+oracle = "tier4"
+negative = ["allocations that stay entirely internal to one translated TU (never crossing back to C, never freed by a paired C-visible fn) — those CAN use kernel::alloc types freely"]
+human_review = false

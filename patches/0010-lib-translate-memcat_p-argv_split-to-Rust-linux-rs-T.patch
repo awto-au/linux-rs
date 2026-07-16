@@ -1,0 +1,335 @@
+From 5c889c7361eb1181bb521775223e3568c889e32c Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Thu, 16 Jul 2026 12:51:42 +1000
+Subject: [PATCH] lib: translate memcat_p, argv_split to Rust (linux-rs TUs
+ 16-17)
+
+memcat_p: merge two NULL-terminated void* arrays. C's single reverse-
+walking counter with a conditional source-pointer swap
+(p = p==b ? &a[nr] : p-1) empirically verified (see /tmp/verify_memcat.c
+in the session) to produce order [a..., b..., NULL] before translating,
+rather than trusting the pointer arithmetic by inspection -- reimplemented
+as two straightforward forward copies producing the same order.
+
+argv_split: whitespace tokenizer. Preserves the C's 'stash the backing
+allocation at argv[-1]' trick verbatim so argv_free's pointer arithmetic
+(argv--) works identically. New rule 0018: any translated fn whose
+kmalloc'd pointer crosses the C ABI to a caller-visible kfree() must use
+a raw kmalloc_array shim, NOT kernel::alloc::{KVec,KBox} (different
+deallocator) -- these two TUs are its first instances.
+
+New helpers: rust/helpers/ctype.c (isspace, a macro), rust/helpers/slab.c
++= kmalloc_array. Tier-2.5 diff oracle extended: 5,000 argv_split cases +
+1,666 memcat_p cases, byte-identical (bench/diff_argv_split.{c,rs}).
+
+Validated: full regression boot green, all symbols confirmed in
+System.map from the _rs.o objects.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |  18 ++++-
+ lib/argv_split_rs.rs            | 117 ++++++++++++++++++++++++++++++++
+ lib/memcat_p_rs.rs              |  59 ++++++++++++++++
+ rust/bindings/bindings_helper.h |   2 +
+ rust/helpers/ctype.c            |   8 +++
+ rust/helpers/helpers.c          |   1 +
+ rust/helpers/slab.c             |  13 ++++
+ 7 files changed, 216 insertions(+), 2 deletions(-)
+ create mode 100644 lib/argv_split_rs.rs
+ create mode 100644 lib/memcat_p_rs.rs
+ create mode 100644 rust/helpers/ctype.c
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 446976dca4a0..5e7aa446bdc6 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -35,11 +35,11 @@ endif
+ 
+ lib-y := ctype.o string.o vsprintf.o cmdline.o \
+ 	 rbtree.o radix-tree.o timerqueue.o xarray.o \
+-	 maple_tree.o idr.o extable.o irq_regs.o argv_split.o \
++	 maple_tree.o idr.o extable.o irq_regs.o \
+ 	 flex_proportions.o ratelimit.o \
+ 	 is_single_threaded.o plist.o decompress.o kobject_uevent.o \
+ 	 earlycpio.o seq_buf.o siphash.o dec_and_lock.o \
+-	 nmi_backtrace.o memcat_p.o \
++	 nmi_backtrace.o \
+ 	 buildid.o objpool.o iomem_copy.o sys_info.o
+ 
+ lib-$(CONFIG_UNION_FIND) += union_find.o
+@@ -373,3 +373,17 @@ obj-y += llist_rs.o
+ else
+ obj-y += llist.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++lib-y += memcat_p_rs.o
++else
++lib-y += memcat_p.o
++endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++lib-y += argv_split_rs.o
++else
++lib-y += argv_split.o
++endif
+diff --git a/lib/argv_split_rs.rs b/lib/argv_split_rs.rs
+new file mode 100644
+index 000000000000..3ed3ae650422
+--- /dev/null
++++ b/lib/argv_split_rs.rs
+@@ -0,0 +1,117 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Split a string into an argv-like array — Rust translation of
++//! `lib/argv_split.c`.
++//!
++//! The C stashes the backing string allocation at `argv[-1]` so
++//! `argv_free` can recover it from just the returned pointer; the
++//! pointer arithmetic (`argv--` / `argv[0]`) is preserved verbatim.
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_int};
++use kernel::prelude::*;
++
++fn is_space(c: u8) -> bool {
++    // SAFETY: isspace has no preconditions; c promoted to c_int as C does.
++    unsafe { bindings::isspace(c as c_int) != 0 }
++}
++
++fn count_argc(s: &[u8]) -> i32 {
++    let mut count = 0i32;
++    let mut was_space = true;
++    for &c in s {
++        if c == 0 {
++            break;
++        }
++        if is_space(c) {
++            was_space = true;
++        } else if was_space {
++            was_space = false;
++            count += 1;
++        }
++    }
++    count
++}
++
++/// Free an argv previously returned by `argv_split`.
++///
++/// # Safety
++/// `argv` must be a pointer previously returned by `argv_split`.
++#[export]
++pub unsafe extern "C" fn argv_free(argv: *mut *mut c_char) {
++    // SAFETY: argv_split always returns `base.add(1)`, so `argv.sub(1)`
++    // recovers the base slot holding the string allocation (C: argv--).
++    unsafe {
++        let base = argv.sub(1);
++        bindings::kfree((*base).cast());
++        bindings::kfree(base.cast());
++    }
++}
++
++/// Split `str` at whitespace into a NULL-terminated argv; NULL on
++/// allocation failure. `*argcp` receives the argument count if non-NULL.
++///
++/// # Safety
++/// `str` must be a valid NUL-terminated C string.
++#[export]
++pub unsafe extern "C" fn argv_split(
++    gfp: bindings::gfp_t,
++    str_: *const c_char,
++    argcp: *mut c_int,
++) -> *mut *mut c_char {
++    // SAFETY: kstrndup with a valid NUL-terminated source (C ABI contract).
++    let argv_str = unsafe {
++        bindings::kstrndup(str_, bindings::KMALLOC_MAX_SIZE as usize - 1, gfp)
++    };
++    if argv_str.is_null() {
++        return core::ptr::null_mut();
++    }
++
++    // SAFETY: argv_str is NUL-terminated; bounded scan for counting only.
++    let len = unsafe { bindings::strlen(argv_str) } as usize;
++    let s = unsafe { core::slice::from_raw_parts(argv_str.cast::<u8>(), len) };
++    let argc = count_argc(s);
++
++    // SAFETY: kmalloc_array with a valid size/count; checked below.
++    let base = unsafe {
++        bindings::kmalloc_array(
++            (argc + 2) as usize,
++            core::mem::size_of::<*mut c_char>(),
++            gfp,
++        )
++    } as *mut *mut c_char;
++    if base.is_null() {
++        // SAFETY: argv_str came from kstrndup above.
++        unsafe {
++            bindings::kfree(argv_str.cast());
++        }
++        return core::ptr::null_mut();
++    }
++
++    // SAFETY: base has room for argc+2 slots; argv_str has `len+1` bytes
++    // (incl. NUL) that we walk and NUL-split in place, exactly as the C
++    // does — argv_str's allocation now belongs to `base[0]`.
++    unsafe {
++        *base = argv_str;
++        let argv_ret = base.add(1);
++        let mut argv = argv_ret;
++        let mut was_space = true;
++        let mut p = argv_str as *mut u8;
++        for _ in 0..len {
++            if is_space(*p) {
++                was_space = true;
++                *p = 0;
++            } else if was_space {
++                was_space = false;
++                *argv = p.cast();
++                argv = argv.add(1);
++            }
++            p = p.add(1);
++        }
++        *argv = core::ptr::null_mut();
++
++        if !argcp.is_null() {
++            *argcp = argc;
++        }
++        argv_ret
++    }
++}
+diff --git a/lib/memcat_p_rs.rs b/lib/memcat_p_rs.rs
+new file mode 100644
+index 000000000000..c77fe50e494d
+--- /dev/null
++++ b/lib/memcat_p_rs.rs
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Merge two NULL-terminated pointer arrays — Rust translation of
++//! `lib/memcat_p.c`.
++
++use kernel::bindings;
++use kernel::ffi::c_void;
++use kernel::prelude::*;
++
++/// Merge `a` and `b` (both NULL-terminated `void*` arrays) into a newly
++/// allocated NULL-terminated array. NULL on allocation failure.
++///
++/// # Safety
++/// `a` and `b` must each point to a NULL-terminated array of `*mut c_void`.
++#[export]
++pub unsafe extern "C" fn __memcat_p(
++    a: *mut *mut c_void,
++    b: *mut *mut c_void,
++) -> *mut *mut c_void {
++    // SAFETY: caller guarantees NULL-terminated arrays.
++    let (nr_a, nr_b) = unsafe {
++        let mut nr_a = 0isize;
++        while !(*a.offset(nr_a)).is_null() {
++            nr_a += 1;
++        }
++        let mut nr_b = 0isize;
++        while !(*b.offset(nr_b)).is_null() {
++            nr_b += 1;
++        }
++        (nr_a, nr_b)
++    };
++    let nr = nr_a + nr_b + 1; // +1 for the NULL terminator
++
++    // SAFETY: kmalloc_array with a valid size/count; result checked below.
++    let new = unsafe {
++        bindings::kmalloc_array(
++            nr as usize,
++            core::mem::size_of::<*mut c_void>(),
++            bindings::GFP_KERNEL,
++        )
++    } as *mut *mut c_void;
++    if new.is_null() {
++        return core::ptr::null_mut();
++    }
++
++    // SAFETY: `new` has room for `nr` entries; source indices stay within
++    // the bounds established above (b[0..nr_b] then a[0..nr_a]).
++    unsafe {
++        for i in 0..nr_b {
++            *new.offset(nr_a + i) = *b.offset(i);
++        }
++        for i in 0..nr_a {
++            *new.offset(i) = *a.offset(i);
++        }
++        // NULL terminator (C relies on `nr`'s last slot; make it explicit).
++        *new.offset(nr - 1) = core::ptr::null_mut();
++    }
++
++    new
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index fa7e5dd9450b..4fae3e8b3696 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -50,6 +50,7 @@
+ #include <linux/cpufreq.h>
+ #include <linux/cpumask.h>
+ #include <linux/cred.h>
++#include <linux/ctype.h>
+ #include <linux/debugfs.h>
+ #include <linux/device/faux.h>
+ #include <linux/dma-direction.h>
+@@ -96,6 +97,7 @@
+ #include <linux/sched.h>
+ #include <linux/security.h>
+ #include <linux/slab.h>
++#include <linux/string.h>
+ #include <linux/sys_soc.h>
+ #include <linux/task_work.h>
+ #include <linux/tracepoint.h>
+diff --git a/rust/helpers/ctype.c b/rust/helpers/ctype.c
+new file mode 100644
+index 000000000000..4fb907dffb4a
+--- /dev/null
++++ b/rust/helpers/ctype.c
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <linux/ctype.h>
++
++__rust_helper int rust_helper_isspace(int c)
++{
++	return isspace(c);
++}
+diff --git a/rust/helpers/helpers.c b/rust/helpers/helpers.c
+index ddf1737657ca..0f17efd90a46 100644
+--- a/rust/helpers/helpers.c
++++ b/rust/helpers/helpers.c
+@@ -55,6 +55,7 @@
+ #include "cpufreq.c"
+ #include "cpumask.c"
+ #include "cred.c"
++#include "ctype.c"
+ #include "device.c"
+ #include "dma.c"
+ #include "dma-resv.c"
+diff --git a/rust/helpers/slab.c b/rust/helpers/slab.c
+index 9279f082467d..67512bbc3692 100644
+--- a/rust/helpers/slab.c
++++ b/rust/helpers/slab.c
+@@ -15,3 +15,16 @@ rust_helper_kvrealloc_node_align(const void *p, size_t size, unsigned long align
+ {
+ 	return kvrealloc_node_align(p, size, align, flags, node);
+ }
++
++/*
++ * kmalloc_array() for translated TUs whose C ABI contract is "the caller
++ * (e.g. argv_free) frees this with kfree" — a caller-visible detail, not
++ * swappable for the kernel crate's KVVec/Box allocators. GFP_KERNEL
++ * itself is already exposed as RUST_CONST_HELPER_GFP_KERNEL
++ * (rust/bindings/bindings_helper.h) — reused, not re-shimmed here.
++ */
++__rust_helper void *__must_check __realloc_size(2)
++rust_helper_kmalloc_array(size_t n, size_t size, gfp_t flags)
++{
++	return kmalloc_array(n, size, flags);
++}
+-- 
+2.55.0
+
