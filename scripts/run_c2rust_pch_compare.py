@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Compare c2rust transpile outcomes between plain -include and
--include-pch for every lib/*.c TU, using a PCH built with flags matched
-to the exact per-TU compile flags (kernel headers/target/std/etc are
-identical across all lib/*.c TUs; only KBUILD_* file-identity macros
-differ, and those are deliberately excluded from the PCH build so they
-can still be supplied on the command line per TU).
+-include-pch for every TU in the dominant compile-flag group (see
+build_c2rust_pch.py), using the PCH that script builds. A PCH is only
+valid for TUs whose stable flags match exactly what it was built with —
+Clang enforces this at load time and errors out rather than silently
+diverging (confirmed root cause of an earlier 5/104 divergence: that
+PCH had been built without -ffreestanding while the consuming per-TU
+commands had it, tripping Clang's "freestanding implementation was
+disabled in precompiled file ... but is currently enabled" ABI check —
+this compare only exercises the dominant group's own PCH against its
+own member TUs, so that mismatch can't recur here).
 
 Investigation for the c2rust PCH AST-export divergence report
-(awtoau/c2rust#1). Mirrors run_c2rust_baseline.py's per-TU isolated
-compile_commands.json + RLIMIT_AS convention.
+(awtoau/c2rust#1, awtoau/c2rust#2). Mirrors run_c2rust_baseline.py's
+per-TU isolated compile_commands.json + RLIMIT_AS convention.
 
 Usage: run_c2rust_pch_compare.py [--limit N]
 Output: tmp/c2rust-pch-compare/<safe_name>/{nopch,pch}/
@@ -31,7 +36,8 @@ OUT_DIR = TMP / "c2rust-pch-compare"
 LOG = TMP / "run_c2rust_pch_compare.log"
 C2RUST_FORK = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
 C2RUST = str(C2RUST_FORK / "target" / "release" / "c2rust")
-PCH_FILE = TMP / "pch-debug" / "kernel-pch" / "preamble.pch"
+PCH_FILE = TMP / "c2rust-pch" / "preamble.pch"
+FLAGS_FILE = TMP / "c2rust-pch" / "dominant_flags.json"
 
 OLD_INCLUDES = (
     "-include ./include/linux/compiler-version.h "
@@ -72,8 +78,17 @@ def run_variant(entry, work, use_pch):
     e2["command"] = cmd
     cc_path.write_text(json.dumps([e2], indent=1))
 
+    # --overwrite-existing: without it, c2rust transpile silently skips
+    # (warn + Err) any .rs file that already exists under -o, which turns
+    # a second run against the same OUT_DIR into a comparison against
+    # stale output from a prior run instead of a fresh transpile —
+    # producing false "diverged" results with inflated missing-node
+    # counts on whichever side didn't get skipped.
     proc = subprocess.run(
-        [C2RUST, "transpile", str(cc_path), "-o", str(work / "output")],
+        [
+            C2RUST, "transpile", str(cc_path), "-o", str(work / "output"),
+            "--overwrite-existing",
+        ],
         cwd=TREE,
         preexec_fn=_limit_memory,
         capture_output=True,
@@ -115,6 +130,37 @@ def run_one(entry):
     return {"file": str(rel), "nopch": nopch, "pch": pch, "diverged": diverged}
 
 
+def dominant_group_files():
+    """The exact file set build_c2rust_pch.py built the PCH from
+    (dominant_flags.json's flags, re-grouped the same way it groups) —
+    only these TUs are valid to compare against this PCH; comparing a
+    minority-group TU against it would just reproduce the ABI-flag-
+    mismatch error this whole investigation started from, not a real
+    AST-divergence signal."""
+    from build_c2rust_pch import strip_per_file_flags, split_command
+
+    if not FLAGS_FILE.exists():
+        raise RuntimeError(f"no {FLAGS_FILE} -- run build_c2rust_pch.py first")
+    dominant_flags = tuple(json.loads(FLAGS_FILE.read_text())["flags"])
+
+    cc_path = TREE / "compile_commands.json"
+    entries = [
+        e for e in json.load(open(cc_path))
+        if e["file"].endswith(".c") and "/scripts/" not in e["file"]
+    ]
+    seen = {}
+    for e in entries:
+        seen[e["file"]] = e
+    entries = sorted(seen.values(), key=lambda e: e["file"])
+
+    members = []
+    for e in entries:
+        _compiler, body, _file_tok = split_command(e["command"])
+        if strip_per_file_flags(body) == dominant_flags:
+            members.append(e)
+    return members
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None)
@@ -130,18 +176,14 @@ def main():
     )
 
     if not PCH_FILE.exists():
-        logging.error("no PCH at %s -- build it first", PCH_FILE)
+        logging.error("no PCH at %s -- run build_c2rust_pch.py first", PCH_FILE)
         return 1
 
-    cc_path = TREE / "compile_commands.json"
-    entries = [e for e in json.load(open(cc_path)) if "/lib/" in e["file"] and e["file"].endswith(".c")]
-    seen = {}
-    for e in entries:
-        seen[e["file"]] = e
-    entries = sorted(seen.values(), key=lambda e: e["file"])
+    sys.path.insert(0, str(REPO / "scripts"))
+    entries = dominant_group_files()
     if args.limit:
         entries = entries[: args.limit]
-    logging.info("comparing nopch vs pch over %d lib/*.c TUs (%d jobs)", len(entries), args.jobs)
+    logging.info("comparing nopch vs pch over %d dominant-group TUs (%d jobs)", len(entries), args.jobs)
 
     results = []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:

@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Run c2rust transpile over every lib/*.c TU in compile_commands.json,
-one TU at a time (isolated compile_commands.json per file so one crash
-doesn't abort the batch), and record pass/warn/crash outcomes.
+"""Run c2rust transpile over every compiled .c TU in this build's
+compile_commands.json (excluding scripts/, host-side build tooling), one
+TU at a time (isolated compile_commands.json per file so one crash
+doesn't abort the batch), and record pass/warn/crash outcomes per file
+and per declaration.
 
-This is a baseline/triage run, not a translation source — see
-docs/phase0-evals.md's verdict (c2rust is a reference emitter/idiom
-corpus, not a foundation: it silently drops top-level declarations and
-can crash outright on common kernel idioms like GCC's label-address
-extension). The point of this run is to build a concrete failure
-inventory to prioritize fixing awtoau/c2rust (our fork) against, not to
-draft translations.
+awtoau/c2rust is staged to become linux-rs's primary translation
+source, gated by both the full verification pipeline and rule
+conformance — this run is the reliability side of that: a concrete
+failure inventory to prioritize fixing the fork against, run over the
+whole kernel-source corpus this build compiles (not just lib/), since
+drivers/, kernel/, fs/, and mm/ together are the majority of it.
 
 Usage: run_c2rust_baseline.py [--limit N]
 Output: tmp/c2rust-baseline/<safe_name>/ (per-TU transpile output/logs);
@@ -27,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -42,9 +44,103 @@ DB = REPO / "rulesdb" / "patterns.db"
 C2RUST_FORK = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
 C2RUST = str(C2RUST_FORK / "target" / "release" / "c2rust")
 
+# See build_c2rust_pch.py: a Clang PCH built from the single largest
+# group of TUs that share identical stable compile flags (89% of this
+# build's corpus). Every real per-TU command in compile_commands.json
+# pulls in the same 3 kernel headers via this -include triple; swapping
+# it for -include-pch lets Clang reuse the already-parsed header AST
+# instead of re-lexing/re-parsing it from scratch on every single-TU
+# c2rust invocation (see awtoau/c2rust#2 — this was the dominant fixed
+# per-process cost that made concurrency scale sub-linearly). Only valid
+# for TUs whose OTHER stable flags also match what the PCH was built
+# with (see load_pch_flags/command_matches_pch below) — Clang's own
+# PCH-validity check would reject a mismatch (e.g. -ffreestanding on
+# one side only) rather than silently diverge, so a membership miss
+# just falls back to the plain -include path below, never a silent
+# correctness risk.
+PCH_DIR = TMP / "c2rust-pch"
+PCH_FILE = PCH_DIR / "preamble.pch"
+PCH_FLAGS_FILE = PCH_DIR / "dominant_flags.json"
+OLD_INCLUDES = (
+    "-include ./include/linux/compiler-version.h "
+    "-include ./include/linux/kconfig.h "
+    "-include ./include/linux/compiler_types.h"
+)
+
 
 def safe_name(file_path):
     return file_path.replace("/", "_").lstrip("_")
+
+
+# Per-file identity macros KBUILD injects (module path/name for
+# __FILE__-style diagnostics and MODULE_* macros) — the only flags that
+# differ between TUs that otherwise share every other compile flag, so
+# they're stripped before comparing a TU's flags against the PCH's
+# recorded flag set. Must match build_c2rust_pch.py's PER_FILE_PREFIXES
+# exactly, or membership here could disagree with what the PCH was
+# actually built from.
+PCH_PER_FILE_PREFIXES = (
+    "-DKBUILD_MODFILE=",
+    "-DKBUILD_BASENAME=",
+    "-DKBUILD_MODNAME=",
+    "-D__KBUILD_MODNAME=",
+    "-Wp,-MMD,",
+)
+
+
+def _strip_per_file_flags(tokens):
+    out = []
+    skip_next = False
+    for t in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if t == "-o":
+            skip_next = True
+            continue
+        if t == "-c":
+            continue
+        if any(t.startswith(p) for p in PCH_PER_FILE_PREFIXES):
+            continue
+        out.append(t)
+    return tuple(out)
+
+
+def load_pch_flags():
+    """The stable flag set build_c2rust_pch.py built the PCH from, or
+    None if no PCH has been built yet — callers must treat None as "PCH
+    unavailable, use plain -include for every TU" rather than erroring,
+    since PCH use is a performance optimization, not a correctness
+    requirement."""
+    if not PCH_FILE.exists() or not PCH_FLAGS_FILE.exists():
+        return None
+    return tuple(json.loads(PCH_FLAGS_FILE.read_text())["flags"])
+
+
+def command_matches_pch(command, pch_flags):
+    """True if this TU's own stable flags are identical to the flags the
+    PCH was built with — the only condition under which swapping its
+    plain -include triple for -include-pch is valid. Comparing the
+    stripped flag tuples directly (not just "does OLD_INCLUDES appear
+    in the string") catches every kind of mismatch Clang's own PCH
+    ABI-validity check would otherwise catch at run time (e.g.
+    -ffreestanding present on one side only), so a membership miss here
+    is always a clean fallback to plain -include, never a run that
+    trips Clang's "was disabled ... but is currently enabled" error."""
+    toks = command.split()
+    body = toks[1:-1]  # drop leading compiler name and trailing file path
+    return _strip_per_file_flags(body) == pch_flags
+
+
+def use_pch_if_eligible(command, pch_flags):
+    """Rewrite command's -include triple to -include-pch when eligible;
+    return command unchanged otherwise (minority flag-set groups keep
+    using plain -include, same as before PCH support existed)."""
+    if pch_flags is None or OLD_INCLUDES not in command:
+        return command
+    if not command_matches_pch(command, pch_flags):
+        return command
+    return command.replace(OLD_INCLUDES, f"-include-pch {PCH_FILE}")
 
 
 def git_rev(repo_dir):
@@ -94,9 +190,15 @@ def ensure_schema(conn):
         "c2rust_rev TEXT, corpus_rev TEXT, run_at TEXT NOT NULL)"
     )
     import sqlite3
-    for table, col in (("c2rust_attempts", "corpus_rev"), ("c2rust_decl_outcomes", "corpus_rev")):
+    new_columns = (
+        ("c2rust_attempts", "corpus_rev", "TEXT"),
+        ("c2rust_decl_outcomes", "corpus_rev", "TEXT"),
+        ("c2rust_attempts", "peak_rss_bytes", "INTEGER"),
+        ("c2rust_attempts", "duration_s", "REAL"),
+    )
+    for table, col, coltype in new_columns:
         try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
         except sqlite3.OperationalError:
             pass  # column already exists (older DB carried forward by build_db.py)
 
@@ -210,15 +312,53 @@ PER_PROC_MEM_LIMIT_BYTES = 4 * 1024 * 1024 * 1024
 # Not part of the per-job budget; subtracted before dividing.
 HOST_HEADROOM_BYTES = 12 * 1024 * 1024 * 1024
 
+# Fallback per-job memory estimate when no prior-run peak_rss_bytes
+# history exists yet (first run ever, or a fresh DB) — deliberately
+# conservative since it's untested. Once real data exists,
+# _typical_job_memory_bytes() uses the observed p90 instead: measured
+# full-corpus peak RSS was p50=532MB/p90=649MB/max=767MB, an order of
+# magnitude below this guess and below PER_PROC_MEM_LIMIT_BYTES (the
+# RLIMIT_AS safety-net ceiling, which stays fixed regardless — a
+# genuine runaway outlier still gets killed at 4GB, this only changes
+# how many jobs we plan to run concurrently).
+FALLBACK_JOB_MEMORY_BYTES = 1 * 1024 * 1024 * 1024
+
+
+def _typical_job_memory_bytes():
+    """p90 of real peak_rss_bytes from the most recent baseline run in
+    patterns.db, or FALLBACK_JOB_MEMORY_BYTES if no history exists."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(DB)
+        latest_run_at = conn.execute(
+            "SELECT MAX(run_at) FROM c2rust_attempts WHERE peak_rss_bytes IS NOT NULL"
+        ).fetchone()[0]
+        if latest_run_at is None:
+            return FALLBACK_JOB_MEMORY_BYTES
+        rows = conn.execute(
+            "SELECT peak_rss_bytes FROM c2rust_attempts "
+            "WHERE run_at = ? AND peak_rss_bytes IS NOT NULL ORDER BY peak_rss_bytes",
+            (latest_run_at,),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return FALLBACK_JOB_MEMORY_BYTES
+        vals = [r[0] for r in rows]
+        p90 = vals[min(len(vals) - 1, int(len(vals) * 0.9))]
+        return max(p90, 64 * 1024 * 1024)  # floor: never plan below 64MB/job
+    except Exception:
+        return FALLBACK_JOB_MEMORY_BYTES
+
 
 def adaptive_job_count():
-    """min(nproc, (free_ram - headroom) / per-proc-limit) — scale
-    concurrency to what the RLIMIT_AS cap can actually make safe right
-    now, instead of a fixed guess. With the memory cap as the real
-    safety net, a hardcoded --jobs 4 leaves throughput on the table on a
-    62GB/32-core box; this computes the largest job count whose
-    worst-case (every job simultaneously at its RLIMIT_AS ceiling) still
-    leaves HOST_HEADROOM_BYTES free."""
+    """min(nproc, (free_ram - headroom) / typical-job-memory) — scale
+    concurrency to what real observed usage says is safe right now,
+    instead of budgeting against the RLIMIT_AS ceiling (which is a
+    per-process safety net for a runaway outlier, not a plan for the
+    common case — budgeting against it left throughput on the table:
+    real full-corpus peak RSS was under 800MB while the ceiling is 4GB,
+    a 5x+ undercount of safe concurrency). Falls back to a conservative
+    fixed estimate when no prior-run history exists yet."""
     try:
         with open("/proc/meminfo") as f:
             meminfo = {}
@@ -233,7 +373,8 @@ def adaptive_job_count():
         return 4  # /proc/meminfo unreadable — fall back to the old fixed default
 
     budget = free_bytes - HOST_HEADROOM_BYTES
-    by_memory = max(1, budget // PER_PROC_MEM_LIMIT_BYTES)
+    per_job = _typical_job_memory_bytes()
+    by_memory = max(1, budget // per_job)
     return max(1, min(os.cpu_count() or 4, by_memory))
 
 
@@ -244,7 +385,35 @@ def _limit_memory():
     )
 
 
-def run_one(entry):
+def _peak_rss_bytes(pid):
+    """Current VmHWM (peak resident set size so far) for pid and all its
+    live children, summed. Best-effort — a process that already exited
+    between the listing and the read just contributes 0."""
+    total = 0
+    pids = [pid]
+    try:
+        pids += [int(p) for p in os.listdir(f"/proc/{pid}/task/{pid}/children") if p]
+    except Exception:
+        pass
+    # also catch grandchildren c2rust may spawn (e.g. an invoked clang)
+    try:
+        out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=2)
+        pids += [int(p) for p in out.stdout.split() if p]
+    except Exception:
+        pass
+    for p in set(pids):
+        try:
+            with open(f"/proc/{p}/status") as f:
+                for line in f:
+                    if line.startswith("VmHWM:"):
+                        total += int(line.split()[1]) * 1024  # kB -> bytes
+                        break
+        except Exception:
+            continue
+    return total
+
+
+def run_one(entry, pch_flags=None):
     file_path = entry["file"]
     rel = Path(file_path).relative_to(TREE)
     name = safe_name(str(rel))
@@ -258,17 +427,47 @@ def run_one(entry):
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
 
+    command = use_pch_if_eligible(entry["command"], pch_flags)
+    used_pch = command != entry["command"]
+    entry = dict(entry, command=command)
+
     cc_path = work / "compile_commands.json"
     cc_path.write_text(json.dumps([entry], indent=1))
 
-    proc = subprocess.run(
+    start = time.monotonic()
+    proc = subprocess.Popen(
         [C2RUST, "transpile", str(cc_path), "-o", str(work / "output"), "--overwrite-existing"],
         cwd=TREE,
         preexec_fn=_limit_memory,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=120,
     )
+    peak_rss = 0
+    try:
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=0.2)
+                break
+            except subprocess.TimeoutExpired:
+                peak_rss = max(peak_rss, _peak_rss_bytes(proc.pid))
+                if time.monotonic() - start > 120:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                    raise subprocess.TimeoutExpired(proc.args, 120)
+    except subprocess.TimeoutExpired:
+        raise
+    peak_rss = max(peak_rss, _peak_rss_bytes(proc.pid))
+    duration_s = time.monotonic() - start
+
+    class _Result:
+        pass
+    proc_result = _Result()
+    proc_result.returncode = proc.returncode
+    proc_result.stdout = stdout
+    proc_result.stderr = stderr
+    proc = proc_result
+
     log_path = work / "transpile.log"
     log_path.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
 
@@ -325,8 +524,11 @@ def run_one(entry):
         "missing_children": missing_children,
         "label_address_exprs": label_addr,
         "rs_files_emitted": len(rs_files),
+        "peak_rss_bytes": peak_rss,
+        "duration_s": duration_s,
         "signatures": signatures,
         "decl_outcomes": decl_outcomes,
+        "used_pch": used_pch,
     }
 
 
@@ -376,7 +578,18 @@ def main():
         logging.error("no %s", cc_path)
         return 1
 
-    entries = [e for e in json.load(open(cc_path)) if "/lib/" in e["file"] and e["file"].endswith(".c")]
+    # Full kernel-source build corpus, not just lib/ — the earlier lib/-only
+    # filter was leftover from early hand-translation scoping and never
+    # revisited; it left drivers/, kernel/, fs/, mm/ (the majority of this
+    # build's 548 TUs) completely untested against c2rust. Excludes
+    # scripts/ (host-side build tooling, not kernel code) and generated
+    # wrapper TUs.
+    entries = [
+        e for e in json.load(open(cc_path))
+        if e["file"].endswith(".c")
+        and "/scripts/" not in e["file"]
+        and ".vmlinux.export.c" not in e["file"]
+    ]
     # Dedup by file (compile_commands.json can list a TU more than once).
     seen = {}
     for e in entries:
@@ -384,8 +597,20 @@ def main():
     entries = sorted(seen.values(), key=lambda e: e["file"])
     if args.limit:
         entries = entries[: args.limit]
+
+    pch_flags = load_pch_flags()
+    if pch_flags is None:
+        logging.info("no PCH built (run build_c2rust_pch.py) — every TU uses plain -include")
+        n_pch = 0
+    else:
+        n_pch = sum(1 for e in entries if command_matches_pch(e["command"], pch_flags))
+        logging.info(
+            "PCH loaded from %s — %d/%d TUs eligible for -include-pch, "
+            "rest fall back to plain -include",
+            PCH_FILE, n_pch, len(entries),
+        )
     logging.info(
-        "running c2rust transpile over %d lib/*.c TUs (%d parallel jobs)",
+        "running c2rust transpile over %d .c TUs (%d parallel jobs)",
         len(entries), args.jobs,
     )
 
@@ -403,7 +628,7 @@ def main():
 
     results = []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = {pool.submit(run_one, entry): entry for entry in entries}
+        futures = {pool.submit(run_one, entry, pch_flags): entry for entry in entries}
         done = 0
         for fut in as_completed(futures):
             entry = futures[fut]
@@ -423,12 +648,14 @@ def main():
                 "INSERT INTO c2rust_attempts "
                 "(c_file, run_at, outcome, returncode, warnings, "
                 " missing_top_level_nodes, missing_children, label_address_exprs, "
-                " rs_files_emitted, c2rust_rev, corpus_rev) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " rs_files_emitted, c2rust_rev, corpus_rev, peak_rss_bytes, duration_s) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     rel, run_at, r["outcome"], r.get("returncode"),
                     r.get("warnings"), r.get("missing_top_level_nodes"),
                     r.get("missing_children"), r.get("label_address_exprs"),
                     r.get("rs_files_emitted"), rev, crev,
+                    r.get("peak_rss_bytes"), r.get("duration_s"),
                 ),
             )
             attempt_id = cur.lastrowid
@@ -457,11 +684,35 @@ def main():
 
     from collections import Counter
     counts = Counter(r["outcome"] for r in results)
-    logging.info("DONE: %s (c2rust %s, corpus %s) into %s", dict(counts), rev, crev, DB)
+    used_pch_count = sum(1 for r in results if r.get("used_pch"))
+    logging.info("DONE: %s (c2rust %s, corpus %s, %d/%d ran with -include-pch) into %s",
+                 dict(counts), rev, crev, used_pch_count, len(results), DB)
     for outcome in ("crash", "no_output", "timeout", "oom"):
         bad = [r["file"] for r in results if r.get("outcome") == outcome]
         if bad:
             logging.info("%s (%d): %s", outcome, len(bad), ", ".join(bad[:20]))
+
+    # Bottleneck data: real peak RSS / wall-clock per TU, not the
+    # RLIMIT_AS ceiling — tells us what --jobs could actually be, and
+    # which files are the slowest/heaviest.
+    rss_vals = sorted((r.get("peak_rss_bytes") or 0) for r in results)
+    dur_vals = sorted((r.get("duration_s") or 0) for r in results)
+    if rss_vals:
+        def pct(vals, p):
+            return vals[min(len(vals) - 1, int(len(vals) * p))]
+        logging.info(
+            "peak RSS: p50=%.0fMB p90=%.0fMB max=%.0fMB",
+            pct(rss_vals, 0.5) / 1e6, pct(rss_vals, 0.9) / 1e6, rss_vals[-1] / 1e6,
+        )
+        logging.info(
+            "duration: p50=%.1fs p90=%.1fs max=%.1fs",
+            pct(dur_vals, 0.5), pct(dur_vals, 0.9), dur_vals[-1],
+        )
+        slowest = sorted(results, key=lambda r: -(r.get("duration_s") or 0))[:10]
+        logging.info("slowest TUs:")
+        for r in slowest:
+            logging.info("  %6.1fs  %5.0fMB  %s", r.get("duration_s") or 0,
+                        (r.get("peak_rss_bytes") or 0) / 1e6, r["file"])
 
     patterns = conn.execute(
         "SELECT kind, detail, tus_affected FROM c2rust_failure_patterns LIMIT 15"

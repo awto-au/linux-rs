@@ -19,11 +19,13 @@ Log: tmp/import_sparse.log
 import argparse
 import json
 import logging
+import os
 import re
 import shlex
 import sqlite3
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -112,7 +114,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rebuild", action="store_true", help="rebuild sparse from the mirror")
     ap.add_argument("--limit", type=int, default=0, help="only check this many TUs (debug)")
+    ap.add_argument(
+        "--jobs", type=int, default=None,
+        help="parallel sparse subprocesses (default: nproc). Unlike "
+             "run_c2rust_baseline.py's adaptive default, sparse is a small, "
+             "single-file static-analysis tool (no full Clang AST export), "
+             "so it's CPU- not memory-bound — nproc is a reasonable default "
+             "without needing a RLIMIT_AS-style cap.",
+    )
     args = ap.parse_args()
+    jobs = args.jobs or os.cpu_count() or 4
 
     TMP.mkdir(exist_ok=True)
     logging.basicConfig(
@@ -131,7 +142,7 @@ def main() -> int:
     entries.sort(key=lambda e: e["file"])
     if args.limit:
         entries = entries[: args.limit]
-    logging.info("running sparse over %d TUs", len(entries))
+    logging.info("running sparse over %d TUs (%d parallel jobs)", len(entries), jobs)
 
     if not DB.exists():
         logging.error("no %s — run scripts/build_db.py first", DB)
@@ -151,23 +162,30 @@ def main() -> int:
     conn.execute("DELETE FROM sparse_diagnostics")
 
     n_diag = n_failed = 0
-    for i, entry in enumerate(entries):
-        try:
-            diags = run_sparse(sparse_bin, entry)
-        except subprocess.TimeoutExpired:
-            n_failed += 1
-            continue
-        for file_, line_, col, sev, msg in diags:
-            conn.execute(
-                "INSERT INTO sparse_diagnostics (file, line, col, severity, message) "
-                "VALUES (?,?,?,?,?)",
-                (file_, line_, col, sev, msg),
-            )
-            n_diag += 1
-        if (i + 1) % 300 == 0:
-            logging.info("%d/%d TUs checked, %d diagnostics so far, %d timeouts",
-                         i + 1, len(entries), n_diag, n_failed)
-            conn.commit()
+    # Worker threads only run run_sparse() (pure: subprocess in, list out,
+    # no shared state). All conn.execute() calls happen here in the main
+    # thread as each future completes, same pattern as
+    # run_c2rust_baseline.py — sqlite3 connections aren't safe to share
+    # across threads by default.
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {pool.submit(run_sparse, sparse_bin, entry): entry for entry in entries}
+        for i, fut in enumerate(as_completed(futures)):
+            try:
+                diags = fut.result()
+            except subprocess.TimeoutExpired:
+                n_failed += 1
+                continue
+            for file_, line_, col, sev, msg in diags:
+                conn.execute(
+                    "INSERT INTO sparse_diagnostics (file, line, col, severity, message) "
+                    "VALUES (?,?,?,?,?)",
+                    (file_, line_, col, sev, msg),
+                )
+                n_diag += 1
+            if (i + 1) % 300 == 0:
+                logging.info("%d/%d TUs checked, %d diagnostics so far, %d timeouts",
+                             i + 1, len(entries), n_diag, n_failed)
+                conn.commit()
 
     conn.commit()
     conn.close()
