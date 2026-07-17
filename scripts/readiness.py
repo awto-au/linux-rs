@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Rank untranslated TUs by translation readiness.
 
-Vocabulary transfer measure: the 6 translated TUs define a covered token
-vocabulary (normalised statement-fingerprint tokens: node kinds, callee
-names, macro names, types). A candidate TU's readiness = fraction of its
-statements whose every token is already in that vocabulary — i.e. nothing
-in the statement is a construct we haven't already translated once.
+Vocabulary transfer measure: the already-translated TUs (see
+translated_tus() below — derived from <name>_rs.rs files in the
+worktree, so this always reflects current count, not a number frozen
+at write time) define a covered token vocabulary (normalised
+statement-fingerprint tokens: node kinds, callee names, macro names,
+types). A candidate TU's readiness = fraction of its statements whose
+every token is already in that vocabulary — i.e. nothing in the
+statement is a construct we haven't already translated once.
 
 Usage: readiness.py [--tree linux-riscv] [--glob 'lib/**/*.c']
 Output: table on stdout, log tmp/readiness.log
