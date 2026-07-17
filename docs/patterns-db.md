@@ -31,6 +31,26 @@ Two data classes, explicitly cross-referenced both directions:
 - **Translation status** (`translated_tus`) — derived from the kernel
   worktree's `*_rs.rs` files + `git log`, so "is this already translated"
   is a join, not a manual check.
+- **c2rust fork tracking** (`c2rust_attempts`, `c2rust_decl_outcomes`,
+  `c2rust_failure_signatures`, `c2rust_rule_conformance`) — one row per
+  (file, baseline run) so re-running after an awtoau/c2rust fork fix
+  shows progress over time; per-declaration outcomes (not just
+  file-level) so a partially-dropped file is distinguishable from a
+  wholesale failure; extracted failure signatures for pattern-of-failure
+  triage. **Preserved across `build_db.py` rebuilds** (`PERSISTENT_TABLES`
+  in `build_db.py`), unlike the census/rule tables above which are fully
+  regenerated every run — these accumulate real history.
+- **Upstream c2rust intel** (`c2rust_forks`, `c2rust_issues`,
+  `c2rust_issues_fts`) — known forks and issues/PRs on immunant/c2rust
+  and its forks, crawled by `scripts/crawl_c2rust_upstream.py`, so
+  "has someone already fixed this" is one FTS5 query instead of a manual
+  GitHub search. Also persistent, populated manually/occasionally.
+- **Progress over time** (`progress_snapshots`) — point-in-time snapshots
+  (TUs landed, corpus LOC, c2rust outcome breakdown) taken manually via
+  `scripts/take_progress_snapshot.py`; also persistent.
+- **Reference catalogue** (`doc_sources`) — authoritative external
+  references (papers, blog posts, upstream docs) cited across this
+  project, queryable by topic.
 
 Reverse-checkable views (the actual point, per Dan: "everything should be
 relational and reverse check where it matters"):
@@ -51,6 +71,18 @@ relational and reverse check where it matters"):
 - `uncovered_hot_families` — statement families with many instances and
   no matching rule (rough `LIKE` match on `match_family`; a real matcher
   is `scripts/offload_translate.py`'s job, this view is for eyeballing).
+- `tu_translation_progress` — per-TU join of manual (`translated_tus`)
+  status with the most recent `c2rust_attempts` row for that file, so
+  "what's done, how (manual/c2rust), and if c2rust failed, why" is one
+  query.
+- `c2rust_failure_patterns` — distinct failure signatures from the latest
+  baseline run, ranked by TUs affected — the fix-prioritisation queue.
+- `c2rust_latest_run_summary` — outcome counts (clean/crash/etc) from the
+  latest baseline run only.
+- `c2rust_rule_violations_summary` — kernel-idiom rule conformance
+  violations in c2rust output, by rule.
+- `rule_tier_summary` — rule counts by tier (1 low-risk / 2 bounded-unsafe
+  / 3 context-dependent, per PLAN's oracle tiers).
 
 ## cscope integration (closes the static-name gap)
 
