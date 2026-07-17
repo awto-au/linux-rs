@@ -3,7 +3,7 @@
 """Crawl immunant/c2rust's forks + issues + PRs (open and closed) via
 `gh api`, populate patterns.db's c2rust_forks/c2rust_issues tables, so
 "has someone already fixed this" is one query instead of a manual
-GitHub search every time. 2026-07-17, Dan's request.
+GitHub search every time.
 
 Deliberately NOT wired into dev.py db — this is an occasional refresh
 (upstream doesn't change every minute), and expensive (hundreds of API
@@ -63,7 +63,7 @@ def crawl_forks(conn, limit=None):
             " default_branch, crawled_at) VALUES (?,?,?,?,?,?,?,?)",
             (
                 fork["id"], fork["full_name"], fork["html_url"], fork.get("pushed_at"),
-                None,  # ahead_by requires a separate compare call per fork; skip by default
+                None,  # populated separately by fill_ahead_by(); one compare call per fork
                 fork.get("stargazers_count"), fork.get("default_branch"), now,
             ),
         )
@@ -72,6 +72,45 @@ def crawl_forks(conn, limit=None):
             break
     conn.commit()
     logging.info("forks: %d rows", n)
+    return n
+
+
+def fill_ahead_by(conn, limit=None):
+    """For each fork lacking ahead_by, compare its default branch against
+    upstream's default branch via the GitHub compare API and record how
+    many commits it's ahead. One API call per fork — the expensive part,
+    so it's opt-in (--ahead-by) and independent of crawl_forks so it can
+    be resumed/retried without re-crawling fork metadata."""
+    rows = conn.execute(
+        "SELECT id, full_name, default_branch FROM c2rust_forks WHERE ahead_by IS NULL "
+        "ORDER BY stargazers_count DESC, pushed_at DESC"
+    ).fetchall()
+    upstream_default = "master"
+    n = 0
+    errors = 0
+    for fork_id, full_name, default_branch in rows:
+        branch = default_branch or "master"
+        owner = full_name.split("/", 1)[0]
+        try:
+            proc = subprocess.run(
+                ["gh", "api", f"repos/{UPSTREAM}/compare/{upstream_default}...{owner}:{branch}"],
+                capture_output=True, text=True, check=True, timeout=30,
+            )
+            data = json.loads(proc.stdout)
+            ahead = data.get("ahead_by", 0)
+        except Exception as e:
+            logging.warning("compare failed for %s: %s", full_name, e)
+            ahead = -1  # sentinel: comparison failed (deleted fork, renamed branch, etc.)
+            errors += 1
+        conn.execute("UPDATE c2rust_forks SET ahead_by=? WHERE id=?", (ahead, fork_id))
+        n += 1
+        if n % 25 == 0:
+            conn.commit()
+            logging.info("ahead_by: %d/%d done (%d errors)", n, len(rows), errors)
+        if limit and n >= limit:
+            break
+    conn.commit()
+    logging.info("ahead_by: %d rows updated, %d errors", n, errors)
     return n
 
 
@@ -126,6 +165,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--forks-only", action="store_true")
     ap.add_argument("--issues-only", action="store_true")
+    ap.add_argument("--ahead-by", action="store_true", help="fill ahead_by for forks lacking it (one API call/fork)")
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
 
@@ -158,11 +198,14 @@ def main():
         "repo, number UNINDEXED, title, body, content='c2rust_issues', content_rowid='id')"
     )
 
-    if not args.issues_only:
-        crawl_forks(conn, limit=args.limit)
-    if not args.forks_only:
-        crawl_issues(conn, UPSTREAM, limit=args.limit)
-        rebuild_fts(conn)
+    if args.ahead_by:
+        fill_ahead_by(conn, limit=args.limit)
+    else:
+        if not args.issues_only:
+            crawl_forks(conn, limit=args.limit)
+        if not args.forks_only:
+            crawl_issues(conn, UPSTREAM, limit=args.limit)
+            rebuild_fts(conn)
 
     n_forks = conn.execute("SELECT COUNT(*) FROM c2rust_forks").fetchone()[0]
     n_issues = conn.execute("SELECT COUNT(*) FROM c2rust_issues WHERE is_pr=0").fetchone()[0]
