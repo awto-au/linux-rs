@@ -182,11 +182,17 @@ def _extract_fn_body(rs_text: str, start_match: re.Match) -> str:
 
 def check_0006_fls_family(rs_text: str, rs_path: Path, c_text: str | None):
     """Rule explicitly warns: bare `.leading_zeros()`/`.trailing_zeros()`
-    with NO `BITS - ...` offset arithmetic is the classic wrong translation.
-    We find each fls/ffs-family function DEFINITION in the .rs (c2rust
-    inlines the header implementation into every TU that pulls it in — the
-    function is a faithful transliteration of the C bit-loop, not a rename),
-    and check its body for the required offset-subtraction shape."""
+    with NO `BITS - ...` offset arithmetic is the classic wrong translation
+    for the fls/__fls/fls64 (most-significant-bit) functions, which all
+    need a `BITS -` (and __fls additionally a `- 1`) subtraction to convert
+    a leading-zero count into an MSB index. __ffs (least-significant-bit)
+    is different: `x.trailing_zeros()` IS the whole answer with no offset
+    at all, since trailing_zeros() directly counts the LSB position — an
+    offset-shaped check would be wrong to apply there. We find each
+    fls/ffs-family function DEFINITION in the .rs (c2rust inlines the
+    header implementation into every TU that pulls it in — the function is
+    a faithful transliteration of the C bit-loop, not a rename), and check
+    its body against the shape that specific function requires."""
     out = []
     for m in FN_DEF_RE.finditer(rs_text):
         fn_name = m.group(1)
@@ -196,10 +202,29 @@ def check_0006_fls_family(rs_text: str, rs_path: Path, c_text: str | None):
         line = rs_text[:m.start()].count("\n") + 1
         body = _extract_fn_body(rs_text, m)
         has_bits_offset = bool(re.search(
-            r"(BITS\s*[-\.]\s*(1\s*)?-|32\s*(as[^;]*)?-|64\s*(as[^;]*)?-).{0,40}"
-            r"(leading|trailing)_zeros", body))
+            r"(BITS\s*[-\.]\s*(1\s*-\s*)?|32\s*(as[^;]*)?-\s*|64\s*(as[^;]*)?-\s*)"
+            r".{0,40}(leading|trailing)_zeros", body))
         has_leading_or_trailing = "leading_zeros" in body or "trailing_zeros" in body
-        if has_leading_or_trailing and has_bits_offset:
+
+        # __ffs's correct shape is bare trailing_zeros() with NO offset —
+        # the opposite requirement from fls/__fls/fls64, which all need an
+        # offset since leading_zeros() alone is an inverted, unoffset count.
+        needs_no_offset = fn_name == "generic___ffs"
+
+        if needs_no_offset:
+            if "trailing_zeros" in body:
+                out.append({"line": line, "status": STATUS_CONFORMANT,
+                            "detail": f"fn {fn_name} ({c_name}) uses bare "
+                                      f"trailing_zeros() — matches rule shape "
+                                      f"({expected}), no offset needed for LSB index"})
+            else:
+                out.append({"line": line, "status": STATUS_VIOLATION,
+                            "detail": f"fn {fn_name} ({c_name}): literal bit-scan-loop "
+                                      f"transliteration of the C header implementation, no "
+                                      f"trailing_zeros at all — c2rust faithfully "
+                                      f"reproduces the C algorithm instead of the idiomatic "
+                                      f"Rust rewrite ({expected})"})
+        elif has_leading_or_trailing and has_bits_offset:
             out.append({"line": line, "status": STATUS_CONFORMANT,
                         "detail": f"fn {fn_name} ({c_name}) uses leading/trailing_zeros "
                                   f"with a BITS offset — matches rule shape ({expected})"})

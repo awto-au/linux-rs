@@ -43,6 +43,14 @@ DB = REPO / "rulesdb" / "patterns.db"
 # awtoau/c2rust#1) — NOT the stock ~/.cargo/bin/c2rust upstream build.
 C2RUST_FORK = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
 C2RUST = str(C2RUST_FORK / "target" / "release" / "c2rust")
+# awtoau/c2rust's kernel-idiom rewrites (WARN_ON -> kernel::warn_on!,
+# fls-family -> leading_zeros()/trailing_zeros() arithmetic) are opt-in so
+# that stock `c2rust transpile` with no flags stays byte-for-byte identical
+# to upstream immunant/c2rust. linux-rs's own baseline wants every rewrite
+# this build of c2rust knows about, so it opts in explicitly rather than
+# naming each rule (which would need updating here every time a new rule
+# is added upstream).
+C2RUST_ENABLE_RULE_ARGS = ["--enable-rule=all"]
 
 # Files whose transitively-included header closure is large enough (tens
 # of thousands of top-level declarations pulled in via headers like
@@ -490,7 +498,8 @@ def run_one(entry, pch_flags=None):
 
     start = time.monotonic()
     proc = subprocess.Popen(
-        [C2RUST, "transpile", str(cc_path), "-o", str(work / "output"), "--overwrite-existing"],
+        [C2RUST, "transpile", str(cc_path), "-o", str(work / "output"), "--overwrite-existing",
+         *C2RUST_ENABLE_RULE_ARGS],
         cwd=TREE,
         preexec_fn=_limit_memory,
         stdout=subprocess.PIPE,
@@ -701,7 +710,7 @@ def run_batch(entries, pch_flags=None):
     start = time.monotonic()
     proc = subprocess.Popen(
         [C2RUST, "transpile", str(cc_path), "-o", str(work / "output"),
-         "--overwrite-existing", "--batch-json"],
+         "--overwrite-existing", "--batch-json", *C2RUST_ENABLE_RULE_ARGS],
         cwd=TREE,
         preexec_fn=_limit_memory,
         stdout=subprocess.PIPE,
