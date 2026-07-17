@@ -82,6 +82,105 @@ SLOW_FILES_EXCLUDED = {
     "lib/vsprintf.c",
 }
 
+# How many of the most recent distinct c2rust_rev runs to check for
+# outcome stability — see stable_files() below. 3 balances "confident
+# a file genuinely isn't moving" against "don't need years of history
+# before anything gets excluded"; a file that flips outcome even once
+# in that window stays in the routine run.
+STABILITY_WINDOW_REVS = 3
+
+
+def stable_files():
+    """c_file values whose PER-DECLARATION translated/not-translated
+    status hasn't changed across the last STABILITY_WINDOW_REVS distinct
+    c2rust revisions tested — safe to skip in a routine RELIABILITY run.
+
+    Keyed on c2rust_decl_outcomes (per-declaration), not c2rust_attempts'
+    file-level `outcome` column — file-level outcome is too coarse a
+    signal on its own: a WARN_ON-rewrite fix changes what gets EMITTED
+    for a declaration that already failed to transpile for an unrelated
+    reason (e.g. the _THIS_IP_ gap), so the file's outcome stays
+    "dropped_decls" before and after even though the content genuinely
+    changed. Using outcome alone would have made ~all 542 files register
+    "stable" after the WARN_ON/fls-family/swap-mem-swap work landed.
+
+    KNOWN LIMITATION (see awtoau/c2rust#5): even the per-declaration
+    translated/not-translated BOOLEAN doesn't catch every real change —
+    an idiom-rule rewrite (WARN_ON -> kernel::warn_on!, etc.) changes
+    WHAT Rust gets emitted inside an already-succeeding declaration,
+    never whether that declaration succeeds or fails, so `translated`
+    stays identically `true` before and after even though the emitted
+    code is materially different. Confirmed directly: drivers/base/
+    class.c registers as "stable" here despite the WARN_ON fix that
+    session genuinely changed its output, because every one of its
+    declarations kept the same pass/fail status throughout. This
+    function is therefore only a safe default-run shortcut for
+    RELIABILITY work (crash/dropped_decls fixes, which by definition DO
+    flip translated) — always pass --include-stable for a full sweep
+    when verifying an idiom-rule change, never rely on the default
+    routine run to catch a rewrite regression.
+
+    Returns an empty set (skip nothing) if patterns.db doesn't have
+    enough run history yet — this is a turnaround-time optimization, not
+    a correctness gate, so "not enough data" must fail open (run
+    everything) rather than silently exclude files nobody's actually
+    confirmed are stable."""
+    if not DB.exists():
+        return set()
+    import sqlite3
+    conn = sqlite3.connect(DB)
+    try:
+        revs = [r[0] for r in conn.execute(
+            "SELECT DISTINCT c2rust_rev FROM c2rust_decl_outcomes "
+            "WHERE c2rust_rev IS NOT NULL ORDER BY run_at DESC"
+        ).fetchall()]
+        # dedupe while preserving order (a rev can have multiple run_at
+        # timestamps if run_c2rust_baseline.py was invoked more than
+        # once at the same commit)
+        seen_revs = []
+        for r in revs:
+            if r not in seen_revs:
+                seen_revs.append(r)
+            if len(seen_revs) == STABILITY_WINDOW_REVS:
+                break
+        if len(seen_revs) < STABILITY_WINDOW_REVS:
+            return set()
+
+        placeholders = ",".join("?" * len(seen_revs))
+        rows = conn.execute(
+            f"SELECT c_file, decl_name, c2rust_rev, translated, run_at "
+            f"FROM c2rust_decl_outcomes WHERE c2rust_rev IN ({placeholders})",
+            seen_revs,
+        ).fetchall()
+        # Keep only each (c_file, c2rust_rev) pair's LATEST run_at, same
+        # "one snapshot per rev" logic c2rust_regression_check.py uses —
+        # a rev re-run twice shouldn't double-count as two data points.
+        latest_run_at = {}
+        for c_file, decl_name, rev, translated, run_at in rows:
+            key = (c_file, rev)
+            if key not in latest_run_at or run_at > latest_run_at[key]:
+                latest_run_at[key] = run_at
+        by_file_decl = {}  # (c_file, decl_name) -> {rev: translated}
+        for c_file, decl_name, rev, translated, run_at in rows:
+            if run_at != latest_run_at[(c_file, rev)]:
+                continue
+            by_file_decl.setdefault((c_file, decl_name), {})[rev] = translated
+
+        # A file is stable only if EVERY declaration c2rust reported for
+        # it (across all seen_revs, unioned — a decl appearing/
+        # disappearing between revs, e.g. corpus drift, also counts as
+        # "not stable") has the identical translated value in all
+        # STABILITY_WINDOW_REVS revisions.
+        unstable_files = set()
+        all_files = set()
+        for (c_file, _decl_name), by_rev in by_file_decl.items():
+            all_files.add(c_file)
+            if len(by_rev) != STABILITY_WINDOW_REVS or len(set(by_rev.values())) != 1:
+                unstable_files.add(c_file)
+        return all_files - unstable_files
+    finally:
+        conn.close()
+
 # See build_c2rust_pch.py: a Clang PCH built from the single largest
 # group of TUs that share identical stable compile flags (89% of this
 # build's corpus). Every real per-TU command in compile_commands.json
@@ -940,6 +1039,21 @@ def main():
              "awtoau/c2rust#4, ~50-75s each with no clean-pass outcome "
              "anyway) in this run.",
     )
+    ap.add_argument(
+        "--include-stable", action="store_true",
+        help=f"Include files whose per-declaration translated status has "
+             f"been unchanged across the last {STABILITY_WINDOW_REVS} "
+             f"distinct c2rust revisions (skipped by default in a routine "
+             f"run). ALWAYS PASS THIS when verifying an idiom-rule change "
+             f"(WARN_ON/fls-family/swap-mem-swap/etc.) — see stable_files()'s "
+             f"KNOWN LIMITATION docstring (awtoau/c2rust#5): an idiom rule "
+             f"changes what gets emitted inside an already-succeeding "
+             f"declaration without flipping its translated status, so the "
+             f"default routine run cannot catch an idiom-rule regression. "
+             f"Safe to omit only for reliability work (crash/dropped_decls "
+             f"fixes), which by definition flips translated for the files "
+             f"it actually changes.",
+    )
     args = ap.parse_args()
     if args.jobs is None:
         args.jobs = adaptive_job_count()
@@ -993,6 +1107,25 @@ def main():
                 len(skipped), len(skipped) + len(entries),
                 ", ".join(sorted(str(Path(e["file"]).relative_to(TREE)) for e in skipped)),
             )
+
+    if not args.include_stable:
+        stable = stable_files()
+        if stable:
+            kept = []
+            skipped = []
+            for e in entries:
+                rel = str(Path(e["file"]).relative_to(TREE))
+                (skipped if rel in stable else kept).append(e)
+            entries = kept
+            if skipped:
+                logging.info(
+                    "skipping %d/%d corpus files: per-decl translated status "
+                    "unchanged across the last %d c2rust revisions (pass "
+                    "--include-stable for a full sweep — required when "
+                    "verifying an idiom-rule change, see stable_files()'s "
+                    "docstring)",
+                    len(skipped), len(skipped) + len(entries), STABILITY_WINDOW_REVS,
+                )
 
     if args.limit:
         entries = entries[: args.limit]
