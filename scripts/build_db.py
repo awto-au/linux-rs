@@ -250,12 +250,14 @@ def main() -> int:
     n_docs = load_doc_sources(conn)
     logging.info("doc sources: %d", n_docs)
 
+    dropped_tables = []
     for table, (cols, rows) in table_backups.items():
         if not rows:
             continue
         new_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         if not new_cols:
             logging.warning("skipping restore of %s: table missing from current schema.sql", table)
+            dropped_tables.append((table, len(rows), "missing from schema.sql"))
             continue
         if set(cols) != new_cols:
             logging.warning(
@@ -263,6 +265,7 @@ def main() -> int:
                 "schema migration needed, not a straight restore",
                 table, sorted(cols), sorted(new_cols),
             )
+            dropped_tables.append((table, len(rows), "column set changed"))
             continue
         placeholders = ",".join("?" * len(cols))
         # doc_sources is pre-seeded by load_doc_sources() above (curated,
@@ -333,6 +336,16 @@ def main() -> int:
     logging.info("wrote %s (%.1f MB)", DB, DB.stat().st_size / 1e6)
     print(f"DB OK: {n_rules} rules, {n_funcs} functions, {n_stmts} statement "
          f"families, {n_tus} translated TUs -> {DB}")
+    # Loud, not just logged: a schema/data mismatch here silently drops
+    # persisted rows on every rebuild until someone happens to grep the
+    # log — this happened for real (2026-07-17, c2rust_attempts/
+    # c2rust_decl_outcomes drifted from schema.sql for an unknown number
+    # of rebuilds before being noticed).
+    if dropped_tables:
+        print("WARNING: persistent data DROPPED on this rebuild (schema.sql out of sync):")
+        for table, n, reason in dropped_tables:
+            print(f"  {table}: {n} rows lost ({reason}) — fix schema.sql to match, "
+                  f"then regenerate this table's data")
     return 0
 
 
