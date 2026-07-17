@@ -532,6 +532,289 @@ def run_one(entry, pch_flags=None):
     }
 
 
+# Default batch size for --batch-mode: one c2rust subprocess transpiles
+# this many TUs sequentially in-process (see awtoau/c2rust's
+# transpile_batch_with_results, added specifically for this harness).
+# Chosen as a middle ground — large enough to amortize process-spawn/
+# binary-load overhead (the entire point of batching) over many files,
+# small enough that one batch's wall-clock stays in the tens-of-seconds
+# range so --jobs parallel batches finish around the same time as each
+# other (a 510-file corpus in one giant batch would serialize the whole
+# run onto whatever --jobs slot picked it up, wasting the other slots).
+DEFAULT_BATCH_SIZE = 20
+
+BATCH_TIMEOUT_S = 600  # generous multiple of a single file's ~120s cap
+# (see run_one's per-file 120s), since one batch runs up to
+# DEFAULT_BATCH_SIZE files sequentially in one process — must be large
+# enough that a batch of entirely-slow files doesn't get killed
+# mid-batch and lose every remaining file's results, since (unlike
+# run_one's per-file timeout) a batch timeout has no partial-result
+# recovery: the subprocess is killed before it can print its one JSON
+# array to stdout at all.
+
+
+def make_batches(entries, pch_flags, batch_size=DEFAULT_BATCH_SIZE):
+    """Group entries into compile_commands.json-sized chunks for
+    --batch-mode: split first by PCH eligibility (a file's own command
+    already encodes whether -include-pch is valid for it — see
+    command_matches_pch — so mixing eligible/ineligible files in one
+    batch would be fine for correctness, but keeping the split makes
+    each batch homogeneous and easier to reason about/debug), then
+    within each eligibility group, further split so that no single
+    batch contains two files with the same basename.
+
+    The basename-uniqueness constraint exists because c2rust's -o <dir>
+    batch output layout nests output files under a path derived from
+    each C file's path relative to the batch's common ancestor
+    directory (see get_output_path/get_module_name in c2rust-transpile's
+    lib.rs) — replicating that exact derivation in Python (component-wise
+    non-alphanumeric-to-underscore mapping plus a ~50-entry Rust
+    reserved-keyword table) to locate each file's own .rs output would be
+    a second, drift-prone copy of logic that already lives in the Rust
+    source. Guaranteeing basename-uniqueness per batch sidesteps that
+    entirely: matching each batch's emitted .rs files back to their
+    source .c file by basename (with '-' replaced by '_', the one
+    filename-level transform get_output_path applies) is then
+    unambiguous without reimplementing the directory-nesting logic at
+    all. Real kernel basename collisions exist (e.g. cpu.c appears 4
+    times, cacheinfo.c twice, in this corpus) — this only forces those
+    particular duplicates apart into different batches, at most a few
+    extra small batches out of the whole run.
+    """
+    eligible, ineligible = [], []
+    for e in entries:
+        is_eligible = pch_flags is not None and command_matches_pch(e["command"], pch_flags)
+        (eligible if is_eligible else ineligible).append(e)
+
+    def chunk_by_unique_basename(group):
+        chunks = []
+        current = []
+        seen_names = set()
+        for e in group:
+            name = Path(e["file"]).stem.replace("-", "_")
+            if name in seen_names or len(current) >= batch_size:
+                if current:
+                    chunks.append(current)
+                current = []
+                seen_names = set()
+            current.append(e)
+            seen_names.add(name)
+        if current:
+            chunks.append(current)
+        return chunks
+
+    return chunk_by_unique_basename(eligible) + chunk_by_unique_basename(ineligible)
+
+
+def run_batch(entries, pch_flags=None):
+    """Batched sibling of run_one: transpile every entry in `entries` with
+    ONE c2rust subprocess (awtoau/c2rust's `--batch-json` CLI mode calling
+    `transpile_batch_with_results` in-process, per-file `catch_unwind`
+    crash isolation and per-file stderr capture — see that function's doc
+    comment in c2rust-transpile/src/lib.rs for how crash/diagnostic
+    isolation is preserved without a process boundary per file), instead
+    of one subprocess per file. Returns a list of dicts in the exact same
+    shape run_one() returns, so callers (main()'s DB-insertion loop) don't
+    need to know which path produced a given result.
+    """
+    if not entries:
+        return []
+
+    batch_id = safe_name(str(Path(entries[0]["file"]).relative_to(TREE))) + f"-batch{len(entries)}"
+    work = OUT_DIR / batch_id
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True, exist_ok=True)
+
+    cc_entries = []
+    used_pch_by_file = {}
+    for e in entries:
+        command = use_pch_if_eligible(e["command"], pch_flags)
+        cc_entries.append(dict(e, command=command))
+        used_pch_by_file[e["file"]] = command != e["command"]
+    cc_path = work / "compile_commands.json"
+    cc_path.write_text(json.dumps(cc_entries, indent=1))
+
+    start = time.monotonic()
+    proc = subprocess.Popen(
+        [C2RUST, "transpile", str(cc_path), "-o", str(work / "output"),
+         "--overwrite-existing", "--batch-json"],
+        cwd=TREE,
+        preexec_fn=_limit_memory,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    peak_rss = 0
+    try:
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=0.2)
+                break
+            except subprocess.TimeoutExpired:
+                peak_rss = max(peak_rss, _peak_rss_bytes(proc.pid))
+                if time.monotonic() - start > BATCH_TIMEOUT_S:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                    raise subprocess.TimeoutExpired(proc.args, BATCH_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        # Unlike run_one's per-file timeout, a batch timeout has no
+        # partial JSON to recover (the process is killed before it
+        # writes its one stdout JSON array) — every file in this batch
+        # is reported as a timeout, same as if each had individually
+        # timed out in the per-file path, so downstream outcome counts
+        # stay comparable between the two modes.
+        (work / "batch_stderr.log").write_text(stderr or "")
+        return [
+            {"file": str(Path(e["file"]).relative_to(TREE)), "outcome": "timeout"}
+            for e in entries
+        ]
+    duration_s = time.monotonic() - start
+    peak_rss = max(peak_rss, _peak_rss_bytes(proc.pid))
+
+    (work / "batch_stdout.json").write_text(stdout or "")
+    (work / "batch_stderr.log").write_text(stderr or "")
+
+    if proc.returncode != 0:
+        # The whole subprocess died (e.g. SIGSEGV/OOM outside a single
+        # file's catch_unwind — a genuine process-level crash rather than
+        # a caught-and-reported per-file panic) before it could print its
+        # JSON array at all. Every file in this batch shares that fate;
+        # distinguish OOM (RLIMIT_AS kill, negative returncode, no JSON)
+        # from any other whole-process crash the same way run_one does.
+        hit_mem_limit = proc.returncode < 0
+        outcome = "oom" if hit_mem_limit else "crash"
+        logging.warning(
+            "batch %s: whole subprocess exited %d before emitting JSON "
+            "(%d files affected) — see %s",
+            batch_id, proc.returncode, len(entries), work / "batch_stderr.log",
+        )
+        return [
+            {"file": str(Path(e["file"]).relative_to(TREE)), "outcome": outcome,
+             "returncode": proc.returncode}
+            for e in entries
+        ]
+
+    try:
+        file_results = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        logging.error("batch %s: could not parse --batch-json stdout: %s", batch_id, exc)
+        return [
+            {"file": str(Path(e["file"]).relative_to(TREE)), "outcome": "no_output"}
+            for e in entries
+        ]
+
+    # Match each batch-relative emitted .rs file back to its source .c
+    # file by basename (dashes underscored, same transform
+    # get_output_path applies to the filename component) — see
+    # make_batches' doc comment for why basename matching is safe here
+    # (batches are constructed to have no basename collisions) instead of
+    # replicating c2rust's full output-path derivation.
+    rs_by_stem = {}
+    output_dir = work / "output"
+    if output_dir.exists():
+        for rs_path in output_dir.rglob("*.rs"):
+            rs_by_stem.setdefault(rs_path.stem, []).append(rs_path)
+
+    # duration_s is per-batch wall-clock, not per-file — apportion evenly
+    # so the DB's existing duration_s column (used for percentile/slowest
+    # reporting) stays meaningful under batch mode too, even though it's
+    # now an average rather than a true per-file measurement. The
+    # structured phase_timings.total_s from --batch-json is the accurate
+    # per-file number and is what a real per-file timing comparison
+    # should use (see run_batch's caller / the wall-clock A/B in this
+    # script's --measure-timing path); this apportioned value only backs
+    # the same slowest-TU-style diagnostics run_one's duration_s backs.
+    per_file_duration = duration_s / len(entries) if entries else 0.0
+
+    results = []
+    by_file = {str(Path(e["file"]).relative_to(TREE)): e for e in entries}
+    seen_files = set()
+    for fr in file_results:
+        # fr["file"] is the exact `file` field from the compile_commands
+        # entry we submitted (see FileTranspileResult::file's doc
+        # comment) — an absolute path under TREE, matching entries' own
+        # "file" values exactly, so this round-trips without needing any
+        # path normalization.
+        rel = str(Path(fr["file"]).relative_to(TREE))
+        seen_files.add(rel)
+        entry = by_file[rel]
+
+        captured_stderr = fr.get("captured_stderr", "")
+        panic_message = fr.get("panic_message")
+        crashed = panic_message is not None
+        missing_nodes = captured_stderr.count("Missing top-level node")
+        missing_children = captured_stderr.count("Missing child")
+        label_addr = captured_stderr.count("Cannot translate GNU address of label")
+        warnings = captured_stderr.count("warning:")
+
+        # Match this C file's basename (dashes underscored, matching the
+        # one filename-level transform get_output_path applies — see
+        # make_batches' doc comment) to the .rs files a batch emitted.
+        # No per-file "oom" outcome here: RLIMIT_AS applies to the whole
+        # batch subprocess, not a per-file sub-limit, so a single file
+        # blowing the batch's memory budget kills the entire batch
+        # (handled by the proc.returncode != 0 branch above, well before
+        # this per-file loop runs).
+        stem = Path(rel).stem.replace("-", "_")
+        rs_files = rs_by_stem.get(stem, [])
+
+        if crashed:
+            outcome = "crash"
+        elif not rs_files:
+            outcome = "no_output"
+        elif missing_nodes or missing_children:
+            outcome = "dropped_decls"
+        else:
+            outcome = "clean"
+
+        signatures = [
+            {"kind": k, "source_file": sf, "source_line": sl, "detail": d}
+            for k, sf, sl, d in extract_signatures(captured_stderr)
+        ]
+
+        c_funcs = c_top_level_functions(TREE / entry["file"])
+        rs_funcs = set()
+        for rf in rs_files:
+            rs_funcs |= rs_translated_functions(rf)
+        decl_outcomes = [
+            {"name": fn, "translated": fn in rs_funcs} for fn in sorted(c_funcs)
+        ]
+
+        pt = fr.get("phase_timings") or {}
+        results.append({
+            "file": rel,
+            "outcome": outcome,
+            "returncode": 0 if fr.get("ok") or not crashed else 1,
+            "warnings": warnings,
+            "missing_top_level_nodes": missing_nodes,
+            "missing_children": missing_children,
+            "label_address_exprs": label_addr,
+            "rs_files_emitted": len(rs_files),
+            "peak_rss_bytes": peak_rss,  # batch-level, not per-file — see per_file_duration note
+            "duration_s": per_file_duration,
+            "signatures": signatures,
+            "decl_outcomes": decl_outcomes,
+            "used_pch": used_pch_by_file[entry["file"]],
+            "ast_export_s": pt.get("ast_export_s"),
+            "translate_s": pt.get("translate_s"),
+            "total_s": pt.get("total_s"),
+        })
+
+    # A file submitted in this batch that --batch-json didn't report at
+    # all would be a real bug in the batched path (every entry in
+    # compile_commands.json should produce exactly one FileTranspileResult
+    # — see transpile_batch_with_results' loop) rather than something to
+    # silently paper over; surface it as a distinct outcome instead of
+    # dropping the file from results entirely, which would silently
+    # shrink the corpus a batch-mode run reports against.
+    missing = set(by_file) - seen_files
+    for rel in sorted(missing):
+        logging.error("batch %s: %s missing from --batch-json output", batch_id, rel)
+        results.append({"file": rel, "outcome": "no_output"})
+
+    return results
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None)
@@ -556,6 +839,27 @@ def main():
              "RLIMIT_AS cap added the same day. Pass --jobs explicitly "
              "to override the adaptive default; still watch `free -h` "
              "during a run, the same as any concurrency change here.",
+    )
+    ap.add_argument(
+        "--batch-mode", action="store_true",
+        help="Use awtoau/c2rust's --batch-json entry point (transpile_batch_"
+             "with_results): group TUs into "
+             "DEFAULT_BATCH_SIZE-sized compile_commands.json batches "
+             "(split by PCH eligibility, then by basename-uniqueness — see "
+             "make_batches) and spawn one c2rust subprocess PER BATCH "
+             "instead of one per file, eliminating per-file process-spawn/"
+             "binary-load overhead (fork+exec, dynamic linker, LLVM/Clang "
+             "static init). Crash isolation is preserved inside the Rust "
+             "side via catch_unwind, not via a process boundary — see "
+             "transpile_batch_with_results' doc comment. Same DB schema, "
+             "same outcome classification as the default per-file path; "
+             "this flag only changes how many subprocesses get spawned. "
+             "Default is OFF (the original one-process-per-file path) so "
+             "the two modes can be A/B compared on demand.",
+    )
+    ap.add_argument(
+        "--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+        help=f"TUs per c2rust subprocess in --batch-mode (default {DEFAULT_BATCH_SIZE}).",
     )
     args = ap.parse_args()
     if args.jobs is None:
@@ -609,9 +913,12 @@ def main():
             "rest fall back to plain -include",
             PCH_FILE, n_pch, len(entries),
         )
+    batches = make_batches(entries, pch_flags, args.batch_size) if args.batch_mode else None
     logging.info(
-        "running c2rust transpile over %d .c TUs (%d parallel jobs)",
+        "running c2rust transpile over %d .c TUs (%d parallel jobs, mode=%s%s)",
         len(entries), args.jobs,
+        "batch" if args.batch_mode else "per-file",
+        f", {len(batches)} batches of up to {args.batch_size}" if batches is not None else "",
     )
 
     import sqlite3
@@ -626,23 +933,42 @@ def main():
     rev = git_rev(C2RUST_FORK)
     crev = corpus_rev()
 
+    # Batch mode submits one future per BATCH (each internally covering
+    # several files via one c2rust subprocess); per-file mode submits one
+    # future per FILE, same as before this flag existed. Either way each
+    # future resolves to a list of run_one()-shaped dicts — a completed
+    # per-file future is just a single-element list — so the results-
+    # draining/DB-write loop below doesn't need to know which mode
+    # produced what it's writing.
     results = []
+    total_units = len(batches) if batches is not None else len(entries)
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = {pool.submit(run_one, entry, pch_flags): entry for entry in entries}
+        if batches is not None:
+            futures = {pool.submit(run_batch, batch, pch_flags): batch for batch in batches}
+        else:
+            futures = {pool.submit(run_one, entry, pch_flags): [entry] for entry in entries}
         done = 0
         for fut in as_completed(futures):
-            entry = futures[fut]
+            unit = futures[fut]
             try:
-                r = fut.result()
+                unit_results = fut.result() if batches is not None else [fut.result()]
             except subprocess.TimeoutExpired:
-                r = {"file": entry["file"], "outcome": "timeout"}
-            results.append(r)
+                unit_results = [{"file": e["file"], "outcome": "timeout"} for e in unit]
+            results.extend(unit_results)
+            done += 1
+            if done % max(1, total_units // 20 or 1) == 0 or done == total_units:
+                logging.info("%d/%d %s done", done, total_units,
+                             "batches" if batches is not None else "files")
 
+        rows_written = 0
+        for r in results:
             # sqlite3 connections aren't thread-safe to share across
             # threads by default; all writes happen here, in the main
-            # thread, as each future completes (as_completed yields
-            # serially) — worker threads only run run_one(), never touch
-            # conn.
+            # thread, after every future has resolved (batch mode can't
+            # write incrementally as futures complete the way per-file
+            # mode's original loop did, since one future now yields many
+            # rows) — worker threads only run run_one()/run_batch(),
+            # never touch conn.
             rel = r["file"]
             cur = conn.execute(
                 "INSERT INTO c2rust_attempts "
@@ -675,10 +1001,10 @@ def main():
                     (attempt_id, rel, decl["name"], int(decl["translated"]), rev, crev, run_at),
                 )
 
-            done += 1
-            if done % 10 == 0 or done == len(entries):
+            rows_written += 1
+            if rows_written % 10 == 0 or rows_written == len(results):
                 conn.commit()
-                logging.info("%d/%d done", done, len(entries))
+                logging.info("%d/%d rows written", rows_written, len(results))
 
     conn.commit()
 
