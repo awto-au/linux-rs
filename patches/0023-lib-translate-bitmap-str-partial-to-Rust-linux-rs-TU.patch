@@ -1,0 +1,492 @@
+From 4004b6fc885d3c14102190994543c942b3a7cb00 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Fri, 17 Jul 2026 10:44:54 +1000
+Subject: [PATCH] lib: translate bitmap-str (partial) to Rust (linux-rs TU 30)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile         |  12 +-
+ lib/bitmap-str.c     |  15 ++
+ lib/bitmap-str_rs.rs | 399 +++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 425 insertions(+), 1 deletion(-)
+ create mode 100644 lib/bitmap-str_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index acb8282a231c..4e77866660a4 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -64,7 +64,7 @@ obj-y += debug_locks.o random32.o \
+ 	 bsearch.o lwq.o kfifo.o \
+ 	 percpu-refcount.o rhashtable.o \
+ 	 once.o refcount.o rcuref.o usercopy.o errseq.o bucket_locks.o \
+-	 generic-radix-tree.o bitmap-str.o kasprintf.o
++	 generic-radix-tree.o kasprintf.o
+ 
+ # linux-rs: PARTIAL translation — bitmap.c always builds (it still owns
+ # the allocator-touching functions: bitmap_alloc/bitmap_free/
+@@ -460,3 +460,13 @@ obj-y += kstrtox_rs.o
+ else
+ obj-y += kstrtox.o
+ endif
++
++# linux-rs: PARTIAL translation — bitmap-str.c always builds (it still
++# owns bitmap_parse_user/bitmap_print_*/bitmap_parselist_user, guarded
++# out of bitmap-str_rs.rs; see that file's module doc), plus
++# bitmap-str_rs.o under CONFIG_RUST for the functions translated so far
++# (guarded out of bitmap-str.c via #ifdef CONFIG_RUST).
++obj-y += bitmap-str.o
++ifdef CONFIG_RUST
++obj-y += bitmap-str_rs.o
++endif
+diff --git a/lib/bitmap-str.c b/lib/bitmap-str.c
+index be745209507a..4a57e8db88e9 100644
+--- a/lib/bitmap-str.c
++++ b/lib/bitmap-str.c
+@@ -209,6 +209,17 @@ EXPORT_SYMBOL(bitmap_print_list_to_buf);
+  *	    ^  ^     ^			 ^	     ^
+  *      start  off   group_len	       end	 nbits
+  */
++/*
++ * linux-rs: PARTIAL translation — bitmap_set_region() through
++ * bitmap_parselist() (below), and separately bitmap_get_x32_reverse()
++ * through bitmap_parse() (further below), are translated in
++ * bitmap-str_rs.rs; guarded out here under CONFIG_RUST to avoid
++ * duplicate EXPORT_SYMBOLs. bitmap_parse_user, the bitmap_print_
++ * family, and bitmap_parselist_user stay C-only (need memdup_user_nul,
++ * kasprintf, scnprintf, memory_read_from_buffer — not yet available)
++ * — see bitmap-str_rs.rs's module doc for the exact scope.
++ */
++#ifndef CONFIG_RUST
+ struct region {
+ 	unsigned int start;
+ 	unsigned int off;
+@@ -398,6 +409,7 @@ int bitmap_parselist(const char *buf, unsigned long *maskp, int nmaskbits)
+ 	return 0;
+ }
+ EXPORT_SYMBOL(bitmap_parselist);
++#endif /* !CONFIG_RUST */
+ 
+ 
+ /**
+@@ -430,6 +442,8 @@ int bitmap_parselist_user(const char __user *ubuf,
+ }
+ EXPORT_SYMBOL(bitmap_parselist_user);
+ 
++/* linux-rs: translated in bitmap-str_rs.rs, see that file's module doc. */
++#ifndef CONFIG_RUST
+ static const char *bitmap_get_x32_reverse(const char *start,
+ 					const char *end, u32 *num)
+ {
+@@ -508,3 +522,4 @@ int bitmap_parse(const char *start, unsigned int buflen,
+ 	return 0;
+ }
+ EXPORT_SYMBOL(bitmap_parse);
++#endif /* !CONFIG_RUST */
+diff --git a/lib/bitmap-str_rs.rs b/lib/bitmap-str_rs.rs
+new file mode 100644
+index 000000000000..ae4613d8542e
+--- /dev/null
++++ b/lib/bitmap-str_rs.rs
+@@ -0,0 +1,399 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Bitmap string parsing — Rust translation of `lib/bitmap-str.c`.
++//!
++//! Scope: `bitmap_parselist`, `bitmap_parse`, and their pure-string
++//! static helpers. Deferred to a follow-up pass: `bitmap_parse_user`,
++//! `bitmap_print_to_pagebuf`, `bitmap_print_to_buf`,
++//! `bitmap_print_bitmask_to_buf`, `bitmap_print_list_to_buf`,
++//! `bitmap_parselist_user` — these need `memdup_user_nul`/`kasprintf`/
++//! `scnprintf`/`memory_read_from_buffer`, none yet available in this
++//! project (same allocator/varargs-formatting infrastructure gap noted
++//! in lib/bitmap_rs.rs and lib/kstrtox_rs.rs's module docs).
++//!
++//! Depends on several already-translated TUs (cross-TU calls, rule
++//! 0021): `_parse_integer` (lib/kstrtox_rs.rs), `__bitmap_set`/
++//! `__bitmap_clear` (lib/bitmap_rs.rs — the `bitmap_set`/`bitmap_clear`
++//! header-inline wrappers' `__builtin_constant_p` fast paths are dead
++//! at every runtime call site here, same reasoning as bitmap_rs.rs's
++//! own module doc), `_find_next_bit` (lib/find_bit_rs.rs),
++//! `strncasecmp`/`strnchrnul` (lib/string_rs.rs), `hex_to_bin`
++//! (lib/hexdump_rs.rs).
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_int, c_uint, c_ulong};
++use kernel::prelude::*;
++
++const BITS_PER_LONG: u32 = usize::BITS;
++
++/// `ERR_PTR`/`PTR_ERR`/`IS_ERR` (`include/linux/err.h`) — plain
++/// pointer/integer encoding, no shim needed, rule 0016.
++const MAX_ERRNO: isize = 4095;
++#[inline]
++fn err_ptr(error: isize) -> *mut c_char {
++    error as *mut c_char
++}
++#[inline]
++fn ptr_err(ptr: *const c_char) -> isize {
++    ptr as isize
++}
++#[inline]
++fn is_err(ptr: *const c_char) -> bool {
++    (ptr as usize) >= (-MAX_ERRNO) as usize
++}
++
++/// `isspace(c)` (`include/linux/ctype.h`) — depends on the real
++/// `_ctype[]` table; same header-inline pattern as `isprint`/`tolower`
++/// elsewhere in this project, rule 0016.
++///
++/// # Safety
++/// `c` must be a value the real 256-entry `_ctype[]` table covers.
++#[inline]
++unsafe fn isspace(c: c_char) -> bool {
++    const CTYPE_S: u8 = 0x20;
++    let idx = c as u8 as usize;
++    // SAFETY: per function contract.
++    let mask = unsafe { *bindings::_ctype.as_ptr().add(idx) };
++    (mask & CTYPE_S) != 0
++}
++
++/// `bitmap_zero(dst, nbits)` — header-inline; the `small_const_nbits`
++/// fast path is dead at every runtime call site here (rule 0016, same
++/// as lib/bitmap_rs.rs's own private helper of the same name/shape).
++///
++/// # Safety
++/// `dst` has at least `nbits.div_ceil(BITS_PER_LONG)` valid `usize`s.
++#[inline]
++unsafe fn bitmap_zero(dst: *mut c_ulong, nbits: usize) {
++    let len = nbits.div_ceil(BITS_PER_LONG as usize) * core::mem::size_of::<c_ulong>();
++    // SAFETY: per function contract.
++    unsafe {
++        core::ptr::write_bytes(dst.cast::<u8>(), 0, len);
++    }
++}
++
++/// `BITS_TO_U32(nr)` (`include/linux/bitops.h`) — header-inline, rule 0016.
++#[inline]
++fn bits_to_u32(nr: usize) -> usize {
++    nr.div_ceil(32)
++}
++
++const KSTRTOX_OVERFLOW: u32 = 1u32 << 31;
++
++/// `end_of_str(c)` (this file's own static inline) — header-inline,
++/// rule 0016.
++#[inline]
++fn end_of_str(c: c_char) -> bool {
++    c == 0 || c == b'\n' as c_char
++}
++
++/// `__end_of_region(c)` — header-inline, rule 0016.
++///
++/// # Safety
++/// `c` must be a value the real `_ctype[]` table covers.
++#[inline]
++unsafe fn __end_of_region(c: c_char) -> bool {
++    // SAFETY: per function contract.
++    unsafe { isspace(c) || c == b',' as c_char }
++}
++
++/// `end_of_region(c)` — header-inline, rule 0016.
++///
++/// # Safety
++/// Same as `__end_of_region`.
++#[inline]
++unsafe fn end_of_region(c: c_char) -> bool {
++    // SAFETY: per function contract.
++    unsafe { __end_of_region(c) || end_of_str(c) }
++}
++
++/// Parse a decimal integer or the literal `'N'` (substituted with
++/// `lastbit`) from `str`, returning the advanced position. On error,
++/// returns an ERR_PTR-encoded pointer (rule 0016's `err.h` encoding).
++///
++/// # Safety
++/// `str` is a valid NUL-terminated C string.
++unsafe fn bitmap_getnum(str_: *const c_char, num: *mut c_uint, lastbit: c_uint) -> *const c_char {
++    // SAFETY: per function contract.
++    unsafe {
++        if *str_ == b'N' as c_char {
++            *num = lastbit;
++            return str_.add(1);
++        }
++
++        let mut n: u64 = 0;
++        let len = bindings::_parse_integer(str_, 10, &mut n);
++        if len == 0 {
++            return err_ptr(-(bindings::EINVAL as isize)).cast_const();
++        }
++        if len & KSTRTOX_OVERFLOW != 0 || n != n as c_uint as u64 {
++            return err_ptr(-(bindings::EOVERFLOW as isize)).cast_const();
++        }
++
++        *num = n as c_uint;
++        str_.add(len as usize)
++    }
++}
++
++/// Skip commas/whitespace at the start of a region; `None` if the rest
++/// of the string is empty.
++///
++/// # Safety
++/// `str` is a valid NUL-terminated C string.
++unsafe fn bitmap_find_region(str_: *const c_char) -> *const c_char {
++    let mut str_ = str_;
++    // SAFETY: per function contract.
++    unsafe {
++        while __end_of_region(*str_) {
++            str_ = str_.add(1);
++        }
++        if end_of_str(*str_) {
++            core::ptr::null()
++        } else {
++            str_
++        }
++    }
++}
++
++/// # Safety
++/// `start..=end` is a valid range of readable `c_char`s.
++unsafe fn bitmap_find_region_reverse(start: *const c_char, end: *const c_char) -> *const c_char {
++    let mut end = end;
++    // SAFETY: per function contract.
++    unsafe {
++        while start <= end && __end_of_region(*end) {
++            end = end.sub(1);
++        }
++        end
++    }
++}
++
++#[repr(C)]
++struct Region {
++    start: c_uint,
++    off: c_uint,
++    group_len: c_uint,
++    end: c_uint,
++    nbits: c_uint,
++}
++
++/// # Safety
++/// `str` is a valid NUL-terminated C string; `r.nbits` is already set.
++unsafe fn bitmap_parse_region(str_: *const c_char, r: *mut Region) -> *const c_char {
++    // SAFETY: per function contract.
++    unsafe {
++        let lastbit = (*r).nbits - 1;
++        let mut str_ = str_;
++
++        if bindings::strncasecmp(str_, c"all".as_ptr(), 3) == 0 {
++            (*r).start = 0;
++            (*r).end = lastbit;
++            str_ = str_.add(3);
++        } else {
++            str_ = bitmap_getnum(str_, &mut (*r).start, lastbit);
++            if is_err(str_) {
++                return str_;
++            }
++
++            if end_of_region(*str_) {
++                (*r).end = (*r).start;
++                (*r).off = (*r).end + 1;
++                (*r).group_len = (*r).end + 1;
++                return if end_of_str(*str_) { core::ptr::null() } else { str_ };
++            }
++
++            if *str_ != b'-' as c_char {
++                return err_ptr(-(bindings::EINVAL as isize)).cast_const();
++            }
++
++            str_ = bitmap_getnum(str_.add(1), &mut (*r).end, lastbit);
++            if is_err(str_) {
++                return str_;
++            }
++        }
++
++        // check_pattern:
++        if end_of_region(*str_) {
++            (*r).off = (*r).end + 1;
++            (*r).group_len = (*r).end + 1;
++            return if end_of_str(*str_) { core::ptr::null() } else { str_ };
++        }
++
++        if *str_ != b':' as c_char {
++            return err_ptr(-(bindings::EINVAL as isize)).cast_const();
++        }
++
++        str_ = bitmap_getnum(str_.add(1), &mut (*r).off, lastbit);
++        if is_err(str_) {
++            return str_;
++        }
++
++        if *str_ != b'/' as c_char {
++            return err_ptr(-(bindings::EINVAL as isize)).cast_const();
++        }
++
++        bitmap_getnum(str_.add(1), &mut (*r).group_len, lastbit)
++    }
++}
++
++/// # Safety
++/// `bitmap` has at least `r.nbits.div_ceil(BITS_PER_LONG)` valid `usize`s.
++unsafe fn bitmap_set_region(r: *const Region, bitmap: *mut c_ulong) {
++    // SAFETY: per function contract.
++    unsafe {
++        let mut start = (*r).start;
++        while start <= (*r).end {
++            let len = core::cmp::min((*r).end - start + 1, (*r).off);
++            bindings::__bitmap_set(bitmap, start, len as c_int);
++            start += (*r).group_len;
++        }
++    }
++}
++
++/// # Safety
++/// `r` is a valid, initialized `*const Region`.
++unsafe fn bitmap_check_region(r: *const Region) -> c_int {
++    // SAFETY: per function contract.
++    unsafe {
++        if (*r).start > (*r).end || (*r).group_len == 0 || (*r).off > (*r).group_len {
++            return -(bindings::EINVAL as c_int);
++        }
++        if (*r).end >= (*r).nbits {
++            return -(bindings::ERANGE as c_int);
++        }
++    }
++    0
++}
++
++/// Convert list format ASCII string to bitmap. See kernel-doc in
++/// `lib/bitmap-str.c` for the exact syntax.
++///
++/// # Safety
++/// `buf` is a valid NUL-or-newline-terminated C string; `maskp` has at
++/// least `nmaskbits.div_ceil(BITS_PER_LONG)` valid `usize`s.
++#[export]
++pub unsafe extern "C" fn bitmap_parselist(buf: *const c_char, maskp: *mut c_ulong, nmaskbits: c_int) -> c_int {
++    let mut r = Region { start: 0, off: 0, group_len: 0, end: 0, nbits: nmaskbits as c_uint };
++
++    // SAFETY: per function contract.
++    unsafe {
++        bitmap_zero(maskp, r.nbits as usize);
++
++        let mut buf = buf;
++        loop {
++            if buf.is_null() {
++                return 0;
++            }
++            buf = bitmap_find_region(buf);
++            if buf.is_null() {
++                return 0;
++            }
++
++            buf = bitmap_parse_region(buf, &mut r);
++            if is_err(buf) {
++                return ptr_err(buf) as c_int;
++            }
++
++            let ret = bitmap_check_region(&r);
++            if ret != 0 {
++                return ret;
++            }
++
++            bitmap_set_region(&r, maskp);
++        }
++    }
++}
++
++/// Parse 8 hex digits (32 bits) walking backward from `end` toward
++/// `start`, into `*num`.
++///
++/// # Safety
++/// `start..=end` is a valid range of readable `c_char`s; `num` is a
++/// valid `*mut u32`.
++unsafe fn bitmap_get_x32_reverse(start: *const c_char, end: *const c_char, num: *mut u32) -> *const c_char {
++    let mut ret: u32 = 0;
++    let mut end = end;
++
++    // SAFETY: per function contract.
++    unsafe {
++        let mut i = 0;
++        while i < 32 {
++            let c = bindings::hex_to_bin(*end as u8);
++            end = end.sub(1);
++            if c < 0 {
++                return err_ptr(-(bindings::EINVAL as isize)).cast_const();
++            }
++            ret |= (c as u32) << i;
++
++            if start > end || __end_of_region(*end) {
++                *num = ret;
++                return end;
++            }
++            i += 4;
++        }
++
++        if bindings::hex_to_bin(*end as u8) >= 0 {
++            return err_ptr(-(bindings::EOVERFLOW as isize)).cast_const();
++        }
++        *num = ret;
++        end
++    }
++}
++
++/// Convert an ASCII hex string into a bitmap. See kernel-doc in
++/// `lib/bitmap-str.c` for the exact syntax.
++///
++/// # Safety
++/// `start` has at least `buflen` valid readable bytes, or is
++/// NUL/newline-terminated sooner; `maskp` has at least
++/// `nmaskbits.div_ceil(32)` valid `u32`s.
++#[export]
++pub unsafe extern "C" fn bitmap_parse(
++    start: *const c_char,
++    buflen: c_uint,
++    maskp: *mut c_ulong,
++    nmaskbits: c_int,
++) -> c_int {
++    // SAFETY: per function contract.
++    unsafe {
++        let mut end: *const c_char = bindings::strnchrnul(start, buflen as usize, b'\n' as c_int).sub(1);
++        let mut chunks = bits_to_u32(nmaskbits as usize) as c_int;
++        let bitmap = maskp.cast::<u32>();
++        let mut chunk: isize = 0;
++
++        loop {
++            end = bitmap_find_region_reverse(start, end);
++            if start > end {
++                break;
++            }
++
++            if chunks == 0 {
++                return -(bindings::EOVERFLOW as c_int);
++            }
++            chunks -= 1;
++
++            // CONFIG_64BIT && __BIG_ENDIAN swap is dead on this
++            // riscv64 (little-endian) target — plain index, rule 0026-
++            // adjacent config-gating (not an arch override, ordinary
++            // dead code for this build).
++            let idx = chunk;
++            let r = bitmap_get_x32_reverse(start, end, bitmap.offset(idx));
++            if is_err(r.cast()) {
++                return ptr_err(r.cast()) as c_int;
++            }
++            end = r;
++            chunk += 1;
++        }
++
++        let unset_bit = (bits_to_u32(nmaskbits as usize) as c_int - chunks) * 32;
++        if unset_bit < nmaskbits {
++            bindings::__bitmap_clear(maskp, unset_bit as c_uint, nmaskbits - unset_bit);
++            return 0;
++        }
++
++        if bindings::_find_next_bit(maskp, nmaskbits as c_ulong, unset_bit as c_ulong) != unset_bit as c_ulong {
++            return -(bindings::EOVERFLOW as c_int);
++        }
++
++        0
++    }
++}
+-- 
+2.55.0
+
