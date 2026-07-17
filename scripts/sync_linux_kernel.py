@@ -96,7 +96,15 @@ def main():
     # is a separate, deliberate decision, not this script's to make.
     sh(["python3", str(REPO / "scripts" / "dev.py"), "check"], cwd=REPO, check=True)
 
-    print("SYNC OK: rebased, rebuilt, boot+KUnit oracle passed")
+    # patterns.db's corpus-derived tables (functions, statement families,
+    # translated-TU status) are keyed off linux-riscv's tree contents —
+    # stale after any rebase (new/moved/removed files, changed line
+    # numbers) even though the boot oracle above only checks runtime
+    # behavior, not the DB. Rebuild so readiness/rule-conformance queries
+    # reflect the tree this sync just moved to, not the pre-sync one.
+    sh(["python3", str(REPO / "scripts" / "dev.py"), "db"], cwd=REPO, check=True)
+
+    print("SYNC OK: rebased, rebuilt, boot+KUnit oracle passed, patterns.db refreshed")
     return 0
 
 
