@@ -29,7 +29,7 @@ import shutil
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -297,6 +297,30 @@ def extract_signatures(stderr):
             continue
 
 
+# Hard per-file wall-clock cap. Real full-corpus measurements put the
+# slowest observed file (fs/select.c) at ~75s — 240s leaves ~3x
+# headroom for normal variance (contention from other concurrent jobs,
+# a slower host) while still bounding a genuinely wedged process to a
+# few minutes rather than hanging the whole batch indefinitely.
+PER_FILE_TIMEOUT_S = 240
+
+# How often the main loop checks for whole-batch stalls (every worker
+# legitimately busy, but nothing completing) — short enough that a
+# stall is noticed promptly, long enough not to spin the poll loop.
+STALL_CHECK_INTERVAL_S = 15
+# How long with zero completions before logging a stall warning. Above
+# PER_FILE_TIMEOUT_S so a single slow-but-eventually-timing-out file
+# doesn't itself trigger this — it's meant to catch "the whole pool
+# looks wedged", not "one file is slow" (which the per-file timeout
+# already handles on its own).
+STALL_WARN_INTERVAL_S = 90
+# Absolute ceiling for a full run, regardless of job count or corpus
+# size — a real safety net against a run that would otherwise hang
+# indefinitely (e.g. every remaining worker genuinely deadlocked, not
+# just slow). 20 minutes is generously above any full-510-file-corpus
+# run observed so far (worst case seen: ~6m10s at 8 jobs).
+GLOBAL_RUN_TIMEOUT_S = 20 * 60
+
 # Hard per-process address-space cap. 2026-07-17: an unbounded 32-way
 # parallel run exhausted host RAM and triggered the OOM killer, which
 # took the desktop session down with it (confirmed via dmesg). Each
@@ -451,10 +475,10 @@ def run_one(entry, pch_flags=None):
                 break
             except subprocess.TimeoutExpired:
                 peak_rss = max(peak_rss, _peak_rss_bytes(proc.pid))
-                if time.monotonic() - start > 120:
+                if time.monotonic() - start > PER_FILE_TIMEOUT_S:
                     proc.kill()
                     stdout, stderr = proc.communicate()
-                    raise subprocess.TimeoutExpired(proc.args, 120)
+                    raise subprocess.TimeoutExpired(proc.args, PER_FILE_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         raise
     peak_rss = max(peak_rss, _peak_rss_bytes(proc.pid))
@@ -952,23 +976,82 @@ def main():
     # produced what it's writing.
     results = []
     total_units = len(batches) if batches is not None else len(entries)
+    unit_start = {}  # future -> time.monotonic() it was submitted, for the stall watchdog below
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         if batches is not None:
             futures = {pool.submit(run_batch, batch, pch_flags): batch for batch in batches}
         else:
             futures = {pool.submit(run_one, entry, pch_flags): [entry] for entry in entries}
+        now = time.monotonic()
+        for fut in futures:
+            unit_start[fut] = now
+        pending = set(futures)
         done = 0
-        for fut in as_completed(futures):
-            unit = futures[fut]
-            try:
-                unit_results = fut.result() if batches is not None else [fut.result()]
-            except subprocess.TimeoutExpired:
-                unit_results = [{"file": e["file"], "outcome": "timeout"} for e in unit]
-            results.extend(unit_results)
-            done += 1
-            if done % max(1, total_units // 20 or 1) == 0 or done == total_units:
-                logging.info("%d/%d %s done", done, total_units,
-                             "batches" if batches is not None else "files")
+        run_start = time.monotonic()
+        last_progress = run_start
+        while pending:
+            # Poll with a short timeout instead of a single blocking
+            # as_completed(futures) call, so a whole-batch stall (every
+            # worker still legitimately busy, nothing has finished in a
+            # while) is visible as a log line instead of silent — the
+            # only prior signal for "is this run still making progress"
+            # was a human noticing the periodic done-count log stopped
+            # advancing.
+            newly_done, pending = wait(pending, timeout=STALL_CHECK_INTERVAL_S,
+                                        return_when=FIRST_COMPLETED)
+            if newly_done:
+                last_progress = time.monotonic()
+            for fut in newly_done:
+                unit = futures[fut]
+                try:
+                    unit_results = fut.result() if batches is not None else [fut.result()]
+                except subprocess.TimeoutExpired:
+                    unit_results = [{"file": e["file"], "outcome": "timeout"} for e in unit]
+                except Exception:
+                    # A worker-thread exception (e.g. an I/O race the
+                    # per-file path itself didn't already recover from)
+                    # must not propagate out of this loop and abort
+                    # every other in-flight unit's already-computed
+                    # result — record it as a distinct outcome and keep
+                    # draining the rest of the pool, matching the
+                    # recovery this project already added inside
+                    # run_one() for the specific ENOENT race that
+                    # prompted this — this is the same principle
+                    # applied at the loop level, for any other
+                    # unexpected exception shape.
+                    logging.exception("unit for %s raised an unexpected exception", unit)
+                    unit_results = [{"file": e["file"], "outcome": "error"} for e in unit]
+                results.extend(unit_results)
+                done += 1
+                if done % max(1, total_units // 20 or 1) == 0 or done == total_units:
+                    logging.info("%d/%d %s done", done, total_units,
+                                 "batches" if batches is not None else "files")
+
+            stalled_for = time.monotonic() - last_progress
+            if pending and stalled_for > STALL_WARN_INTERVAL_S:
+                in_flight = sorted(
+                    (time.monotonic() - unit_start[f], futures[f][0]["file"]) for f in pending
+                )
+                logging.warning(
+                    "no progress for %.0fs — %d unit(s) still running: %s",
+                    stalled_for, len(pending),
+                    ", ".join(f"{name} ({elapsed:.0f}s)" for elapsed, name in in_flight[-10:]),
+                )
+                last_progress = time.monotonic()  # only warn once per interval, not every poll
+
+            if time.monotonic() - run_start > GLOBAL_RUN_TIMEOUT_S:
+                logging.error(
+                    "global run timeout (%.0fs) exceeded with %d/%d %s still pending — "
+                    "killing remaining work and reporting what finished",
+                    GLOBAL_RUN_TIMEOUT_S, len(pending), total_units,
+                    "batches" if batches is not None else "files",
+                )
+                for fut in pending:
+                    fut.cancel()
+                    for e in futures[fut]:
+                        results.append({"file": e["file"], "outcome": "global_timeout"})
+                pending = set()
+                break
 
         rows_written = 0
         for r in results:
