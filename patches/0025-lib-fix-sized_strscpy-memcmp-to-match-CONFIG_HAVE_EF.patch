@@ -1,0 +1,119 @@
+From 0eff989556b6e0471ad186df63f6a662908ae003 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Fri, 17 Jul 2026 18:42:08 +1000
+Subject: [PATCH] lib: fix sized_strscpy/memcmp to match
+ CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS-off #else arm (found via #ifdef audit)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/string_rs.rs | 65 +++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 45 insertions(+), 20 deletions(-)
+
+diff --git a/lib/string_rs.rs b/lib/string_rs.rs
+index 78155aafc23e..6e77a3a47f2c 100644
+--- a/lib/string_rs.rs
++++ b/lib/string_rs.rs
+@@ -208,13 +208,14 @@ unsafe fn read_word_at_a_time(addr: *const u8) -> usize {
+ /// # Safety
+ /// `dest` has room for `count` bytes; `src` is a valid NUL-terminated
+ /// C string, or if unterminated within `count` bytes, at least `count`
+-/// bytes are readable without crossing an unmapped page (word-at-a-time
+-/// path is only taken when both `src`/`dest` are `usize`-aligned, per
+-/// the `CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS`-off `max = 0` fallback
+-/// below — this target has no `#else` branch taken since
+-/// `CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS` IS set on riscv64, so the
+-/// page-boundary-limiting branch is the live one; caller must still
+-/// honor the same word-at-a-time-vs-byte-at-a-time contract the C has).
++/// bytes are readable without crossing an unmapped page. With
++/// `CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS` off (this target's actual
++/// config: it uses `CONFIG_RISCV_PROBE_UNALIGNED_ACCESS` runtime
++/// probing instead, not the compile-time-efficient variant), the
++/// word-at-a-time path only runs when both `src`/`dest` are
++/// `usize`-aligned — see the `#[cfg(not(...))]` arm below, which
++/// mirrors the C's true live `#else` branch (`lib/string.c`'s
++/// `sized_strscpy`) rather than its `#ifdef` branch.
+ #[export]
+ pub unsafe extern "C" fn sized_strscpy(dest: *mut c_char, src: *const c_char, count: usize) -> isize {
+     const ONE_BITS: usize = usize::MAX / 0xff;
+@@ -227,15 +228,31 @@ unsafe fn read_word_at_a_time(addr: *const u8) -> usize {
+         return -(bindings::E2BIG as isize);
+     }
+ 
+-    // CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS is set on riscv64: if src
+-    // is unaligned, don't cross a page boundary (next page may be
+-    // unmapped).
+-    if (src as usize) & (core::mem::size_of::<usize>() - 1) != 0 {
+-        // SAFETY: bindings::PAGE_SIZE is a real kernel constant.
+-        let page_size = bindings::PAGE_SIZE;
+-        let limit = page_size - ((src as usize) & (page_size - 1));
+-        if limit < max {
+-            max = limit;
++    // CONFIG_DCACHE_WORD_ACCESS is off in this config (moot either way —
++    // it only gates a filesystem-dcache-specific fast path unrelated to
++    // this function's own two arms below).
++    #[cfg(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS)]
++    {
++        // If src is unaligned, don't cross a page boundary, since we
++        // don't know if the next page is mapped.
++        if (src as usize) & (core::mem::size_of::<usize>() - 1) != 0 {
++            // SAFETY: bindings::PAGE_SIZE is a real kernel constant.
++            let page_size = bindings::PAGE_SIZE;
++            let limit = page_size - ((src as usize) & (page_size - 1));
++            if limit < max {
++                max = limit;
++            }
++        }
++    }
++    // This target's actual .config has CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
++    // off (confirmed absent; riscv64 gets it only via the non-default
++    // RISCV_EFFICIENT_UNALIGNED_ACCESS/NONPORTABLE option, not what this
++    // build selects) — the live arm is the C's `#else`: if EITHER src or
++    // dest is unaligned, skip word-at-a-time entirely.
++    #[cfg(not(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))]
++    {
++        if ((dest as usize) | (src as usize)) & (core::mem::size_of::<usize>() - 1) != 0 {
++            max = 0;
+         }
+     }
+ 
+@@ -625,10 +642,11 @@ unsafe fn read_word_at_a_time(addr: *const u8) -> usize {
+ /// `cs`/`ct` each have at least `count` valid readable bytes.
+ #[export]
+ pub unsafe extern "C" fn memcmp(cs: *const c_void, ct: *const c_void, count: usize) -> c_int {
+-    // CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS word-at-a-time fast path
+-    // is set on riscv64 — translated faithfully rather than skipped,
+-    // since (unlike sized_strscpy's page-boundary case) this file's
+-    // own get_unaligned() read has no page-crossing hazard to guard.
++    // CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS is off in this target's
++    // actual .config (confirmed absent — riscv64 gets it only via the
++    // non-default RISCV_EFFICIENT_UNALIGNED_ACCESS/NONPORTABLE option),
++    // so the C's word-at-a-time fast path doesn't exist in the real
++    // build; #[cfg]-gated to match rather than unconditionally included.
+     let mut count = count;
+     let mut su1 = cs.cast::<u8>();
+     let mut su2 = ct.cast::<u8>();
+@@ -636,6 +654,7 @@ unsafe fn read_word_at_a_time(addr: *const u8) -> usize {
+     // SAFETY: per function contract; the word-at-a-time loop only
+     // advances while `count >= size_of::<usize>()` bytes remain
+     // readable at both `su1`/`su2`, matching the C's own bound.
++    #[cfg(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS)]
+     unsafe {
+         if count >= core::mem::size_of::<usize>() {
+             let mut u1 = su1.cast::<usize>();
+@@ -654,7 +673,13 @@ unsafe fn read_word_at_a_time(addr: *const u8) -> usize {
+             su1 = u1.cast();
+             su2 = u2.cast();
+         }
++    }
+ 
++    // SAFETY: per function contract; `su1`/`su2` advance at most
++    // `count` bytes past `cs`/`ct` (or past wherever the word-at-a-time
++    // fast path above left them, still within the original `count`
++    // byte bound).
++    unsafe {
+         let mut res: c_int = 0;
+         while count > 0 {
+             res = *su1 as c_int - *su2 as c_int;
+-- 
+2.55.0
+
