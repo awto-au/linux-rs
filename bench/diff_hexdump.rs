@@ -68,15 +68,16 @@ fn isascii(c: u8) -> bool {
 }
 
 fn hex_to_bin(ch: u8) -> i32 {
+    let ch = ch as i32;
     let cu = ch & 0xdf;
-    -1 + ((ch.wrapping_sub(b'0').wrapping_add(1)) as i32
-        & (((ch.wrapping_sub(b'9').wrapping_sub(1))
-            & (b'0'.wrapping_sub(1).wrapping_sub(ch))) as u32
-            >> 8) as i32)
-        + ((cu.wrapping_sub(b'A').wrapping_add(11)) as i32
-            & (((cu.wrapping_sub(b'F').wrapping_sub(1))
-                & (b'A'.wrapping_sub(1).wrapping_sub(cu))) as u32
-                >> 8) as i32)
+    -1 + ((ch.wrapping_sub(b'0' as i32).wrapping_add(1))
+        & ((ch.wrapping_sub(b'9' as i32).wrapping_sub(1))
+            & ((b'0' as i32).wrapping_sub(1).wrapping_sub(ch))) as u32 as i32
+            >> 8)
+        + ((cu.wrapping_sub(b'A' as i32).wrapping_add(11))
+            & ((cu.wrapping_sub(b'F' as i32).wrapping_sub(1))
+                & ((b'A' as i32).wrapping_sub(1).wrapping_sub(cu))) as u32 as i32
+                >> 8)
 }
 
 fn hex2bin(dst: &mut [u8], src: &[u8], mut count: usize) -> i32 {
