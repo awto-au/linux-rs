@@ -8,6 +8,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py build                  # make riscv kernel (LLVM=1 -j32)
   dev.py boot                   # boot QEMU -> tmp/qemu-boot.log, KUnit summary
   dev.py check                  # build + boot + fail on any 'not ok'
+  dev.py report                 # regenerate docs/STATUS.md + status.png only
   dev.py config -e OPT [-e ..]  # scripts/config -e + olddefconfig
   dev.py integrate --obj lib/foo.o --header linux/foo.h --kunit CONFIG_X --suite s
   dev.py readiness [glob]       # rank untranslated TUs
@@ -18,6 +19,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py db                     # rebuild rulesdb/patterns.db (ephemeral, rebuild-not-migrate)
   dev.py q <subcommand> ...     # quick SQL checks against patterns.db (see query_db.py --help)
   dev.py patch N                # format-patch HEAD -> patches/ start-number N
+  dev.py land KMSG [REPOMSG]    # kcommit + patch + report + push, one shot
   dev.py push "msg"             # commit -A + push project repo
   dev.py kcommit "msg"          # commit staged files in kernel worktree
 

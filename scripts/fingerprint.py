@@ -23,43 +23,19 @@ import json
 import logging
 import multiprocessing as mp
 import os
-import shlex
 import sys
 from pathlib import Path
 
 import clang.cindex as ci
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from region_census import tu_args  # noqa: E402 — was a byte-identical copy here
 
 REPO = Path(__file__).resolve().parent.parent
 LOG = REPO / "tmp" / "fingerprint.log"
 OUT = REPO / "tmp" / "functions.jsonl"
 
 K = ci.CursorKind
-DROP_ARGS = {"-c", "-nostdinc"}  # -nostdinc kept actually; placeholder set below
-
-
-def tu_args(entry):
-    """Extract clang args from a compile_commands entry, minus argv0/-c/-o/src.
-
-    The source appears in the command as a path relative to `directory` while
-    entry["file"] is absolute — compare resolved paths, not strings.
-    """
-    src = os.path.realpath(entry["file"])
-    argv = shlex.split(entry["command"])
-    args, skip = [], False
-    for a in argv[1:]:
-        if skip:
-            skip = False
-            continue
-        if a == "-o":
-            skip = True
-            continue
-        if a == "-c":
-            continue
-        if not a.startswith("-") and \
-                os.path.realpath(os.path.join(entry["directory"], a)) == src:
-            continue
-        args.append(a)
-    return args
 
 
 FEATURES = {
