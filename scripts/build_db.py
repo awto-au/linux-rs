@@ -76,6 +76,51 @@ def load_rules(conn):
     return n
 
 
+# Hand-curated, not crawled — small enough to maintain by hand, and each
+# entry needs a human judgment call about authoritativeness that a crawler
+# can't make. Re-seeded every rebuild via INSERT OR IGNORE (UNIQUE(topic,
+# location) in schema.sql), so adding an entry here is safe to re-run and
+# never duplicates; edit an existing row's tuple directly to correct it.
+DOC_SOURCES = [
+    ("rust-for-linux-kernel-crate", "local", "linux-riscv/rust/kernel/",
+     "Linux 7.1 (this project's actual vendored source — exact commit this build compiles)",
+     1, "The real, vendored Rust-for-Linux kernel crate. Always check here "
+        "first for an exact macro/function signature. If the API you need "
+        "isn't ported/wrapped here yet, port it first (with a rust/helpers/*.c "
+        "shim if needed) rather than bypassing the crate."),
+    ("rust-for-linux-kernel-crate", "external", "https://rust.docs.kernel.org/6.12/kernel/index.html",
+     "Tracks Linux 6.12, not this project's 7.1 — cross-check any exact "
+     "signature against the local source before trusting it",
+     0, "Official generated rustdoc, convenient for browsing/searching the "
+        "overall crate shape, but a different commit than what this project builds."),
+    ("rust-for-linux-kernel-crate", "external", "https://rust-for-linux.github.io/docs/kernel/",
+     "Rolling/unclear which commit it tracks — verify before trusting an exact signature",
+     0, "Community-hosted docs, useful for prose/design context, not a "
+        "substitute for reading the local rust/kernel/ source."),
+    ("linux-rs-translation-rules", "local", "rulesdb/rules/",
+     "This project's own authored rules, versioned in this repo",
+     1, "The authored TOML rules driving c2rust-transpile conformance "
+        "checking and the hand-translation pattern catalogue."),
+    ("c2rust-kernel-idiom-rules", "local", "awtoau/c2rust README.md (KernelIdiomRule section)",
+     "awtoau/c2rust fork, branch master — this project's own clone",
+     1, "The Stage-3 kernel-idiom-rewrite process (rank violations -> verify "
+        "-> gate behind --enable-rule -> confirm default unchanged) and the "
+        "registry of landed rules (warn-on, fls-family, swap-mem-swap)."),
+]
+
+
+def load_doc_sources(conn):
+    n = 0
+    for topic, kind, location, version_note, authoritative, notes in DOC_SOURCES:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO doc_sources (topic, kind, location, "
+            "version_note, authoritative, notes, added_at) VALUES (?,?,?,?,?,?,?)",
+            (topic, kind, location, version_note, authoritative, notes, "2026-07-17"),
+        )
+        n += cur.rowcount
+    return n
+
+
 def load_functions(conn):
     path = REPO / "tmp" / "functions.jsonl"
     if not path.exists():
@@ -166,6 +211,7 @@ def main() -> int:
         "c2rust_issues",
         "c2rust_rule_conformance",
         "progress_snapshots",
+        "doc_sources",
     ]
     table_backups = {}
     if DB.exists():
@@ -201,6 +247,8 @@ def main() -> int:
     logging.info("statement families: %d", n_stmts)
     n_tus = load_translated_tus(conn)
     logging.info("translated TUs: %d", n_tus)
+    n_docs = load_doc_sources(conn)
+    logging.info("doc sources: %d", n_docs)
 
     for table, (cols, rows) in table_backups.items():
         if not rows:
@@ -217,7 +265,12 @@ def main() -> int:
             )
             continue
         placeholders = ",".join("?" * len(cols))
-        conn.executemany(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders})", rows)
+        # doc_sources is pre-seeded by load_doc_sources() above (curated,
+        # re-run every rebuild) — OR IGNORE so restoring its own prior
+        # output doesn't collide with itself on UNIQUE(topic, location);
+        # any hand-added extra rows still come through untouched.
+        verb = "INSERT OR IGNORE" if table == "doc_sources" else "INSERT"
+        conn.executemany(f"{verb} INTO {table} ({','.join(cols)}) VALUES ({placeholders})", rows)
         logging.info("restored %d rows into %s", len(rows), table)
 
     # c2rust_issues_fts is an FTS5 virtual table over c2rust_issues — not

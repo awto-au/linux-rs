@@ -271,8 +271,6 @@ CREATE VIRTUAL TABLE c2rust_issues_fts USING fts5(
 -- snapshot (taken via scripts/take_progress_snapshot.py, run manually
 -- after landing a TU or a c2rust baseline run) so progress trends over
 -- the project's actual history are queryable, not just current state.
--- 2026-07-17, Dan's request: "a stats table - not ephemeral that
--- records progress as well".
 CREATE TABLE progress_snapshots (
     id INTEGER PRIMARY KEY,
     taken_at TEXT NOT NULL,        -- ISO 8601
@@ -440,3 +438,29 @@ FROM c2rust_rule_conformance
 WHERE status = 'violation'
 GROUP BY rule_id
 ORDER BY files_affected DESC;
+
+-- Authoritative documentation/reference sources — where to actually go
+-- look up an API before guessing or reaching for a possibly-version-
+-- mismatched external site. Two kinds: LOCAL (a path inside this
+-- project's own trees — always version-correct by construction, since
+-- it's the exact source this build compiles) and EXTERNAL (a URL —
+-- convenient to browse, but only as trustworthy as its version_note
+-- says, since e.g. rust.docs.kernel.org/6.12 or rust-for-linux.github.io
+-- track a different commit than linux-riscv's actual vendored Linux 7.1
+-- rust/kernel/ tree). Prefer LOCAL for anything version-sensitive
+-- (exact macro/function signatures); EXTERNAL sources are fine for
+-- browsing/searching but any concrete API detail taken from one should
+-- be cross-checked against the LOCAL source before being relied on.
+CREATE TABLE doc_sources (
+    id INTEGER PRIMARY KEY,
+    topic TEXT NOT NULL,           -- e.g. "rust-for-linux-kernel-crate", "c2rust-kernel-idiom-rules"
+    kind TEXT NOT NULL,            -- local | external
+    location TEXT NOT NULL,        -- LOCAL: repo-relative path. EXTERNAL: URL.
+    version_note TEXT,             -- what this source tracks (a Linux version, a commit, "rolling/unknown — verify before trusting an exact signature")
+    authoritative INTEGER NOT NULL DEFAULT 0,  -- 1 if this is the version-correct source of truth for `topic` in THIS project
+    notes TEXT,
+    added_at TEXT NOT NULL,        -- ISO 8601
+    UNIQUE(topic, location)
+);
+CREATE INDEX idx_doc_sources_topic ON doc_sources(topic);
+CREATE INDEX idx_doc_sources_authoritative ON doc_sources(authoritative);
