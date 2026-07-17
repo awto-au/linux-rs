@@ -52,6 +52,22 @@ lock expression, `...` between) over `drivers/char`:
 
 ## c2rust — verdict: WORKS on kernel code (with friction); usable as Stage-1 reference
 
+> **Superseded 2026-07-18:** the "not a foundation" call below was the
+> right read of the vanilla upstream tool on 2026-07-16. Since then the
+> [awtoau/c2rust fork](https://github.com/awtoau/c2rust) has landed
+> kernel-idiom rewrite rules, real bug fixes (dangling-decl/label panics,
+> `_THIS_IP_`, `offsetof(typeof(...))`, GNU asm-goto, and more), and
+> eliminated every known crash across its 552-file baseline corpus — see
+> `rulesdb/README.md`'s "c2rust fork integration" section and the
+> `c2rust_attempts`/`c2rust_rule_conformance` tables in
+> [patterns-db.md](patterns-db.md). The fork is now staged to become a
+> **primary translation source**, not just a differential-baseline
+> reference emitter, gated by continued pipeline+rule-conformance work.
+> The AST-decoupling concern below is still valid for the *rule DB*
+> (rules key on our own fingerprints, not c2rust's AST) — what changed is
+> how much of the raw transpile output is directly usable as a starting
+> point.
+
 Install saga (all reproducible facts, 2026-07-16):
 - `cargo install c2rust` (0.22.1, crates.io): **FAILS against LLVM 22**
   (`TagDecl::getTypeForDecl` deleted upstream).
