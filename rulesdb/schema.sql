@@ -486,3 +486,56 @@ CREATE TABLE doc_sources (
 );
 CREATE INDEX idx_doc_sources_topic ON doc_sources(topic);
 CREATE INDEX idx_doc_sources_authoritative ON doc_sources(authoritative);
+
+-- Single source of truth for prioritizing and tracking work across BOTH
+-- tracks (hand-translation in linux-riscv/, the awtoau/c2rust fork) —
+-- not a replacement for GitHub issues/PRs as the actual handoff
+-- mechanism (an agent, Copilot, or a human still does the work by
+-- picking up a real issue/PR and opening a real commit), just the
+-- queryable index of what exists, its priority, and its status, so
+-- "what should be worked on next" is one query instead of scanning
+-- multiple issue trackers and git logs by eye.
+CREATE TABLE work_items (
+    id INTEGER PRIMARY KEY,
+    track TEXT NOT NULL,           -- c2rust | kernel | tooling | docs
+    title TEXT NOT NULL,
+    -- Optional link to the real handoff artifact — the actual place
+    -- work happens. NULL means tracked here but not yet filed anywhere
+    -- (e.g. a finding not yet worth a GitHub issue).
+    repo TEXT,                     -- "owner/repo", e.g. "awtoau/c2rust"
+    issue_number INTEGER,          -- GitHub issue/PR number in `repo`
+    -- Denormalized priority, kept in sync with the real GitHub label
+    -- (P0-P4, see c2rust_issues.labels) by whatever script/agent
+    -- updates both — this column exists so kernel-track work items
+    -- (which have no GitHub issue to carry a label) can still be
+    -- ranked on the same P0-P4 scale.
+    priority TEXT,                 -- P0 | P1 | P2 | P3 | P4
+    status TEXT NOT NULL DEFAULT 'open',  -- open | in_progress | blocked | done | wontfix
+    -- Why this priority — the concrete evidence (file count, boot-path
+    -- relevance, etc.), not just a number, so re-ranking later has
+    -- something to check against rather than re-deriving from scratch.
+    priority_rationale TEXT,
+    files_affected INTEGER,        -- corpus-breadth signal, when known
+    blocks_boot_path INTEGER NOT NULL DEFAULT 0,  -- 1 if confirmed blocking a file linux-riscv actually compiles into its current kernel
+    assigned_to TEXT,              -- "copilot" | "agent" | a person's name | NULL if unassigned
+    fixed_by_commit TEXT,          -- commit hash, once done
+    notes TEXT,
+    created_at TEXT NOT NULL,      -- ISO 8601
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_work_items_track ON work_items(track);
+CREATE INDEX idx_work_items_priority ON work_items(priority);
+CREATE INDEX idx_work_items_status ON work_items(status);
+CREATE INDEX idx_work_items_repo_issue ON work_items(repo, issue_number);
+
+-- Convenience view: what's actually actionable right now, ranked.
+CREATE VIEW work_items_active AS
+SELECT track, title, priority, status, repo, issue_number,
+       files_affected, blocks_boot_path, assigned_to, priority_rationale
+FROM work_items
+WHERE status IN ('open', 'in_progress', 'blocked')
+ORDER BY
+    CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2
+                   WHEN 'P3' THEN 3 WHEN 'P4' THEN 4 ELSE 5 END,
+    blocks_boot_path DESC,
+    files_affected DESC;

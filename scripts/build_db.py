@@ -212,6 +212,7 @@ def main() -> int:
         "c2rust_rule_conformance",
         "progress_snapshots",
         "doc_sources",
+        "work_items",
     ]
     table_backups = {}
     if DB.exists():

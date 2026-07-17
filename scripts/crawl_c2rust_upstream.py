@@ -167,6 +167,11 @@ def main():
     ap.add_argument("--issues-only", action="store_true")
     ap.add_argument("--ahead-by", action="store_true", help="fill ahead_by for forks lacking it (one API call/fork)")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--repo", default=UPSTREAM,
+                     help=f"issues repo to crawl (default {UPSTREAM}); pass awtoau/c2rust "
+                          "to refresh our own fork's issue tracker, our single source of "
+                          "truth for c2rust fix priority/assignment (see c2rust_issues WHERE "
+                          "repo='awtoau/c2rust')")
     args = ap.parse_args()
 
     TMP.mkdir(exist_ok=True)
@@ -204,7 +209,7 @@ def main():
         if not args.issues_only:
             crawl_forks(conn, limit=args.limit)
         if not args.forks_only:
-            crawl_issues(conn, UPSTREAM, limit=args.limit)
+            crawl_issues(conn, args.repo, limit=args.limit)
             rebuild_fts(conn)
 
     n_forks = conn.execute("SELECT COUNT(*) FROM c2rust_forks").fetchone()[0]
