@@ -1,0 +1,171 @@
+From bd3f92f6dacaef1ad81a4d709bae90192d139d98 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Fri, 17 Jul 2026 18:13:01 +1000
+Subject: [PATCH] lib: fix decompress_rs decompressor table to respect
+ CONFIG_DECOMPRESS_* (found via initramfs boot)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/decompress_rs.rs            | 110 +++++++++++++++++++++++++++-----
+ rust/bindings/bindings_helper.h |   7 ++
+ 2 files changed, 101 insertions(+), 16 deletions(-)
+
+diff --git a/lib/decompress_rs.rs b/lib/decompress_rs.rs
+index da4a6f186907..78ce174c2311 100644
+--- a/lib/decompress_rs.rs
++++ b/lib/decompress_rs.rs
+@@ -2,12 +2,21 @@
+ //! Detect the decompression method based on magic number — Rust
+ //! translation of `lib/decompress.c`.
+ //!
+-//! Every `CONFIG_DECOMPRESS_*` option is unset in our target config, so
+-//! every table entry's decompressor slot is a NULL function pointer here,
+-//! exactly as it is in the C (`#define gunzip NULL` etc.) — this is not
+-//! dead code to skip, the table STRUCTURE and magic-number matching are
+-//! live and exercised; only the individual decompressor symbols are
+-//! absent for this config.
++//! Each table entry's decompressor slot is `#[cfg(CONFIG_DECOMPRESS_*)]`-
++//! gated to the real `bindings::` function, or `None` when that config is
++//! off — the direct equivalent of the C original's
++//! `#ifndef CONFIG_DECOMPRESS_GZIP` / `#define gunzip NULL` pattern (see
++//! `lib/decompress.c`). TU 22's first translation hardcoded every slot to
++//! `None` unconditionally on the (then-true, since CONFIG_BLK_DEV_INITRD
++//! was off) assumption that no CONFIG_DECOMPRESS_* would ever be enabled
++//! for this target — losing the config-conditionality entirely meant
++//! initramfs support (added later) silently could never decompress
++//! anything, regardless of kernel config: `Initramfs unpacking failed:
++//! decompressor failed` / `compression method gzip not configured` even
++//! with CONFIG_DECOMPRESS_GZIP=y. Caught by the first real -initrd boot
++//! (init/do_mounts.c coverage), never by KUnit (nothing kernel-space
++//! exercised this dispatch table's actual decompressor pointers, only
++//! its magic-number matching).
+ //!
+ //! `__init`/`__initconst` (freed after boot) expressed via
+ //! `#[link_section]` matching the sections `include/asm-generic/
+@@ -43,25 +52,94 @@ struct CompressFormat {
+ unsafe impl Sync for CompressFormat {}
+ 
+ macro_rules! fmt {
+-    ($m0:expr, $m1:expr, $name:expr) => {
++    ($m0:expr, $m1:expr, $name:expr, $decompressor:expr) => {
+         CompressFormat {
+             magic: [$m0, $m1],
+             name: concat!($name, "\0").as_ptr().cast(),
+-            decompressor: None, // every CONFIG_DECOMPRESS_* is unset for this target
++            decompressor: $decompressor,
+         }
+     };
+ }
+ 
++// One accessor per codec, `#[cfg(CONFIG_DECOMPRESS_*)]`-gated to the real
++// `bindings::` function or `None` — the direct equivalent of the C
++// original's `#ifndef CONFIG_DECOMPRESS_GZIP` / `#define gunzip NULL`.
++// A `const fn` per entry (rather than inlining `#[cfg]` on array elements)
++// because `#[cfg]` cannot conditionally swap an *expression* inside a
++// `static` array initializer, only whole items.
++#[cfg(CONFIG_DECOMPRESS_GZIP)]
++const fn gzip_decompressor() -> DecompressFn {
++    Some(bindings::gunzip)
++}
++#[cfg(not(CONFIG_DECOMPRESS_GZIP))]
++const fn gzip_decompressor() -> DecompressFn {
++    None
++}
++
++#[cfg(CONFIG_DECOMPRESS_BZIP2)]
++const fn bzip2_decompressor() -> DecompressFn {
++    Some(bindings::bunzip2)
++}
++#[cfg(not(CONFIG_DECOMPRESS_BZIP2))]
++const fn bzip2_decompressor() -> DecompressFn {
++    None
++}
++
++#[cfg(CONFIG_DECOMPRESS_LZMA)]
++const fn lzma_decompressor() -> DecompressFn {
++    Some(bindings::unlzma)
++}
++#[cfg(not(CONFIG_DECOMPRESS_LZMA))]
++const fn lzma_decompressor() -> DecompressFn {
++    None
++}
++
++#[cfg(CONFIG_DECOMPRESS_XZ)]
++const fn xz_decompressor() -> DecompressFn {
++    Some(bindings::unxz)
++}
++#[cfg(not(CONFIG_DECOMPRESS_XZ))]
++const fn xz_decompressor() -> DecompressFn {
++    None
++}
++
++#[cfg(CONFIG_DECOMPRESS_LZO)]
++const fn lzo_decompressor() -> DecompressFn {
++    Some(bindings::unlzo)
++}
++#[cfg(not(CONFIG_DECOMPRESS_LZO))]
++const fn lzo_decompressor() -> DecompressFn {
++    None
++}
++
++#[cfg(CONFIG_DECOMPRESS_LZ4)]
++const fn lz4_decompressor() -> DecompressFn {
++    Some(bindings::unlz4)
++}
++#[cfg(not(CONFIG_DECOMPRESS_LZ4))]
++const fn lz4_decompressor() -> DecompressFn {
++    None
++}
++
++#[cfg(CONFIG_DECOMPRESS_ZSTD)]
++const fn zstd_decompressor() -> DecompressFn {
++    Some(bindings::unzstd)
++}
++#[cfg(not(CONFIG_DECOMPRESS_ZSTD))]
++const fn zstd_decompressor() -> DecompressFn {
++    None
++}
++
+ #[link_section = ".init.rodata"]
+ static COMPRESSED_FORMATS: [CompressFormat; 9] = [
+-    fmt!(0x1f, 0x8b, "gzip"),
+-    fmt!(0x1f, 0x9e, "gzip"),
+-    fmt!(0x42, 0x5a, "bzip2"),
+-    fmt!(0x5d, 0x00, "lzma"),
+-    fmt!(0xfd, 0x37, "xz"),
+-    fmt!(0x89, 0x4c, "lzo"),
+-    fmt!(0x02, 0x21, "lz4"),
+-    fmt!(0x28, 0xb5, "zstd"),
++    fmt!(0x1f, 0x8b, "gzip", gzip_decompressor()),
++    fmt!(0x1f, 0x9e, "gzip", gzip_decompressor()),
++    fmt!(0x42, 0x5a, "bzip2", bzip2_decompressor()),
++    fmt!(0x5d, 0x00, "lzma", lzma_decompressor()),
++    fmt!(0xfd, 0x37, "xz", xz_decompressor()),
++    fmt!(0x89, 0x4c, "lzo", lzo_decompressor()),
++    fmt!(0x02, 0x21, "lz4", lz4_decompressor()),
++    fmt!(0x28, 0xb5, "zstd", zstd_decompressor()),
+     // sentinel: name == NULL terminates the C original's `cf->name` loop
+     CompressFormat { magic: [0, 0], name: core::ptr::null(), decompressor: None },
+ ];
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index 9a89f3e95853..bdb511e219d4 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -27,7 +27,14 @@
+  * headers are set up.
+  */
+ #include <linux/base64.h>
++#include <linux/decompress/bunzip2.h>
+ #include <linux/decompress/generic.h>
++#include <linux/decompress/inflate.h>
++#include <linux/decompress/unlz4.h>
++#include <linux/decompress/unlzma.h>
++#include <linux/decompress/unlzo.h>
++#include <linux/decompress/unxz.h>
++#include <linux/decompress/unzstd.h>
+ #include <linux/earlycpio.h>
+ #include <linux/hex.h>
+ #include <linux/hrtimer_types.h>
+-- 
+2.55.0
+

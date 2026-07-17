@@ -73,6 +73,11 @@ def boot():
     bad = re.findall(r"^\s*not ok .*$", txt, re.M)
     for line in ok:
         print(line)
+    # Primary gate: unchanged from before initramfs support existed —
+    # any 'not ok' KUnit line is a hard fail, no KUnit output at all is a
+    # hard fail. Do not weaken this; it's the project's main correctness
+    # signal and initramfs/init reachability is checked separately below,
+    # additively, never in place of this.
     if bad:
         print("\n".join(bad))
         print("ORACLE FAIL")
@@ -81,6 +86,15 @@ def boot():
         print("ORACLE FAIL: no KUnit output found")
         sys.exit(1)
     print(f"ORACLE PASS ({len(ok)} suites)")
+    # Additional, non-gating milestone: confirms init/do_mounts.c and the
+    # initramfs -> /init transition actually ran (see boot_qemu.py's
+    # INIT_REACHED). Surfaced as a warning, not sys.exit(1), because a
+    # missing initramfs milestone is a real regression worth flagging but
+    # is not what dev.py check's pass/fail contract has ever covered.
+    if "linux-rs: initramfs init reached, PID 1 alive" in txt:
+        print("INIT REACHED (initramfs userspace boot verified)")
+    else:
+        print("WARNING: initramfs init milestone not seen")
 
 
 def main() -> int:
