@@ -167,10 +167,32 @@ CREATE TABLE c2rust_attempts (
     label_address_exprs INTEGER,
     rs_files_emitted INTEGER,
     c2rust_rev TEXT,               -- awtoau/c2rust git rev used for this run
+    corpus_rev TEXT,                -- linux-riscv HEAD at run time (see corpus_rev() in run_c2rust_baseline.py)
+    peak_rss_bytes INTEGER,         -- observed peak RSS for this transpile, feeds adaptive_job_count()
+    duration_s REAL,
     notes TEXT
 );
 CREATE INDEX idx_c2rust_attempts_cfile ON c2rust_attempts(c_file);
 CREATE INDEX idx_c2rust_attempts_outcome ON c2rust_attempts(outcome);
+
+-- Per-declaration outcome: which of a file's own top-level functions
+-- actually made it into the emitted Rust vs were silently dropped. A
+-- file-level outcome (e.g. "dropped_decls") hides whether one function
+-- was lost out of 40 or the whole file fell over; this is the ground
+-- truth c2rust_regression_check.py diffs on and stable_files() (in
+-- run_c2rust_baseline.py) keys its stability window on.
+CREATE TABLE c2rust_decl_outcomes (
+    id INTEGER PRIMARY KEY,
+    attempt_id INTEGER NOT NULL REFERENCES c2rust_attempts(id),
+    c_file TEXT NOT NULL,
+    decl_name TEXT NOT NULL,
+    translated INTEGER NOT NULL,
+    c2rust_rev TEXT,
+    corpus_rev TEXT,
+    run_at TEXT NOT NULL
+);
+CREATE INDEX idx_c2rust_decl_outcomes_cfile ON c2rust_decl_outcomes(c_file);
+CREATE INDEX idx_c2rust_decl_outcomes_rev ON c2rust_decl_outcomes(c2rust_rev);
 
 -- Individual failure SIGNATURES extracted from each attempt's log —
 -- one row per distinct (kind, detail) occurrence, so recurring failure
