@@ -300,6 +300,46 @@ def corpus_rev():
     return git_rev(TREE)
 
 
+def binary_stale_warning():
+    """None if C2RUST's mtime is newer than every tracked source file in
+    C2RUST_FORK (built after the last edit), else a ready-to-print warning
+    string. git_rev(C2RUST_FORK) records the SOURCE tree's HEAD — with
+    nothing checking that the compiled binary was actually built from
+    that commit, an edit-but-forget-to-`cargo build --release` session
+    would silently mislabel every row this run writes with a c2rust_rev
+    the binary doesn't actually reflect (same class of bug as
+    build_db.py's dropped-table silent-mismatch: a real state divergence
+    with no signal until someone notices results don't match the rev they
+    expected). mtime-only, not a content hash — cheap and sufficient: a
+    `cargo build` always touches the output binary's mtime, so any
+    genuine rebuild clears this regardless of whether the diff was a
+    no-op. `git ls-files` scopes the comparison to tracked, compileable
+    inputs only (build artifacts under target/, .git/ internals, etc
+    don't count as "source changed since the binary")."""
+    if not Path(C2RUST).exists():
+        return f"c2rust binary not found at {C2RUST}"
+    bin_mtime = Path(C2RUST).stat().st_mtime
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=C2RUST_FORK,
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.splitlines()
+    except Exception as e:
+        return f"could not check {C2RUST_FORK} source freshness: {e}"
+    newer = [f for f in tracked
+             if (C2RUST_FORK / f).exists()
+             and (C2RUST_FORK / f).stat().st_mtime > bin_mtime]
+    if newer:
+        return (
+            f"c2rust binary at {C2RUST} is OLDER than {len(newer)} tracked "
+            f"source file(s) in {C2RUST_FORK} (e.g. {newer[0]}) — results "
+            f"below will be recorded under c2rust_rev={git_rev(C2RUST_FORK)} "
+            f"but were produced by a STALE build. Run `cargo build --release` "
+            f"in {C2RUST_FORK} before trusting this baseline."
+        )
+    return None
+
+
 def ensure_schema(conn):
     conn.execute(
         "CREATE TABLE IF NOT EXISTS c2rust_attempts ("
@@ -1155,6 +1195,14 @@ def main():
     if not DB.exists():
         logging.error("no %s — run scripts/build_db.py first", DB)
         return 1
+    stale_warning = binary_stale_warning()
+    if stale_warning:
+        # Loud, not just logged — same principle as build_db.py's
+        # dropped-table warning: a state mismatch here silently mislabels
+        # every row this run writes until someone happens to notice the
+        # results don't match the c2rust_rev they expected.
+        print(f"WARNING: {stale_warning}")
+        logging.warning(stale_warning)
     conn = sqlite3.connect(DB)
     ensure_schema(conn)
     run_at = datetime.now(timezone.utc).isoformat()
