@@ -541,6 +541,20 @@ def main() -> int:
     rule_meta = load_rule_meta()
     corpus = list(iter_corpus())
     logging.info("corpus: %d transpiled TUs found under %s", len(corpus), BASELINE)
+    if not corpus:
+        # Loud, not just logged at INFO — every rule would otherwise come
+        # out "not_checkable (0 available transpiled files)" indistinguishable
+        # at a glance from a real, deliberate result, AND write_db() below
+        # DELETEs any real prior conformance snapshot and replaces it with
+        # this all-empty one. Same class of silent-mismatch risk as
+        # build_db.py's dropped-table warning: run `dev.py c2rust-baseline`
+        # first, or this overwrites good data with a corpus-empty artifact.
+        print(f"WARNING: no transpiled TUs found under {BASELINE} — every rule "
+              f"will be reported not_checkable, and this REPLACES any real "
+              f"prior c2rust_rule_conformance snapshot in {DB}. "
+              f"Run `dev.py c2rust-baseline` first.")
+        logging.warning("empty corpus under %s — proceeding anyway, results will "
+                        "overwrite prior conformance data with an all-empty snapshot", BASELINE)
 
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     results = []  # rows: (rule_id, c_file, rust_file, line, status, detail, checked_at)
