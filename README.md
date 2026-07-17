@@ -103,7 +103,19 @@ tmp/         scratch + logs (not committed)
 
 ## Reproduce
 
-Fedora 44-ish with clang/LLVM 22, rustc ≥1.97, bindgen, QEMU. Then:
+Fedora 44-ish with clang/LLVM 22, bindgen, QEMU. Then:
 clone a kernel at **v7.1**, `make LLVM=1 defconfig`, enable `CONFIG_RUST`,
 build, `scripts/clang-tools/gen_compile_commands.py`, and run the scripts in
 [scripts/](scripts/). Each writes its log to `tmp/`.
+
+`linux-riscv/` (the actively-built tree, distinct from the pristine
+`linux/` reference above) builds with **nightly Rust**, via
+`rustup override set nightly` scoped to that directory (`rustup override
+list` to check; `rustc`/`cargo` outside that directory are unaffected).
+Switched 2026-07-18 so c2rust's raw transpile output — which uses
+nightly-only `#![feature(...)]` attributes (`raw_ref_op`, `extern_types`,
+`core_intrinsics`, ...) — can be compile-checked against the same
+`libcore`/`libbindings`/`libkernel` the real kernel build produces,
+instead of a disposable scratch-dir core build. Re-verified boot-clean
+(`dev.py check`: 15/15 KUnit suites, `INIT REACHED`) immediately after
+the switch — not a speculative change.
