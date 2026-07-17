@@ -469,7 +469,17 @@ def run_one(entry, pch_flags=None):
     proc = proc_result
 
     log_path = work / "transpile.log"
-    log_path.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+    try:
+        log_path.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+    except OSError:
+        # work/ can vanish mid-run if something external clears tmp/
+        # while a batch is in flight (e.g. a fresh `rm -rf
+        # tmp/c2rust-baseline` racing an already-running harness
+        # instance) — recreate it rather than letting one file's I/O
+        # race take down every other file's already-computed result via
+        # an uncaught exception in this worker thread.
+        work.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
 
     stderr = proc.stderr
     crashed = "panicked at" in stderr
