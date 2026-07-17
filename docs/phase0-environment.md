@@ -1,6 +1,14 @@
 # Phase 0 — pinned environment
 
-Established 2026-07-16.
+Established 2026-07-16. Describes `./linux/` — the **x86_64 development
+lab** tree, deliberately kept at this pristine v7.1 pin as a stable
+reference/differential-baseline corpus. It is a **separate tree** from
+`./linux-riscv/`, the actively-built riscv64 shipping-target tree (config
+chosen in [phase2-minimal-target.md](phase2-minimal-target.md); see
+[README.md](../README.md#reproduce) for `linux-riscv/`'s 2026-07-18
+rebase onto latest upstream + switch to nightly Rust). Everything below
+is accurate for `linux/` as of the pin date; it does not describe
+`linux-riscv/`'s toolchain or kernel version, which have since moved on.
 
 ## Corpus pin
 
