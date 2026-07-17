@@ -1,0 +1,651 @@
+From 5bec4b4d49513b3d4819666fcdd1940944542fc9 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Fri, 17 Jul 2026 10:25:32 +1000
+Subject: [PATCH] lib: translate kstrtox to Rust (linux-rs TU 29)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ lib/Makefile                    |   9 +-
+ lib/kstrtox_rs.rs               | 593 ++++++++++++++++++++++++++++++++
+ rust/bindings/bindings_helper.h |   1 +
+ 3 files changed, 602 insertions(+), 1 deletion(-)
+ create mode 100644 lib/kstrtox_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index 9cda643b691f..acb8282a231c 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -78,7 +78,7 @@ endif
+ obj-y += string_helpers.o
+ obj-y +=
+ obj-$(CONFIG_TEST_HEXDUMP) += test_hexdump.o
+-obj-y += kstrtox.o
++obj-y +=
+ obj-$(CONFIG_FIND_BIT_BENCHMARK) += find_bit_benchmark.o
+ obj-$(CONFIG_FIND_BIT_BENCHMARK_RUST) += find_bit_benchmark_rust.o
+ obj-$(CONFIG_TEST_BPF) += test_bpf.o
+@@ -453,3 +453,10 @@ obj-y += parser_rs.o
+ else
+ obj-y += parser.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-y += kstrtox_rs.o
++else
++obj-y += kstrtox.o
++endif
+diff --git a/lib/kstrtox_rs.rs b/lib/kstrtox_rs.rs
+new file mode 100644
+index 000000000000..4847fa8742bd
+--- /dev/null
++++ b/lib/kstrtox_rs.rs
+@@ -0,0 +1,593 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Convert integer string representations to integers — Rust
++//! translation of `lib/kstrtox.c`.
++//!
++//! Integer starts with optional sign. `kstrtou*()` functions do not
++//! accept sign "-". Radix 0 means autodetection: leading "0x" implies
++//! radix 16, leading "0" implies radix 8, otherwise radix is 10.
++//! Autodetection hints work after optional sign, but not before.
++//! If -E is returned, result is not touched.
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_int, c_long, c_uint, c_ulong};
++use kernel::prelude::*;
++
++const KSTRTOX_OVERFLOW: u32 = 1u32 << 31;
++
++/// `_tolower(c)` (`include/linux/ctype.h`) — a fast, non-branching
++/// lowercase-if-letter bit trick documented "for internal usage", NOT
++/// the real `tolower`/`__tolower` (already translated in
++/// lib/string_rs.rs as `tolower`, which is table-driven and only
++/// touches real uppercase letters). Reimplemented directly, rule 0016.
++#[inline]
++fn kstrtox_tolower(c: c_char) -> c_char {
++    (c as u8 | 0x20) as c_char
++}
++
++/// `isxdigit(c)` (`include/linux/ctype.h`) — depends on the real
++/// `_ctype[]` table this TU doesn't own; same header-inline pattern as
++/// lib/hexdump_rs.rs's `isprint`/lib/string_rs.rs's `tolower`, rule
++/// 0016.
++///
++/// # Safety
++/// `c` must be a value the real 256-entry `_ctype[]` table covers.
++#[inline]
++unsafe fn isxdigit(c: c_char) -> bool {
++    const CTYPE_D: u8 = 0x04;
++    const CTYPE_X: u8 = 0x40;
++    let idx = c as u8 as usize;
++    // SAFETY: per function contract.
++    let mask = unsafe { *bindings::_ctype.as_ptr().add(idx) };
++    (mask & (CTYPE_D | CTYPE_X)) != 0
++}
++
++/// `div_u64(dividend, divisor)` (`include/linux/math64.h`) — a plain
++/// header-inline on 64-bit archs (`dividend / divisor`); already
++/// established in lib/math/div64_rs.rs's module doc, rule 0016.
++#[inline]
++fn div_u64(dividend: u64, divisor: u32) -> u64 {
++    dividend / divisor as u64
++}
++
++/// Detect the radix from a leading "0x"/"0" prefix if `*base == 0`, and
++/// skip a "0x"/"0X" prefix if the (possibly just-detected) radix is 16.
++/// Returns the (possibly advanced) start of the digits.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string with at least 3 readable
++/// bytes before the terminator (matches the C's own `s[0]`/`s[1]`/`s[2]`
++/// reads — always safe since a NUL terminator bounds any short string,
++/// reads past it only see the terminator itself, never uninitialized
++/// memory, exactly as in C).
++#[export]
++pub unsafe extern "C" fn _parse_integer_fixup_radix(s: *const c_char, base: *mut c_uint) -> *const c_char {
++    let mut s = s;
++    // SAFETY: per function contract.
++    unsafe {
++        if *base == 0 {
++            if *s == b'0' as c_char {
++                if kstrtox_tolower(*s.add(1)) == b'x' as c_char && isxdigit(*s.add(2)) {
++                    *base = 16;
++                } else {
++                    *base = 8;
++                }
++            } else {
++                *base = 10;
++            }
++        }
++        if *base == 16 && *s == b'0' as c_char && kstrtox_tolower(*s.add(1)) == b'x' as c_char {
++            s = s.add(2);
++        }
++    }
++    s
++}
++
++/// Convert a non-negative integer string in explicitly given `base` to
++/// an integer, converting at most `max_chars` characters. Returns the
++/// number of characters consumed, possibly OR'd with `KSTRTOX_OVERFLOW`.
++/// If overflow occurs, the (incorrect) result integer is still
++/// returned/written.
++///
++/// # Safety
++/// `s` has at least `max_chars` valid readable bytes, or is
++/// NUL-terminated sooner (the loop stops at the first non-digit, which
++/// includes NUL); `p` is a valid `*mut u64`.
++#[export]
++pub unsafe extern "C" fn _parse_integer_limit(
++    s: *const c_char,
++    base: c_uint,
++    p: *mut u64,
++    mut max_chars: usize,
++) -> c_uint {
++    let mut res: u64 = 0;
++    let mut rv: c_uint = 0;
++    let mut s = s;
++
++    // SAFETY: per function contract; loop stops at the first byte that
++    // isn't a valid digit char (including NUL), matching the C exactly.
++    unsafe {
++        while max_chars > 0 {
++            max_chars -= 1;
++            let c = *s as u8;
++            let lc = kstrtox_tolower(*s) as u8;
++
++            let val: u32 = if c.is_ascii_digit() {
++                (c - b'0') as u32
++            } else if (b'a'..=b'f').contains(&lc) {
++                (lc - b'a' + 10) as u32
++            } else {
++                break;
++            };
++
++            if val >= base {
++                break;
++            }
++            // Check for overflow only if we are within range of it in
++            // the max base we support (16).
++            if res & (!0u64 << 60) != 0 && res > div_u64(u64::MAX - val as u64, base) {
++                rv |= KSTRTOX_OVERFLOW;
++            }
++            res = res.wrapping_mul(base as u64).wrapping_add(val as u64);
++            rv += 1;
++            s = s.add(1);
++        }
++        *p = res;
++    }
++    rv
++}
++
++/// `_parse_integer(s, base, p)` — `_parse_integer_limit` with
++/// `max_chars = INT_MAX`.
++///
++/// # Safety
++/// Same contract as `_parse_integer_limit`.
++#[export]
++pub unsafe extern "C" fn _parse_integer(s: *const c_char, base: c_uint, p: *mut u64) -> c_uint {
++    // SAFETY: forwarded per function contract.
++    unsafe { _parse_integer_limit(s, base, p, i32::MAX as usize) }
++}
++
++/// # Safety
++/// `s` is a valid NUL-terminated C string (or NUL-preceded-by-newline);
++/// `res` is a valid `*mut u64`.
++unsafe fn _kstrtoull(s: *const c_char, base: c_uint, res: *mut u64) -> c_int {
++    // SAFETY: per function contract.
++    unsafe {
++        let mut base = base;
++        let s = _parse_integer_fixup_radix(s, &mut base);
++        let mut _res: u64 = 0;
++        let rv = _parse_integer(s, base, &mut _res);
++        if rv & KSTRTOX_OVERFLOW != 0 {
++            return -(bindings::ERANGE as c_int);
++        }
++        if rv == 0 {
++            return -(bindings::EINVAL as c_int);
++        }
++        let mut s = s.add(rv as usize);
++        if *s == b'\n' as c_char {
++            s = s.add(1);
++        }
++        if *s != 0 {
++            return -(bindings::EINVAL as c_int);
++        }
++        *res = _res;
++        0
++    }
++}
++
++/// Convert a string to an unsigned long long. 0 on success, -ERANGE on
++/// overflow, -EINVAL on parsing error.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut u64`.
++#[export]
++pub unsafe extern "C" fn kstrtoull(s: *const c_char, base: c_uint, res: *mut u64) -> c_int {
++    let mut s = s;
++    // SAFETY: per function contract.
++    unsafe {
++        if *s == b'+' as c_char {
++            s = s.add(1);
++        }
++        _kstrtoull(s, base, res)
++    }
++}
++
++/// Convert a string to a long long. 0 on success, -ERANGE on overflow,
++/// -EINVAL on parsing error.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut i64`.
++#[export]
++pub unsafe extern "C" fn kstrtoll(s: *const c_char, base: c_uint, res: *mut i64) -> c_int {
++    let mut tmp: u64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        if *s == b'-' as c_char {
++            let rv = _kstrtoull(s.add(1), base, &mut tmp);
++            if rv < 0 {
++                return rv;
++            }
++            let neg = (tmp as i64).wrapping_neg();
++            if neg > 0 {
++                return -(bindings::ERANGE as c_int);
++            }
++            *res = neg;
++        } else {
++            let rv = kstrtoull(s, base, &mut tmp);
++            if rv < 0 {
++                return rv;
++            }
++            if (tmp as i64) < 0 {
++                return -(bindings::ERANGE as c_int);
++            }
++            *res = tmp as i64;
++        }
++    }
++    0
++}
++
++/// Internal, do not use.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid
++/// `*mut c_ulong` (`unsigned long`).
++#[export]
++pub unsafe extern "C" fn _kstrtoul(s: *const c_char, base: c_uint, res: *mut c_ulong) -> c_int {
++    let mut tmp: u64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoull(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        // C: `if (tmp != (unsigned long)tmp)` — always false when
++        // `unsigned long` and `unsigned long long` are the same width
++        // (both 64-bit on riscv64); kept as a real (no-op) check for
++        // faithfulness rather than assuming it away.
++        if tmp != tmp as c_ulong as u64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as c_ulong;
++    }
++    0
++}
++
++/// Internal, do not use.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid
++/// `*mut c_long` (`long`).
++#[export]
++pub unsafe extern "C" fn _kstrtol(s: *const c_char, base: c_uint, res: *mut c_long) -> c_int {
++    let mut tmp: i64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoll(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        if tmp != tmp as c_long as i64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as c_long;
++    }
++    0
++}
++
++/// Convert a string to an unsigned int. 0 on success, -ERANGE on
++/// overflow, -EINVAL on parsing error.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut u32`.
++#[export]
++pub unsafe extern "C" fn kstrtouint(s: *const c_char, base: c_uint, res: *mut u32) -> c_int {
++    let mut tmp: u64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoull(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        if tmp != tmp as u32 as u64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as u32;
++    }
++    0
++}
++
++/// Convert a string to an int. 0 on success, -ERANGE on overflow,
++/// -EINVAL on parsing error.
++///
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut i32`.
++#[export]
++pub unsafe extern "C" fn kstrtoint(s: *const c_char, base: c_uint, res: *mut i32) -> c_int {
++    let mut tmp: i64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoll(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        if tmp != tmp as i32 as i64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as i32;
++    }
++    0
++}
++
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut u16`.
++#[export]
++pub unsafe extern "C" fn kstrtou16(s: *const c_char, base: c_uint, res: *mut u16) -> c_int {
++    let mut tmp: u64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoull(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        if tmp != tmp as u16 as u64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as u16;
++    }
++    0
++}
++
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut i16`.
++#[export]
++pub unsafe extern "C" fn kstrtos16(s: *const c_char, base: c_uint, res: *mut i16) -> c_int {
++    let mut tmp: i64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoll(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        if tmp != tmp as i16 as i64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as i16;
++    }
++    0
++}
++
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut u8`.
++#[export]
++pub unsafe extern "C" fn kstrtou8(s: *const c_char, base: c_uint, res: *mut u8) -> c_int {
++    let mut tmp: u64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoull(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        if tmp != tmp as u8 as u64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as u8;
++    }
++    0
++}
++
++/// # Safety
++/// `s` is a valid NUL-terminated C string; `res` is a valid `*mut i8`.
++#[export]
++pub unsafe extern "C" fn kstrtos8(s: *const c_char, base: c_uint, res: *mut i8) -> c_int {
++    let mut tmp: i64 = 0;
++    // SAFETY: per function contract.
++    unsafe {
++        let rv = kstrtoll(s, base, &mut tmp);
++        if rv < 0 {
++            return rv;
++        }
++        if tmp != tmp as i8 as i64 {
++            return -(bindings::ERANGE as c_int);
++        }
++        *res = tmp as i8;
++    }
++    0
++}
++
++/// Convert common user inputs into boolean values. Returns 0 iff the
++/// first character is one of 'EeYyTt1DdNnFf0', or `[oO][NnFf]` for "on"
++/// and "off". Otherwise -EINVAL.
++///
++/// # Safety
++/// `s` is null or a valid NUL-terminated C string with at least 2
++/// readable bytes before its terminator (matches the C's own `s[0]`/
++/// `s[1]` reads).
++#[export]
++pub unsafe extern "C" fn kstrtobool(s: *const c_char, res: *mut bool) -> c_int {
++    if s.is_null() {
++        return -(bindings::EINVAL as c_int);
++    }
++    // SAFETY: per function contract.
++    unsafe {
++        match *s as u8 as char {
++            'e' | 'E' | 'y' | 'Y' | 't' | 'T' | '1' => {
++                *res = true;
++                0
++            }
++            'd' | 'D' | 'n' | 'N' | 'f' | 'F' | '0' => {
++                *res = false;
++                0
++            }
++            'o' | 'O' => match *s.add(1) as u8 as char {
++                'n' | 'N' => {
++                    *res = true;
++                    0
++                }
++                'f' | 'F' => {
++                    *res = false;
++                    0
++                }
++                _ => -(bindings::EINVAL as c_int),
++            },
++            _ => -(bindings::EINVAL as c_int),
++        }
++    }
++}
++
++/// Since "base" would be a nonsense argument, this open-codes the
++/// `_from_user` helper instead of using the `kstrto_from_user` macro
++/// pattern below.
++///
++/// # Safety
++/// `s` is a valid user-space pointer with at least `count` readable
++/// bytes; `res` is a valid `*mut bool`.
++#[export]
++pub unsafe extern "C" fn kstrtobool_from_user(s: *const c_char, count: usize, res: *mut bool) -> c_int {
++    // Longest string needed to differentiate, newline, terminator.
++    let mut buf = [0 as c_char; 4];
++    let count = core::cmp::min(count, buf.len() - 1);
++    // SAFETY: per function contract; `count <= buf.len() - 1` leaves
++    // room for the NUL terminator written below.
++    unsafe {
++        if bindings::copy_from_user(buf.as_mut_ptr().cast(), s.cast(), count) != 0 {
++            return -(bindings::EFAULT as c_int);
++        }
++        buf[count] = 0;
++        kstrtobool(buf.as_ptr(), res)
++    }
++}
++
++/// `kstrto_from_user(f, g, type)` (this file's own macro) —
++/// reimplemented as a single generic helper since Rust has no textual-
++/// macro equivalent; each of the 10 C instantiations below becomes a
++/// thin `#[export]` wrapper calling this with the right buffer size and
++/// underlying `kstrto*` function pointer, matching the macro's
++/// expansion exactly (sign + base-2 representation + newline +
++/// terminator sizing).
++///
++/// # Safety
++/// `s` is a valid user-space pointer with at least `count` readable
++/// bytes; `res` is whatever the caller-supplied `g` requires.
++#[inline]
++unsafe fn kstrto_from_user_generic<T, const BUFLEN: usize>(
++    s: *const c_char,
++    count: usize,
++    base: c_uint,
++    res: *mut T,
++    g: unsafe extern "C" fn(*const c_char, c_uint, *mut T) -> c_int,
++) -> c_int {
++    let mut buf = [0 as c_char; BUFLEN];
++    let count = core::cmp::min(count, BUFLEN - 1);
++    // SAFETY: per function contract; `count <= BUFLEN - 1` leaves room
++    // for the NUL terminator written below.
++    unsafe {
++        if bindings::copy_from_user(buf.as_mut_ptr().cast(), s.cast(), count) != 0 {
++            return -(bindings::EFAULT as c_int);
++        }
++        buf[count] = 0;
++        g(buf.as_ptr(), base, res)
++    }
++}
++
++// sign, base-2 representation, newline, terminator: 1 + 8*sizeof(type) + 1 + 1.
++const fn buflen(type_bytes: usize) -> usize {
++    1 + type_bytes * 8 + 1 + 1
++}
++
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtoull_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut u64) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<u64, { buflen(8) }>(s, count, base, res, kstrtoull) }
++}
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtoll_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut i64) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<i64, { buflen(8) }>(s, count, base, res, kstrtoll) }
++}
++/// # Safety
++/// `s` is a valid user-space pointer with at least `count` readable
++/// bytes; `res` is a valid `*mut c_ulong`.
++///
++/// Calls `kstrtoull`, not `_kstrtoul` directly: `kstrtoul()`
++/// (`include/linux/kstrtox.h`, the header-inline the C macro
++/// instantiation actually names) shortcuts to `kstrtoull` whenever
++/// `sizeof(unsigned long) == sizeof(unsigned long long)` — always true
++/// on this riscv64 (LP64) target — so `_kstrtoul` is dead code on this
++/// path specifically (still real/reachable via its own EXPORT_SYMBOL
++/// for other callers, hence still translated above).
++#[export]
++pub unsafe extern "C" fn kstrtoul_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut c_ulong) -> c_int {
++    let mut tmp: u64 = 0;
++    // SAFETY: forwarded per function contract.
++    unsafe {
++        let rv = kstrto_from_user_generic::<u64, { buflen(8) }>(s, count, base, &mut tmp, kstrtoull);
++        if rv < 0 {
++            return rv;
++        }
++        *res = tmp as c_ulong;
++    }
++    0
++}
++/// # Safety
++/// `s` is a valid user-space pointer with at least `count` readable
++/// bytes; `res` is a valid `*mut c_long`. See `kstrtoul_from_user` for
++/// why this calls `kstrtoll`, not `_kstrtol`, on this target.
++#[export]
++pub unsafe extern "C" fn kstrtol_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut c_long) -> c_int {
++    let mut tmp: i64 = 0;
++    // SAFETY: forwarded per function contract.
++    unsafe {
++        let rv = kstrto_from_user_generic::<i64, { buflen(8) }>(s, count, base, &mut tmp, kstrtoll);
++        if rv < 0 {
++            return rv;
++        }
++        *res = tmp as c_long;
++    }
++    0
++}
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtouint_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut u32) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<u32, { buflen(4) }>(s, count, base, res, kstrtouint) }
++}
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtoint_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut i32) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<i32, { buflen(4) }>(s, count, base, res, kstrtoint) }
++}
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtou16_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut u16) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<u16, { buflen(2) }>(s, count, base, res, kstrtou16) }
++}
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtos16_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut i16) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<i16, { buflen(2) }>(s, count, base, res, kstrtos16) }
++}
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtou8_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut u8) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<u8, { buflen(1) }>(s, count, base, res, kstrtou8) }
++}
++/// # Safety
++/// Same contract as `kstrto_from_user_generic`.
++#[export]
++pub unsafe extern "C" fn kstrtos8_from_user(s: *const c_char, count: usize, base: c_uint, res: *mut i8) -> c_int {
++    // SAFETY: forwarded per function contract.
++    unsafe { kstrto_from_user_generic::<i8, { buflen(1) }>(s, count, base, res, kstrtos8) }
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index c3b5e7f24375..9a89f3e95853 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -76,6 +76,7 @@
+ #include <linux/jiffies.h>
+ #include <linux/jump_label.h>
+ #include <linux/kstrtox.h>
++#include "../../lib/kstrtox.h"
+ #include <linux/lcm.h>
+ #include <linux/list_sort.h>
+ #include <linux/llist.h>
+-- 
+2.55.0
+

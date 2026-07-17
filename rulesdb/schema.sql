@@ -265,6 +265,31 @@ CREATE VIRTUAL TABLE c2rust_issues_fts USING fts5(
     repo, number UNINDEXED, title, body, content='c2rust_issues', content_rowid='id'
 );
 
+-- Time-series project-progress snapshots — NOT ephemeral, preserved
+-- across build_db.py rebuilds same as the c2rust_* tables above (see
+-- PERSISTENT_TABLES in build_db.py). One row per point-in-time
+-- snapshot (taken via scripts/take_progress_snapshot.py, run manually
+-- after landing a TU or a c2rust baseline run) so progress trends over
+-- the project's actual history are queryable, not just current state.
+-- 2026-07-17, Dan's request: "a stats table - not ephemeral that
+-- records progress as well".
+CREATE TABLE progress_snapshots (
+    id INTEGER PRIMARY KEY,
+    taken_at TEXT NOT NULL,        -- ISO 8601
+    note TEXT,                     -- optional free-text ("landed TU 29", "post-DFExpr-fix run")
+    tus_landed INTEGER NOT NULL,
+    corpus_total_files INTEGER,    -- lib/*.c files actually compiled into this kernel build
+    corpus_total_loc INTEGER,
+    landed_loc INTEGER,
+    c2rust_clean INTEGER,          -- from the most recent c2rust_attempts run at snapshot time
+    c2rust_crash INTEGER,
+    c2rust_dropped_decls INTEGER,
+    c2rust_no_output INTEGER,
+    c2rust_timeout INTEGER,
+    c2rust_rev TEXT
+);
+CREATE INDEX idx_progress_snapshots_taken_at ON progress_snapshots(taken_at);
+
 -- Per-TU translation progress: manual (translated_tus) status joined
 -- with the MOST RECENT c2rust_attempts row for that file, so one query
 -- answers "what's done, how (manual/c2rust), and if c2rust failed, why"
@@ -378,3 +403,40 @@ CREATE VIEW sparse_address_space_findings AS
 SELECT file, line, col, severity, message FROM sparse_diagnostics
 WHERE message LIKE '%address space%'
 ORDER BY file, line;
+
+-- Per-rule conformance check of c2rust's CURRENT raw output against each
+-- of the 27 linux-rs rules: does c2rust already emit rule-conformant Rust
+-- for a given construct (e.g. likely()/unlikely() hint already dropped
+-- cleanly, rule 0007), or does it violate the rule (e.g. fls()/__fls()
+-- transliterated as a literal bit-scan loop instead of the required
+-- leading_zeros()-with-BITS-offset rewrite, rule 0006)? This is the
+-- prioritization signal for future c2rust patch work — don't patch what's
+-- already fine. Populated by scripts/check_c2rust_rule_conformance.py,
+-- a current-state SNAPSHOT (each run replaces prior rows, unlike
+-- c2rust_attempts' accumulating history) — but like c2rust_attempts this
+-- is an occasional/manual analysis pass, not re-derived from the rules/
+-- census on every routine build_db.py rebuild, so it gets the same
+-- preserve-across-DB.unlink() treatment.
+CREATE TABLE c2rust_rule_conformance (
+    id INTEGER PRIMARY KEY,
+    rule_id TEXT NOT NULL,         -- matches rules.id, e.g. "fls-family"
+    c_file TEXT,                   -- relative to linux-riscv/, NULL if rule-level (not per-file)
+    rust_file TEXT,                -- relative to repo root, NULL if rule-level
+    line INTEGER,
+    status TEXT NOT NULL,          -- conformant | violation | ambiguous | not_checkable | not_applicable
+    detail TEXT NOT NULL,
+    checked_at TEXT NOT NULL       -- ISO 8601, when this check run happened
+);
+CREATE INDEX idx_c2rust_ruleconf_rule ON c2rust_rule_conformance(rule_id);
+CREATE INDEX idx_c2rust_ruleconf_status ON c2rust_rule_conformance(status);
+
+-- Fix-prioritization queue: which rules have confirmed violations right
+-- now, ranked by how many distinct files hit them — the concrete "patch
+-- c2rust for this next" list.
+CREATE VIEW c2rust_rule_violations_summary AS
+SELECT rule_id, COUNT(*) AS n_violations, COUNT(DISTINCT rust_file) AS files_affected,
+       GROUP_CONCAT(DISTINCT rust_file) AS example_files
+FROM c2rust_rule_conformance
+WHERE status = 'violation'
+GROUP BY rule_id
+ORDER BY files_affected DESC;

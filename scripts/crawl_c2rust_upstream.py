@@ -106,7 +106,15 @@ def crawl_issues(conn, repo, limit=None):
 
 
 def rebuild_fts(conn):
-    conn.execute("DELETE FROM c2rust_issues_fts")
+    # DELETE FROM <fts5 table> has twice hit "database disk image is
+    # malformed" transiently on this DB (recoverable — PRAGMA
+    # integrity_check passes right after, real data untouched) — drop
+    # and recreate instead, which hasn't shown the issue.
+    conn.execute("DROP TABLE IF EXISTS c2rust_issues_fts")
+    conn.execute(
+        "CREATE VIRTUAL TABLE c2rust_issues_fts USING fts5("
+        "repo, number UNINDEXED, title, body, content='c2rust_issues', content_rowid='id')"
+    )
     conn.execute(
         "INSERT INTO c2rust_issues_fts (rowid, repo, number, title, body) "
         "SELECT id, repo, number, title, body FROM c2rust_issues"

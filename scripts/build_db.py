@@ -147,28 +147,37 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stdout)],
     )
-    # c2rust_attempts/c2rust_failure_signatures are populated by a
-    # separate, occasional process (scripts/run_c2rust_baseline.py +
-    # import_c2rust_baseline.py), not re-derived from the census/rules
-    # like everything else here — preserve that history across the
-    # DB.unlink() below instead of silently discarding fix-progress data
-    # every routine rebuild.
-    c2rust_backup = []
-    signatures_backup = []
+    # These tables are populated by separate, occasional processes (the
+    # c2rust baseline/upstream-intel scripts), not re-derived from the
+    # census/rules like everything else here — preserve them across the
+    # DB.unlink() below instead of silently discarding cross-session
+    # fix-progress/upstream-intel data every routine rebuild. Generic by
+    # table name (not a hand-maintained column list per table) so adding
+    # a new persistent table is a one-line addition to PERSISTENT_TABLES,
+    # not a new backup/restore block — c2rust_forks/c2rust_issues were
+    # missing from an earlier hand-maintained version of this and got
+    # silently wiped for several rebuilds before this was caught
+    # (2026-07-17).
+    PERSISTENT_TABLES = [
+        "c2rust_attempts",
+        "c2rust_failure_signatures",
+        "c2rust_forks",
+        "c2rust_issues",
+        "c2rust_rule_conformance",
+        "progress_snapshots",
+    ]
+    table_backups = {}
     if DB.exists():
         old_conn = sqlite3.connect(DB)
-        try:
-            c2rust_backup = old_conn.execute(
-                "SELECT id, c_file, run_at, outcome, returncode, warnings, "
-                "missing_top_level_nodes, missing_children, label_address_exprs, "
-                "rs_files_emitted, c2rust_rev, notes FROM c2rust_attempts"
-            ).fetchall()
-            signatures_backup = old_conn.execute(
-                "SELECT id, attempt_id, c_file, kind, source_file, source_line, detail "
-                "FROM c2rust_failure_signatures"
-            ).fetchall()
-        except sqlite3.OperationalError:
-            pass  # tables don't exist yet (first run, or pre-c2rust-tracking DB)
+        for table in PERSISTENT_TABLES:
+            try:
+                cols = [r[1] for r in old_conn.execute(f"PRAGMA table_info({table})")]
+                if not cols:
+                    continue  # table doesn't exist in the old DB
+                rows = old_conn.execute(f"SELECT * FROM {table}").fetchall()
+                table_backups[table] = (cols, rows)
+            except sqlite3.OperationalError:
+                pass  # table doesn't exist yet (first run, or older DB)
         old_conn.close()
 
     DB.unlink(missing_ok=True)
@@ -192,17 +201,46 @@ def main() -> int:
     n_tus = load_translated_tus(conn)
     logging.info("translated TUs: %d", n_tus)
 
-    if c2rust_backup:
-        conn.executemany(
-            "INSERT INTO c2rust_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", c2rust_backup
-        )
-        conn.executemany(
-            "INSERT INTO c2rust_failure_signatures VALUES (?,?,?,?,?,?,?)", signatures_backup
-        )
-        logging.info(
-            "restored %d c2rust_attempts + %d c2rust_failure_signatures rows",
-            len(c2rust_backup), len(signatures_backup),
-        )
+    for table, (cols, rows) in table_backups.items():
+        if not rows:
+            continue
+        new_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not new_cols:
+            logging.warning("skipping restore of %s: table missing from current schema.sql", table)
+            continue
+        if set(cols) != new_cols:
+            logging.warning(
+                "skipping restore of %s: column set changed (%s -> %s) — "
+                "schema migration needed, not a straight restore",
+                table, sorted(cols), sorted(new_cols),
+            )
+            continue
+        placeholders = ",".join("?" * len(cols))
+        conn.executemany(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders})", rows)
+        logging.info("restored %d rows into %s", len(rows), table)
+
+    # c2rust_issues_fts is an FTS5 virtual table over c2rust_issues — not
+    # directly restorable row-by-row like a normal table, rebuild it from
+    # the just-restored c2rust_issues instead.
+    if "c2rust_issues" in table_backups and table_backups["c2rust_issues"][1]:
+        try:
+            # DROP+CREATE, not DELETE — DELETE FROM <fts5 table> has hit
+            # a transient "database disk image is malformed" on this DB
+            # (recoverable; PRAGMA integrity_check passes right after,
+            # real data untouched) — see matching note in
+            # crawl_c2rust_upstream.py's rebuild_fts.
+            conn.execute("DROP TABLE IF EXISTS c2rust_issues_fts")
+            conn.execute(
+                "CREATE VIRTUAL TABLE c2rust_issues_fts USING fts5("
+                "repo, number UNINDEXED, title, body, content='c2rust_issues', content_rowid='id')"
+            )
+            conn.execute(
+                "INSERT INTO c2rust_issues_fts (rowid, repo, number, title, body) "
+                "SELECT id, repo, number, title, body FROM c2rust_issues"
+            )
+            logging.info("rebuilt c2rust_issues_fts from restored c2rust_issues")
+        except sqlite3.OperationalError:
+            pass  # FTS table not in schema.sql (older DB) — fine, nothing to rebuild
 
     conn.commit()
 
