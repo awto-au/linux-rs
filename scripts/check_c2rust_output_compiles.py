@@ -269,8 +269,10 @@ def main():
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from check_spdx_provenance import check_pair as spdx_check_pair
+    from check_spdx_provenance import check_export_gpl_upgrades
 
     spdx_fails = []
+    export_gpl_warnings = []
     results = {}
     error_samples = {}
     error_first_lines = {}
@@ -292,6 +294,18 @@ def main():
             if spdx_status == "fail":
                 logging.error("SPDX FAIL %s", spdx_detail)
                 spdx_fails.append(spdx_detail)
+            # Same rule 0001 EXPORT_SYMBOL->_GPL WARN check the
+            # hand-translation cycle runs (check_spdx_provenance.py) —
+            # c2rust's raw output never emits #[export] itself (it has
+            # no concept of linux-rs's proc-macro, see
+            # check_c2rust_rule_conformance.py's check_0001 stub), so
+            # this only ever fires on a c2rust output file someone has
+            # since hand-patched to add #[export], not on raw
+            # transpiled output — included here for completeness/
+            # symmetry with the hand-translation cycle regardless.
+            for symbol, gpl_detail in check_export_gpl_upgrades(rs_path, c_path):
+                logging.warning("WARN (export-gpl) %s", gpl_detail)
+                export_gpl_warnings.append(gpl_detail)
         if outcome == "error":
             # Scan the FULL stderr (not the truncated sample below) for the
             # first genuine `error[...]`/`error: ...` line, skipping the
@@ -314,6 +328,8 @@ def main():
     logging.info("DONE: %s", dict(counts))
     logging.info("SPDX provenance (rulesdb/rules/0029-spdx-provenance.toml): "
                  "%d fail, %d checked", len(spdx_fails), len(files))
+    logging.info("EXPORT_SYMBOL->_GPL silent upgrades (rule 0001): %d warning(s)",
+                 len(export_gpl_warnings))
 
     # First-line error signature counts, for prioritization
     sig_counts = Counter(error_first_lines.values())
@@ -324,12 +340,19 @@ def main():
         f"Checked: {len(files)} files (c2rust 'clean' outcome)",
         f"Results: {dict(counts)}",
         f"SPDX provenance (rule 0029): {len(spdx_fails)} mismatch(es) of {len(files)} checked",
+        f"EXPORT_SYMBOL->_GPL silent upgrades (rule 0001): {len(export_gpl_warnings)} warning(s)",
         "",
     ]
     if spdx_fails:
         lines.append("## SPDX provenance failures")
         lines.append("")
         for detail in spdx_fails:
+            lines.append(f"- {detail}")
+        lines.append("")
+    if export_gpl_warnings:
+        lines.append("## EXPORT_SYMBOL->_GPL silent upgrade warnings (rule 0001)")
+        lines.append("")
+        for detail in export_gpl_warnings:
             lines.append(f"- {detail}")
         lines.append("")
     lines += [

@@ -10,9 +10,15 @@ lib/iomem_copy.c says GPL-2.0-only; 8250_helpers_rs.rs said GPL-2.0
 when 8250_port.c says GPL-2.0+). Both were caught only by manual
 review — nothing in the pipeline checked this.
 
+Also checks a second, related licensing-provenance question (added
+2026-07-18, same audit — rulesdb/rules/0001-export-symbol-gpl.toml):
+whether an #[export]-tagged Rust fn silently upgrades a plain
+(non-GPL) C EXPORT_SYMBOL to EXPORT_SYMBOL_GPL. See
+check_export_gpl_upgrades() below.
+
 This is a SHARED check, not special-cased dev.py-only logic: the core
-functions (spdx_of, check_pair) are imported by BOTH verification
-cycles that can land a translated file —
+functions (spdx_of, check_pair, check_export_gpl_upgrades) are
+imported by BOTH verification cycles that can land a translated file —
   1. dev.py check (this module's own __main__, hand-translation cycle):
      walks every linux-riscv/**/*_rs.rs.
   2. check_c2rust_output_compiles.py (the c2rust-transpiled-output
@@ -67,6 +73,7 @@ Log: tmp/check_spdx_provenance.log
 import argparse
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -74,6 +81,77 @@ REPO = Path(__file__).resolve().parent.parent
 TREE = REPO / os.environ.get("LINUXRS_TREE", "linux-riscv")
 LOG = REPO / "tmp" / "check_spdx_provenance.log"
 SPDX_TAG = "SPDX-License-Identifier:"
+
+# rulesdb/rules/0001-export-symbol-gpl.toml: #[export] always emits
+# EXPORT_SYMBOL_GPL, even when the C original used plain (non-GPL)
+# EXPORT_SYMBOL. Text/regex scanning only (same standard as
+# check_c2rust_rule_conformance.py's checkers — "good enough to be
+# useful, documented limitations", not a real Rust/C parser).
+#
+# #[export] immediately precedes the exported fn's signature in every
+# observed translated file (confirmed across all 31 current #[export]
+# sites, e.g. lib/math/gcd_rs.rs, lib/hexdump_rs.rs) — no blank line or
+# other attribute is known to separate them, so this regex requires
+# adjacency rather than scanning the whole file for the two independently
+# and trying to pair them up.
+EXPORT_ATTR_FN_RE = re.compile(
+    r'#\[export\]\s*\n\s*pub unsafe extern "C" fn\s+(\w+)',
+)
+
+# C EXPORT_SYMBOL* macro variants that are GPL-only by name (never the
+# "silently upgraded" case since they're already at or above GPL_GPL).
+# Only bare EXPORT_SYMBOL(name) — no _GPL/_NS_GPL/etc suffix — is the
+# non-GPL case #[export] silently tightens.
+GPL_EXPORT_MACROS = ("EXPORT_SYMBOL_GPL", "EXPORT_SYMBOL_NS_GPL")
+C_EXPORT_RE = re.compile(
+    r'\b(EXPORT_SYMBOL(?:_GPL|_NS_GPL|_NS|_FOR_MODULES|_FWTBL_LIB)?)\s*\(\s*(\w+)\s*[,)]'
+)
+
+
+def find_exported_fns(rs_text: str) -> list[str]:
+    """Every fn name immediately following an #[export] attribute."""
+    return EXPORT_ATTR_FN_RE.findall(rs_text)
+
+
+def find_c_export_macro(c_text: str, symbol: str) -> str | None:
+    """Find the EXPORT_SYMBOL* macro variant used for `symbol` in the C
+    original, or None if no EXPORT_SYMBOL*(symbol) call is found at all
+    (e.g. the symbol isn't actually exported in C, or is exported via a
+    macro variant this regex doesn't recognise — reported separately by
+    the caller as "not found", not silently treated as GPL)."""
+    for m in C_EXPORT_RE.finditer(c_text):
+        macro, name = m.group(1), m.group(2)
+        if name == symbol:
+            return macro
+    return None
+
+
+def check_export_gpl_upgrades(rs_path: Path, c_path: Path) -> list[tuple[str, str]]:
+    """Return a list of (symbol, detail) WARN findings: every #[export]-
+    tagged fn in rs_path whose C original (c_path) exports the same-named
+    symbol via plain, non-GPL EXPORT_SYMBOL (no _GPL suffix). WARN, not
+    FAIL — per rule 0001's own note this is currently license-inert
+    (CONFIG_MODULES unset), not yet a hard gate. Symbols where the C
+    macro can't be found at all are skipped (not flagged as a deviation;
+    could mean a naming mismatch this regex doesn't handle, not
+    necessarily a real problem — silence here is intentionally
+    conservative, see module doc's "good enough to be useful" standard)."""
+    rs_text = rs_path.read_text(errors="replace")
+    c_text = c_path.read_text(errors="replace")
+    findings = []
+    for symbol in find_exported_fns(rs_text):
+        macro = find_c_export_macro(c_text, symbol)
+        if macro is None:
+            continue
+        if macro not in GPL_EXPORT_MACROS:
+            findings.append((
+                symbol,
+                f"{rs_path.name}: #[export] fn {symbol} always emits "
+                f"EXPORT_SYMBOL_GPL, but {c_path.name} exports it via "
+                f"plain {macro} (non-GPL) — silent license upgrade "
+                f"(rulesdb/rules/0001-export-symbol-gpl.toml)",
+            ))
+    return findings
 
 # Files that are not a 1:1 <name>_rs.rs <-> <name>.c same-directory
 # translation. Path keys are relative to the kernel tree root.
@@ -140,6 +218,7 @@ def main() -> int:
         logging.warning("no *_rs.rs files found under %s", tree)
 
     passes, fails, warns = [], [], []
+    export_gpl_warnings = []
     for rs in rs_files:
         rel_rs = rs.relative_to(tree)
         c = c_original_for(rs, tree)
@@ -160,8 +239,18 @@ def main() -> int:
             logging.error("FAIL %s", detail)
             fails.append(rel_rs)
 
+        # rule 0001-export-symbol-gpl.toml: EXPORT_SYMBOL -> _GPL silent
+        # upgrade check. WARN-only (see check_export_gpl_upgrades' own
+        # doc) — never contributes to this script's exit code.
+        for symbol, gpl_detail in check_export_gpl_upgrades(rs, c):
+            logging.warning("WARN (export-gpl) %s", gpl_detail)
+            export_gpl_warnings.append((rel_rs, symbol))
+
     logging.info("SPDX provenance: %d pass, %d fail, %d warn (of %d translated files)",
                  len(passes), len(fails), len(warns), len(rs_files))
+    logging.info("EXPORT_SYMBOL->_GPL silent upgrades (rule 0001): %d instance(s) "
+                 "across %d file(s)",
+                 len(export_gpl_warnings), len({f for f, _ in export_gpl_warnings}))
 
     if fails:
         logging.error("SPDX PROVENANCE FAIL: %d mismatch(es)", len(fails))

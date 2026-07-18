@@ -23,6 +23,9 @@ instances = ["lib/math/gcd.c:gcd"]
 oracle = "tier4"
 negative = ["EXPORT_SYMBOL (non-GPL) — needs review before this rule applies", "fn called via vtable/function pointer — export macro documented as wrong there"]
 human_review = false
+mechanical_check = "scripts/check_spdx_provenance.py:check_export_gpl_upgrades — WARN-tier, run by dev.py check and check_c2rust_output_compiles.py"
+promote_to_fail_when = "CONFIG_MODULES becomes enabled in linux-riscv/.config — at that point EXPORT_SYMBOL vs _GPL has a real runtime/legal effect and this check's current WARN findings become real license-tightening defects needing per-symbol review, not a batch fix"
+instances_2026_07_18 = "135 of 163 checkable #[export] sites (across 24 of 31 files with #[export]) have a plain-EXPORT_SYMBOL C original — common, not rare, confirming this rule's own prior suspicion"
 
 # Licensing note (issue #1, 2026-07-18): the "all Rust symbols are
 # auto-EXPORT_SYMBOL_GPL" deviation above silently upgrades any plain
@@ -34,3 +37,11 @@ human_review = false
 # symbol whose C original used plain EXPORT_SYMBOL needs to keep that
 # non-GPL export (not silently tighten it), or the tightening needs to be
 # a deliberate, reviewed decision rather than a macro side effect.
+#
+# Mechanically checked (2026-07-18, issue #6 Phase 2): see
+# scripts/check_spdx_provenance.py's check_export_gpl_upgrades() — cross-
+# references every #[export]-tagged fn against its C original's
+# EXPORT_SYMBOL* macro by symbol name, WARNs (does not FAIL) on any
+# plain-EXPORT_SYMBOL match. Wired into the same two verification cycles
+# as the SPDX check (dev.py check, check_c2rust_output_compiles.py). See
+# [validation] above for the mechanical_check pointer and current numbers.

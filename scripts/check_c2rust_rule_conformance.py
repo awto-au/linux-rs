@@ -408,13 +408,92 @@ def check_0008_warn_on(rs_text: str, rs_path: Path, c_text: str | None):
     return out
 
 
+C_EXPORT_SYMBOL_RE = re.compile(
+    r'\b(EXPORT_SYMBOL(?:_GPL|_NS_GPL|_NS|_FOR_MODULES|_FWTBL_LIB)?)\s*\(\s*(\w+)\s*[,)]'
+)
+GPL_EXPORT_MACROS = ("EXPORT_SYMBOL_GPL", "EXPORT_SYMBOL_NS_GPL")
+
+# c2rust's own no_mangle lowering of an exported fn: #[no_mangle] pub
+# unsafe extern "C" fn NAME(...). Distinct from linux-rs's own #[export]
+# proc-macro (rust/macros/export.rs), which c2rust has no knowledge of
+# and never emits — see module docstring's confirmed examples.
+RS_NO_MANGLE_FN_RE = re.compile(
+    r'#\[no_mangle\]\s*\n\s*pub unsafe extern "C" fn\s+(\w+)',
+)
+RS_EXPORT_ATTR_FN_RE = re.compile(
+    r'#\[export\]\s*\n\s*pub unsafe extern "C" fn\s+(\w+)',
+)
+
+
 def check_0001_export_symbol_gpl(rs_text: str, rs_path: Path, c_text: str | None):
-    """N/A for raw c2rust output — c2rust doesn't know about linux-rs's own
-    #[export] proc-macro at all; it always emits a plain #[no_mangle] pub
-    unsafe extern "C" fn for anything EXPORT_SYMBOL_GPL'd (confirmed:
-    lib/math/gcd.c's gcd, lib/math/int_pow.c's int_pow). Recorded as
-    not-applicable rather than pass/fail, per the task brief."""
-    return []  # handled as NOT_APPLICABLE at the rule level, not per-file
+    """Real conformance check (was a permanent not_applicable stub prior
+    to the 2026-07-18 issue #6 Phase 2 landing).
+
+    Rule 0001's required emit shape for an EXPORT_SYMBOL(_GPL)'d C
+    function is #[export] pub unsafe extern "C" fn — a linux-rs-specific
+    proc-macro c2rust has no knowledge of. Raw c2rust output instead
+    always lowers an exported fn to a plain #[no_mangle] pub unsafe
+    extern "C" fn (confirmed: lib/math/gcd.c's gcd, lib/math/int_pow.c's
+    int_pow) — the exported-ness survives (the symbol is still globally
+    visible), but the specific #[export] macro form the rule requires
+    does not, for EVERY exported fn, GPL or not. This is therefore a
+    VIOLATION of the rule's target shape at every site by construction
+    (not not_applicable — the C -> Rust construct this rule is ABOUT
+    does appear in the corpus and c2rust's handling of it is checkable,
+    it just never matches), with the detail distinguishing whether the
+    C original was already GPL (license-inert gap, just a macro-shape
+    miss) from plain non-GPL (the same silent-upgrade risk rule 0001's
+    own trailing note describes — would apply here too, the moment a
+    future c2rust-output-to-#[export] rewrite pass exists)."""
+    out = []
+    if not c_text:
+        return out
+    for m in C_EXPORT_SYMBOL_RE.finditer(c_text):
+        macro, symbol = m.group(1), m.group(2)
+        # Only function exports are in scope for 0001 (data exports are
+        # rule 0027's territory) — confirm a #[no_mangle] fn with this
+        # name exists in the c2rust output before reporting on it, so a
+        # macro-exported *data* symbol of the same C file doesn't get
+        # mis-attributed to this rule.
+        if not re.search(rf'\bfn\s+{re.escape(symbol)}\s*\(', rs_text):
+            continue
+        has_export_attr = bool(re.search(
+            rf'#\[export\]\s*\n\s*pub unsafe extern "C" fn\s+{re.escape(symbol)}\b', rs_text))
+        if has_export_attr:
+            # Not observed in raw c2rust output (c2rust has no concept of
+            # #[export] at all), but checked for anyway in case a future
+            # c2rust patch or a hand-touched corpus file adds it.
+            out.append({"line": None, "status": STATUS_CONFORMANT,
+                        "detail": f"fn {symbol}: #[export] present — matches rule 0001's "
+                                  f"required emit shape (C export macro: {macro})"})
+            continue
+        has_no_mangle = bool(re.search(
+            rf'#\[no_mangle\]\s*\n\s*pub unsafe extern "C" fn\s+{re.escape(symbol)}\b', rs_text))
+        if has_no_mangle:
+            if macro in GPL_EXPORT_MACROS:
+                out.append({"line": None, "status": STATUS_VIOLATION,
+                            "detail": f"fn {symbol}: c2rust emits plain #[no_mangle], not "
+                                      f"#[export] — misses rule 0001's required macro form "
+                                      f"(C original already {macro}, so this is a shape-only "
+                                      f"miss, not a license-upgrade risk)"})
+            else:
+                out.append({"line": None, "status": STATUS_VIOLATION,
+                            "detail": f"fn {symbol}: c2rust emits plain #[no_mangle], not "
+                                      f"#[export] — misses rule 0001's required macro form. "
+                                      f"C original uses plain {macro} (non-GPL): if a future "
+                                      f"c2rust-output-to-#[export] rewrite pass is added, it "
+                                      f"must NOT blindly add #[export] here, or it silently "
+                                      f"upgrades this symbol to EXPORT_SYMBOL_GPL — same risk "
+                                      f"documented for hand-translation in this rule's own "
+                                      f"trailing note and checked there by "
+                                      f"scripts/check_spdx_provenance.py:"
+                                      f"check_export_gpl_upgrades()"})
+        else:
+            out.append({"line": None, "status": STATUS_AMBIGUOUS,
+                        "detail": f"fn {symbol}: exported via {macro} in C, present in c2rust "
+                                  f"output, but neither #[export] nor #[no_mangle] found on "
+                                  f"its definition — unexpected shape, needs a human look"})
+    return out
 
 
 def check_0027_export_data_symbol(rs_text: str, rs_path: Path, c_text: str | None):
@@ -430,7 +509,7 @@ def check_0027_export_data_symbol(rs_text: str, rs_path: Path, c_text: str | Non
 
 
 CHECKERS = {
-    "export-symbol-gpl": ("0001", check_0001_export_symbol_gpl, "not_applicable"),
+    "export-symbol-gpl": ("0001", check_0001_export_symbol_gpl, None),
     "ffs-trailing-zeros": ("0002", check_0002_ffs_trailing_zeros, None),
     "swap-mem-swap": ("0003", check_0003_swap_mem_swap, None),
     "unsigned-negate-isolate-lsb": ("0004", check_0004_unsigned_negate_isolate_lsb, None),
