@@ -64,7 +64,7 @@ def tu_timeline():
 
 
 IFDEF_CONFIG_RUST_RE = re.compile(
-    r"#ifdef\s+CONFIG_RUST\b(.*?)(?:\n#else\b|\n#endif\b)", re.S)
+    r"#ifdef\s+CONFIG_RUST(?:_\w+)?\b(.*?)(?:\n#else\b|\n#endif\b)", re.S)
 CALL_RS_FN_RE = re.compile(r"\b(\w+)_rs\s*\(")
 
 
@@ -72,13 +72,19 @@ def boot_path_wiring_status():
     """Live-computed distinction between the two real integration patterns
     this project uses (docs/streams.md stream 2, "c2rust-boot-blocker"):
 
-    - "in-place wired": a *.c file has a genuine `#ifdef CONFIG_RUST`
-      block (exact token, not e.g. CONFIG_RUST_INLINE_HELPERS) whose body
-      calls a `*_rs`-suffixed function — the original C function becomes a
-      thin wrapper into Rust, kept alive in the `#else` arm. This is real
-      code executing at a live, pre-existing C call site (see
+    - "in-place wired": a *.c file has a genuine `#ifdef CONFIG_RUST` (or
+      an independently-scoped sibling gate, e.g. CONFIG_RUST_8250_STARTUP
+      — the fork's own convention of one Kconfig symbol per Tier C slice,
+      see docs/8250-tier-c-startup-shutdown-2026-07-18.md) block whose
+      body calls a `*_rs`-suffixed function — the original C function
+      becomes a thin wrapper into Rust, kept alive in the `#else` arm.
+      This is real code executing at a live, pre-existing C call site (see
       docs/hybrid-boot-milestone-2026-07-18.md and the *-8250-trigger
-      companion doc for the two known examples).
+      companion doc for the two known examples). The regex previously
+      matched only the literal CONFIG_RUST token, silently excluding every
+      independently-gated Tier C slice from this metric — found 2026-07-18
+      when Tier C's startup/shutdown wiring didn't appear in the reported
+      count despite nm confirming the symbols are genuinely linked.
     - "whole-file lib/ swap": the Makefile points straight at a `*_rs.rs`
       TU, no C wrapper needed (the whole TU IS the Rust file) — includes
       both files with no sibling *.c at all (drivers/8250_helpers_rs.rs,
