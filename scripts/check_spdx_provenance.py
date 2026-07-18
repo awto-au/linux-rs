@@ -222,6 +222,12 @@ def main() -> int:
 
     passes, fails, warns = [], [], []
     export_gpl_warnings = []
+    per_file_rows = []  # (rel_rs, rule_0029_verdict, rule_0001_gpl_count) — the
+    # actual per-file, per-idiom checklist this script applies; kept
+    # separate from the streaming log above because interleaving each
+    # file's rule-0029 line with its own rule-0001 warnings (both logged
+    # as the loop runs) reads as one long undifferentiated stream, not a
+    # scannable "file x idiom" table. This table is the fix.
     for rs in rs_files:
         rel_rs = rs.relative_to(tree)
         c = c_original_for(rs, tree)
@@ -230,6 +236,7 @@ def main() -> int:
                             "(no same-named .c, no exception-table entry)",
                             rel_rs)
             warns.append(rel_rs)
+            per_file_rows.append((rel_rs, "WARN (no C original)", 0))
             continue
         status, detail = check_pair(rs, c)
         if status == "pass":
@@ -245,15 +252,29 @@ def main() -> int:
         # rule 0001-export-symbol-gpl.toml: EXPORT_SYMBOL -> _GPL silent
         # upgrade check. WARN-only (see check_export_gpl_upgrades' own
         # doc) — never contributes to this script's exit code.
+        gpl_count = 0
         for symbol, gpl_detail in check_export_gpl_upgrades(rs, c):
             logging.warning("WARN (export-gpl) %s", gpl_detail)
             export_gpl_warnings.append((rel_rs, symbol))
+            gpl_count += 1
+        per_file_rows.append((rel_rs, status.upper(), gpl_count))
 
     logging.info("SPDX provenance: %d pass, %d fail, %d warn (of %d translated files)",
                  len(passes), len(fails), len(warns), len(rs_files))
     logging.info("EXPORT_SYMBOL->_GPL silent upgrades (rule 0001): %d instance(s) "
                  "across %d file(s)",
                  len(export_gpl_warnings), len({f for f, _ in export_gpl_warnings}))
+
+    # The actual per-file idiom checklist: rule 0029 (SPDX provenance) and
+    # rule 0001 (EXPORT_SYMBOL->_GPL) applied to every translated file,
+    # one row each — not just an aggregate pass/fail count.
+    name_w = max((len(str(f)) for f, _, _ in per_file_rows), default=20)
+    print(f"\n{'file':<{name_w}}  rule-0029 (SPDX)   rule-0001 (EXPORT_SYMBOL_GPL)")
+    print(f"{'-' * name_w}  -----------------  -----------------------------")
+    for rel_rs, verdict, gpl_count in per_file_rows:
+        gpl_col = f"{gpl_count} deviation(s)" if gpl_count else "clean"
+        print(f"{str(rel_rs):<{name_w}}  {verdict:<17}  {gpl_col}")
+    print()
 
     if fails:
         logging.error("SPDX PROVENANCE FAIL: %d mismatch(es)", len(fails))
