@@ -109,20 +109,20 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-18T17:56:08+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-18T18:23:02+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. See <a href="STATUS.md">docs/STATUS.md</a> for the full
   hand-translation KUnit boot report; both tracks' progress-over-time charts, the two-track work
   queue, and the awtoau/c2rust transpiler-fork issue timeline all live on this one page.</p>
 
-<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>1 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-a96ffcf8b6e40b83b</code> — <span class="muted">1m running</span></li></ul></div>
+<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>2 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-a96ffcf8b6e40b83b</code> — <span class="muted">28m running</span></li><li><code>worktree-agent-af3a6a50f03008126</code> — <span class="muted">0m running</span></li></ul></div>
 
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">0</div><div class="label">P0 items open</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">P1 items open</div></div>
-  <div class="stat-tile"><div class="n">15</div><div class="label">work items active (all tracks)</div></div>
+  <div class="stat-tile"><div class="n">14</div><div class="label">work items active (all tracks)</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">confirmed boot-path blocking</div></div>
-  <div class="stat-tile"><div class="n">5</div><div class="label">awtoau/c2rust issues open</div></div>
-  <div class="stat-tile"><div class="n">14</div><div class="label">awtoau/c2rust issues closed</div></div>
+  <div class="stat-tile"><div class="n">4</div><div class="label">awtoau/c2rust issues open</div></div>
+  <div class="stat-tile"><div class="n">15</div><div class="label">awtoau/c2rust issues closed</div></div>
   <div class="stat-tile"><div class="n">38</div><div class="label">TUs hand-translated (live from git)</div></div>
   <div class="stat-tile"><div class="n">6</div><div class="label">functions wired into live boot path (1 file)</div></div>
 </div>
@@ -141,7 +141,7 @@
   then files-affected. Click any column header to sort/re-sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="work-items-table">
-  <caption>15 active work items</caption>
+  <caption>14 active work items</caption>
   <thead>
     <tr>
       <th data-sort-key>Priority<span class="arrow"></span></th>
@@ -287,16 +287,6 @@
       </tr>
       <tr>
         <td data-sort-value="9"><span class="pill pill-none">—</span></td>
-        <td>Emit #[export] (not plain #[no_mangle]) for EXPORT_SYMBOL*/EXPORT_SYMBOL_GPL* functions</td>
-        <td data-sort-value="c2rust">c2rust</td>
-        <td data-sort-value="open">open</td>
-        <td data-sort-value="0">no</td>
-        <td data-sort-value="-1"></td>
-        <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awtoau/c2rust/issues/19">awtoau/c2rust#19</a></td>
-      </tr>
-      <tr>
-        <td data-sort-value="9"><span class="pill pill-none">—</span></td>
         <td>Combined-image boot screening for rule-conformant c2rust output (tier-4 early signal, not final validation)</td>
         <td data-sort-value="kernel">kernel</td>
         <td data-sort-value="open">open</td>
@@ -316,7 +306,7 @@
   per assignee (no worker-assignment tracking exists to query). Click headers to sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="c2rust-issues-table">
-  <caption>19 issues total &mdash; 5 open, 14 closed</caption>
+  <caption>19 issues total &mdash; 4 open, 15 closed</caption>
   <thead>
     <tr>
       <th data-sort-key>#<span class="arrow"></span></th>
@@ -345,7 +335,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.2389962263078704">1.2</td>
+        <td data-sort-value="1.2574534106365742">1.3</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -354,7 +344,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.1131976151967593">1.1</td>
+        <td data-sort-value="1.131654799525463">1.1</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -363,7 +353,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.071449930011574">1.1</td>
+        <td data-sort-value="1.0899071143402779">1.1</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -372,7 +362,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.8360911337152778">0.8</td>
+        <td data-sort-value="0.8545483180439816">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -495,10 +485,10 @@
         <td data-sort-value="19">#19</td>
         <td><a href="https://github.com/awtoau/c2rust/issues/19">Emit #[export] (not plain #[no_mangle]) for EXPORT_SYMBOL*/EXPORT_SYMBOL_GPL* functions</a></td>
         <td data-sort-value="9"><span class="pill pill-none">—</span></td>
-        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="closed"><span class="state state-closed">closed</span></td>
         <td data-sort-value="2026-07-18T07:54:00Z">2026-07-18</td>
-        <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.0013920596412037038">0.0</td>
+        <td data-sort-value="2026-07-18T08:05:29Z">2026-07-18</td>
+        <td data-sort-value="0.007974537037037037">0.0</td>
       </tr>
   </tbody>
 </table>
@@ -518,8 +508,8 @@
 <div>
 <h3>c2rust transpiler fork (clean/crash/dropped)</h3>
 <p class="subtitle">Real <code>c2rust_attempts</code> outcome counts, grouped by revision and run timestamp
-  &mdash; latest run (rev 8540f596e, 2026-07-18T07:40:25): 542 clean / 0 crash / 0 dropped_decls out of 542 files. 34 distinct baseline runs recorded today across
-  21 c2rust revisions.</p>
+  &mdash; latest run (rev a660864e3, 2026-07-18T08:15:26): 542 clean / 0 crash / 0 dropped_decls out of 542 files. 37 distinct baseline runs recorded today across
+  22 c2rust revisions.</p>
 <img class="chart" src="dashboard_progress.png" alt="c2rust transpile outcomes per baseline run">
 </div>
 </div>
@@ -533,12 +523,12 @@
   As a labeled, honest <em>proxy</em> for "how much wall-clock activity work went into this" (not tokens, not
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
-  2026-07-17T12:26:20 to 2026-07-18T07:40:25 UTC
-  (34 runs). 71 script-invocation logs in tmp/, spanning 2 days, 8:47:04.300431 from 2026-07-16T09:09+10:00 to 2026-07-18T17:56+10:00
+  2026-07-17T12:26:20 to 2026-07-18T08:15:26 UTC
+  (37 runs). 74 script-invocation logs in tmp/, spanning 2 days, 9:13:58.644129 from 2026-07-16T09:09+10:00 to 2026-07-18T18:23+10:00
   <div class="proxy-list">
-    render_boot_log.log &mdash; 2026-07-18T15:59+10:00<br>c2rust_worktree.log &mdash; 2026-07-18T16:23+10:00<br>build_db.log &mdash; 2026-07-18T16:30+10:00<br>linux_riscv_worktree.log &mdash; 2026-07-18T16:34+10:00<br>dev-build.log &mdash; 2026-07-18T16:35+10:00<br>build_initramfs.log &mdash; 2026-07-18T16:35+10:00<br>qemu-boot.log &mdash; 2026-07-18T16:36+10:00<br>dev-boot.log &mdash; 2026-07-18T16:36+10:00<br>check_spdx_provenance.log &mdash; 2026-07-18T16:36+10:00<br>report.log &mdash; 2026-07-18T16:36+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T17:45+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T17:45+10:00<br>c2rust-baseline.log &mdash; 2026-07-18T17:45+10:00<br>readiness.log &mdash; 2026-07-18T17:49+10:00<br>dev.log &mdash; 2026-07-18T17:49+10:00<br>check_c2rust_rule_conformance.log &mdash; 2026-07-18T17:49+10:00<br>investigate_c2rust_failure.log &mdash; 2026-07-18T17:55+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T17:55+10:00<br>sync_work_items.log &mdash; 2026-07-18T17:55+10:00<br>generate_dashboard.log &mdash; 2026-07-18T17:56+10:00
+    check_spdx_provenance.log &mdash; 2026-07-18T18:01+10:00<br>dev-build.log &mdash; 2026-07-18T18:01+10:00<br>build_initramfs.log &mdash; 2026-07-18T18:01+10:00<br>qemu-boot.log &mdash; 2026-07-18T18:02+10:00<br>dev-boot.log &mdash; 2026-07-18T18:02+10:00<br>readiness.log &mdash; 2026-07-18T18:02+10:00<br>report.log &mdash; 2026-07-18T18:02+10:00<br>linux_riscv_worktree.log &mdash; 2026-07-18T18:13+10:00<br>investigate_c2rust_failure.log &mdash; 2026-07-18T18:14+10:00<br>build_db.log &mdash; 2026-07-18T18:14+10:00<br>check_c2rust_output_clippy.log &mdash; 2026-07-18T18:19+10:00<br>check_c2rust_output_clippy_run.log &mdash; 2026-07-18T18:19+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T18:19+10:00<br>check_c2rust_rule_conformance.log &mdash; 2026-07-18T18:20+10:00<br>dev.log &mdash; 2026-07-18T18:22+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T18:22+10:00<br>sync_work_items.log &mdash; 2026-07-18T18:22+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T18:22+10:00<br>c2rust-baseline.log &mdash; 2026-07-18T18:22+10:00<br>generate_dashboard.log &mdash; 2026-07-18T18:23+10:00
   </div>
-  <em>(most-recent 20 of 71 log files shown; commit/time-based proxy only, not actual token usage)</em>
+  <em>(most-recent 20 of 74 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>
 
 <h2>progress_snapshots (time-series, if &gt;1 row)</h2>
