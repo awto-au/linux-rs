@@ -18,7 +18,7 @@ derivation = "independently derived"
 evidence = []
 
 [validation]
-instances = ["lib/win_minmax.c:minmax_reset (callers of the header copy remain in C)", "lib/find_bit.c: fns() from <linux/bitops.h>, bitmap_read()/bitmap_get_value8() from <linux/bitmap.h> (specialised to nbits=8, its only call site)"]
+instances = ["lib/win_minmax.c:minmax_reset (callers of the header copy remain in C)", "lib/find_bit.c: fns() from <linux/bitops.h>, bitmap_read()/bitmap_get_value8() from <linux/bitmap.h> (specialised to nbits=8, its only call site)", "lib/iomem_copy.c: __raw_readb/__raw_writeb/__raw_readl/__raw_writel/__raw_readq/__raw_writeq from arch/riscv/include/asm/mmio.h — shim path (rule 0014) chosen over reimplementation since these are volatile MMIO primitives with real hardware ordering semantics, not pure arithmetic"]
 oracle = "tier2.5"
 negative = ["header inlines with memory-ordering or per-CPU semantics — those are tier 3, use a shim, never reimplement"]
 human_review = false
