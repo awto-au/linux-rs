@@ -74,7 +74,11 @@ target ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)).
 ## Status
 
 **Live dashboard: [docs/STATUS.md](docs/STATUS.md)** — graphs + tables
-regenerated on every validated boot (`dev.py check`).
+regenerated on every validated boot (`dev.py check`); **two-track
+dashboard: [docs/status/dashboard.html](docs/status/dashboard.html)** adds
+the work-item queue and `awtoau/c2rust` fork timeline. The table below is a
+curated highlight reel, not exhaustive — see `docs/` for the full set of
+phase/scoping/research reports as they land.
 
 | Date | Milestone |
 |---|---|
@@ -89,6 +93,11 @@ regenerated on every validated boot (`dev.py check`).
 | 2026-07-16 | **Batch 3 (readiness-ranked): rational, bcd, hweight — 9 Rust TUs, all suites green.** The transfer metric works: after 6 TUs, hweight/bcd were 100% in-vocabulary, rational 96.8% (`scripts/readiness.py`, patches/0004) |
 | 2026-07-16 | **First tier-2 TU: `lib/sort.c` heapsort in Rust — `ok 11 lib_sort` on the booted kernel.** Sentinel fn-pointers, raw `void*` arithmetic, callback dispatch, `cond_resched` C shim; rules 0012–0014 (patches/0003) |
 | 2026-07-16 | **Batch 2: five Rust TUs in the booted kernel, 58/58 KUnit vectors.** lcm/int_log/int_pow/int_sqrt; first Rust→Rust cross-TU call; rules 0006–0010. Benchmark: **faithful Rust ≡ C** at equal opt level; `isqrt` optimised lane 2.1× — but "idiomatic" gcd 2× slower, so per-function measurement gates the lane ([docs/phase2-batch2-and-bench.md](docs/phase2-batch2-and-bench.md)) |
+| 2026-07-17 | `awtoau/c2rust` transpiler fork adopted as a second, faster-but-lower-confidence track alongside hand-translation; systematic Clang-AST-consumption bugs found and fixed upstream in the fork (issue tracking in `rulesdb/patterns.db`'s `c2rust_*` tables) |
+| 2026-07-18 | **30 hand-translated TUs, 15 KUnit suites green.** Batches 18–30 (find_bit, cmdline, checksum, decompress, earlycpio, hexdump, div64, parser, string, bitmap, kstrtox, bitmap-str) landed; c2rust track adds real `rustc --emit=metadata` compile-checking against the kernel's own `libcore`, not just transpile-clean status ([docs/status/session-report-2026-07-18.md](docs/status/session-report-2026-07-18.md)) |
+| 2026-07-18 | **Hybrid boot-path milestone: first Rust code in a live device driver**, not a whole-file `lib/` swap — `8250_port.c`'s `serial8250_compute_lcr()` now calls a Rust implementation under `CONFIG_RUST`, verified boot-clean with the Rust symbol present in `vmlinux` ([docs/hybrid-boot-milestone-2026-07-18.md](docs/hybrid-boot-milestone-2026-07-18.md), scoping: [docs/serial-8250-translation-scoping-2026-07-18.md](docs/serial-8250-translation-scoping-2026-07-18.md)) |
+| 2026-07-18 | tmpfs-in-Rust scoped and found **blocked**: the vendored `rust/kernel/fs.rs` has no VFS filesystem-registration abstractions to attach a Rust tmpfs to — a harder gap than any TU landed so far ([docs/tmpfs-rust-scoping-2026-07-18.md](docs/tmpfs-rust-scoping-2026-07-18.md)) |
+| 2026-07-18 | 32 TUs, 16 KUnit suites / 143 vectors green (`iomem_copy`, TU 32); two-track work-item dashboard added ([docs/status/dashboard.html](docs/status/dashboard.html)) |
 
 ## Layout
 
