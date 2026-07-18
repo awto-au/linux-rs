@@ -88,18 +88,21 @@ prompt on the serial console instead of powering off.
 commits, staged as a sequence of individually-tagged, individually-verified
 checkpoints (e.g. git tags or a checkpoint log) rather than one big change.
 **Verification gate:** same as stream 2 (`dev.py check`, 16/16 suites,
-`ORACLE PASS`) *plus*, once the console milestone lands, a genuine
-interactive-session check — not an ad hoc command, but re-running a KUnit
-suite **from the live console** (e.g. via debugfs, `/sys/kernel/debug/kunit/
-<suite>/run`, if `CONFIG_KUNIT_DEBUGFS` is enabled — check) rather than only
-relying on the automatic boot-time run. This reuses infrastructure already
-trusted (the same suites `dev.py check` already parses) instead of
-inventing a new ad hoc verification method, and is real, load-bearing
-evidence the console is genuinely interactive: if you can type a command and
-get a real KUnit re-run with matching results back, the console works.
-**Current top item:** get the interactive-console milestone landed first;
-everything else in this stream is blocked on having a real console to work
-from.
+`ORACLE PASS`, `INIT REACHED`) plus confirming a real shell prompt string
+appears in the boot log.
+
+**Deliberately sequenced, not bundled** (2026-07-18): re-running a KUnit
+suite from the live console (via debugfs, `/sys/kernel/debug/kunit/
+<suite>/run`, if `CONFIG_KUNIT_DEBUGFS` is enabled) as stronger, load-bearing
+evidence the console is genuinely interactive is a REAL next step, but is
+explicitly deferred to its own follow-up task once the console milestone
+itself is landed and verified — get linux booting to a working console
+first, add the in-kernel test-running capability as a later, separate step.
+Don't attempt both in one pass.
+
+**Current top item:** get the interactive-console milestone landed (just
+the shell prompt, nothing else) — that's the only thing blocking this
+stream right now.
 
 ## 4. hand-translation
 
