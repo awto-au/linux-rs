@@ -633,3 +633,180 @@ this file's only contribution is the refinement to lesson 4:
    derive and the `#[bitfield(...)]` attributes rather than deleting or
    opaquing the struct, keeping the underlying storage fields' bytes
    and layout intact.
+
+## Fourth candidate: `lib/lwq.c`
+
+Fourth real combined-image boot, in its own isolated worktree
+(`combined-c2rust-boot-4`, branch `agent-combined-c2rust-boot-4`), so it
+could run concurrently with the other files' worktrees without
+disturbing them. Target: the lock-free-ish work queue in
+`lib/lwq.c` — `__lwq_dequeue()` and `lwq_dequeue_all()`, both
+`EXPORT_SYMBOL_GPL`, 158 lines of C (excluding the `CONFIG_LWQ_TEST`
+boot-time self-test block, which the c2rust baseline doesn't include
+since it's conditionally compiled out). Chosen for being structurally
+similar in risk profile to `lib/rcuref.c` — real atomic-operation-heavy
+code pulling in the same `asm/current.h`/`cmpxchg.h` header chain — to
+see whether the RISC-V inline-asm gaps `rcuref.c` hit (issue #29, the
+`amocas`/Zacas one specifically) recur for a *different* RISC-V atomic
+primitive (`llist_del_all()`'s internal `xchg()` on `struct
+llist_head.first`, which lowers to `amoswap` rather than rcuref's
+`amocas`).
+
+### What was set up
+
+Same pattern as every prior file: new `CONFIG_RUST_C2RUST_BOOT_TEST` in
+`lib/Kconfig` (independent Kconfig symbol from every other worktree's —
+different tree/branch, no collision), `lib/Makefile` swapped `lwq.o`
+for `lwq_rs.o` (had to be pulled out of a bundled multi-object `obj-y`
+line shared with `bsearch.o`, `kfifo.o`, `rcuref.o`, `errseq.o`, etc. —
+same shape as `rcuref.c`'s and `is_single_threaded.c`'s own Makefile
+fixes), raw c2rust output copied from
+`tmp/c2rust-baseline/lib_lwq.c/output/src/lwq.rs` into `lib/lwq_rs.rs`
+as the starting point (1474 lines raw for a 158-line source file, the
+same "small C file, huge single-TU translation" pattern seen in every
+file so far — most of the bulk is a fully-inlined `task_struct` and its
+~50 transitively-pulled-in struct dependents, none of which
+`__lwq_dequeue`/`lwq_dequeue_all` actually touch by value).
+
+### Known fix classes, confirmed present again
+
+- `#![feature(asm, extern_types, label_break_value, raw_ref_op,
+  strict_provenance)]` — stripped.
+- `use ::macros::export;` / `#[export]` on both exported functions —
+  dropped `#[export]`, added `#[no_mangle]` in its place (the
+  `rcuref.c`-established fix: `#[export]` needs a real bindgen-backed
+  type match this raw translation doesn't have; the real linkage comes
+  from the `global_asm!` `.export_symbol` block c2rust already emits).
+- The `.init_array`/`__UNIQUE_ID_addressable_*` constructor trick —
+  present for both exported functions, deleted, keeping the
+  `EXPORT_SYMBOL`-emulating `global_asm!` blocks.
+- `unsafe {}` block wrapping — needed across all 19 `unsafe extern "C"
+  fn` bodies in the file (not just the two exported ones), the same
+  KASAN/KCSAN-instrumented-atomic-helper-chain shape `rcuref.c` hit
+  (`kasan_check_write`, `kcsan_check_access`,
+  `instrument_atomic_read_write`, the `preempt_count`/`tif_need_resched`
+  chain feeding `spin_lock`/`spin_unlock`, plus `llist_empty`/
+  `llist_next`/`llist_del_all` themselves). Used the same brace-counting
+  Python script approach the `rcuref.c` entry describes (skip string
+  literals and `'_c2rust_label_N:` block-label syntax so they don't
+  perturb the brace count), rather than hand-wrapping 19 functions.
+- Register-variable pseudo-globals (`current.h`'s `current_stack_pointer`
+  and `riscv_current_is_tp`) — both fabricated by c2rust as
+  `#[no_mangle] pub static mut` globals as usual. `riscv_current_is_tp`
+  is genuinely used here (via `get_current()`, feeding the
+  `preempt_count_ptr()` chain `spin_lock`/`spin_unlock` call — this
+  file's *only* real touchpoint into `task_struct`/`thread_info`),
+  so it was kept. `current_stack_pointer` was confirmed dead by grep
+  (only its own declaration, never read or written) and deleted per
+  the established rule — no collision materialized in this worktree
+  since `lwq_rs.rs` is the only raw-c2rust Rust TU built here (`rcuref.c`
+  stays plain C in this worktree), but deleting it removes the latent
+  risk for if a second such TU is ever added.
+- Dead `BitfieldStruct`-derived structs: `task_struct` and
+  `sched_dl_entity`, same pair `rcuref.c` hit, confirmed unused by
+  value anywhere in the file (only ever `*mut task_struct` / inline
+  `sched_dl_entity` field inside the now-opaqued `task_struct`) and
+  opaqued via the same `opaque_marker!` macro.
+
+### Refinement: tracing which structs are real vs. dead is not a clean single-boundary split here
+
+Unlike `lzo1x_decompress_safe.c` (whole dead chain deletable as one
+contiguous block after tracing) or `is_single_threaded.c` (nothing dead
+to trace), this file's ~700-line dead `task_struct`-chain block had
+three genuinely-needed structs interspersed *inside* it:
+`raw_spinlock`/`arch_spinlock_t` and `spinlock`/its anonymous union
+(both needed for `struct lwq.lock: spinlock_t`, used by the real
+`spin_lock`/`spin_unlock` calls), `llist_node`/`llist_head` (the
+queue's actual payload types), plus — found only once the build
+started erroring on it — `thread_info`, which isn't dead despite being
+part of the same header pull-in: `preempt_count_ptr()` casts
+`get_current()`'s `*mut task_struct` result to `*mut thread_info` and
+dereferences `.preempt_count`/`.flags` through it, a real (if
+indirect) load-bearing use. General lesson: when the dead chain is
+large enough to be worth deleting as a block rather than one struct at
+a time, grep *each* interspersed struct individually before deleting
+the block — "mostly dead" is not "entirely dead," and the load-bearing
+survivor may not be the struct the exported functions reference
+directly (here it's two casts away: `task_struct` → `thread_info`, not
+`task_struct` used directly).
+
+### RISC-V inline-asm gaps: both `rcuref.c` findings recurred exactly as issue #29 predicted
+
+`llist_del_all()`'s c2rust-translated `xchg(&head->first, NULL)` lowers
+to a 4-way `match` on pointer width (1/2/4/8 bytes — dead code for the
+1/2 cases on a 64-bit pointer target, but c2rust translates the full
+generic `xchg()` macro regardless) with two distinct RISC-V gaps:
+
+1. **Zabha ISA-string extension unavailable to Rust regardless of
+   Kconfig** — exactly the `KBUILD_RUSTFLAGS` gap filed as issue #29
+   from the `rcuref.c` boot. The size-1 and size-2 match arms each had
+   an `if riscv_has_extension_unlikely(RISCV_ISA_EXT_ZABHA) { asm!("
+   amoswap.b.aqrl ...") } else { <LR/SC loop> }` runtime-guarded fast
+   path — `amoswap.b`/`amoswap.h` (byte/halfword atomic swap) are
+   Zabha-gated instructions, same wall as `rcuref.c`'s `amocas.b`/`.h`:
+   LLVM's RISC-V assembler rejects them for the Rust target string
+   regardless of the runtime guard, since `asm!` validity is checked at
+   codegen time independent of reachability. Fixed identically to
+   `rcuref.c`: dropped both `amoswap.b`/`amoswap.h` fast-path arms
+   entirely (the `if` condition, the `asm!` block, and the `} else {`
+   line), leaving the LR/SC fallback path unconditional — it needs
+   nothing beyond base `A`. The size-4 and size-8 arms
+   (`amoswap.w`/`amoswap.d`) needed no such fix: whole-word/doubleword
+   atomic swap is base-ISA `A`, not Zabha-gated, and both compiled
+   as-is. Confirms issue #29's finding is not specific to `amocas` —
+   it's any Zabha/Zacas-gated `amo*.{b,h}` instruction c2rust emits a
+   runtime-guarded fast path for, which any future c2rust-translated
+   file touching sub-word atomics on this arch/config combination will
+   hit again until issue #29 is fixed upstream in `KBUILD_RUSTFLAGS`.
+2. **`[reg]` bracket addressing syntax** — the same c2rust addressing
+   bug `rcuref.c` hit, this time in the size-4/size-8 arms' `amoswap.w`/
+   `amoswap.d` asm templates: `"amoswap.w.aqrl {0}, {2}, [{1}]"` uses
+   `[{1}]` bracket-wrapped addressing, which RISC-V's assembler doesn't
+   support (an ARM/x86-ism, not a RISC-V one). LLVM rejected both with
+   "expected '(' or optional integer offset". Fixed identically to
+   `rcuref.c`: `[{N}]` → `0({N})`, confirmed against the real C source's
+   `"amoswap%0 %0, %2, %1\n"` `"+A"`-constrained memory operand in
+   `arch/riscv/include/asm/cmpxchg.h`. Interestingly the size-1/size-2
+   arms' `amoswap.b`/`.h` asm also used the same `[{N}]` syntax, but
+   since those arms were deleted outright for the Zabha gap above, that
+   instance never needed a separate addressing fix — a reminder that
+   gap classes can compound on the same code without both needing
+   independent fixes if one fix subsumes the site entirely.
+
+### Outcome: clean boot, fourth file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/lwq_rs.o` — clean, zero errors (cosmetic
+  warnings only: missing-doc lints, a handful of unused-variable
+  warnings in the KASAN/KCSAN no-op stub bodies, two "unused borrow
+  that must be used" warnings on `spin_lock`/`spin_unlock`'s
+  c2rust-translated no-op field-address expressions — none new
+  relative to the pattern already seen in `rcuref.c`).
+- `make ARCH=riscv LLVM=1 -j32` — full kernel build succeeds,
+  `arch/riscv/boot/Image` and `Image.xz` produced.
+- `llvm-nm` confirms both `__lwq_dequeue` and `lwq_dequeue_all` defined
+  (`T`) in both `lib/lwq_rs.o` and the final `vmlinux`
+  (`ffffffff8013450a T __lwq_dequeue`,
+  `ffffffff801345c8 T lwq_dequeue_all`), and confirms `lib/lwq.o` was
+  correctly never built (the Kconfig/Makefile swap worked as intended).
+- `scripts/boot_qemu.py --run-id combined-c2rust-5`: boots clean,
+  **17/17 KUnit suites pass** (`fail:0` in every suite, no `not ok`
+  anywhere), `initramfs init reached, PID 1 alive` confirms INIT
+  REACHED, no panics, oops, BUG, or WARN in the boot log. No dedicated
+  `lwq`/`llist` KUnit suite exists in this kernel config (`CONFIG_
+  LWQ_TEST` is a boot-time smoke test gated separately and wasn't
+  enabled here), so this run demonstrates linking and booting cleanly
+  alongside real kernel code, not a runtime correctness check of the
+  queue logic itself against known concurrent-access patterns.
+
+No genuinely new corpus-wide gap class found in this file — both
+RISC-V inline-asm gaps are confirmations of issue #29 and the `rcuref.c`
+addressing-syntax fix applying to a second, different atomic primitive
+(`amoswap` vs. `amocas`), which strengthens the case that issue #29 is
+a real, general `KBUILD_RUSTFLAGS` gap rather than an
+`amocas`-instruction-specific one. The one refinement worth carrying
+forward is the "interspersed needed structs inside a dead block, trace
+each one individually" lesson above, extending lesson 4's family of
+"don't assume a whole dead-looking region is uniformly dead" findings
+to the *deletion-of-a-large-contiguous-block* case, not just the
+individual-struct case `lzo1x_decompress_safe.c` and
+`is_single_threaded.c` already covered.
