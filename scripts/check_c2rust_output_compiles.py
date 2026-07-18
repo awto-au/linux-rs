@@ -34,7 +34,7 @@ REPORT = REPO / "tmp" / "c2rust-output-compile-report.md"
 
 TARGET = "riscv64imac-unknown-none-elf"
 PER_FILE_TIMEOUT_S = 60
-C2RUST_REV = "a1a7ca901"
+C2RUST_REV = "1a06f7af6"
 C2RUST_SRC = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
 
 HOST_DIR = SUPPORT_DIR / "host"
@@ -155,9 +155,16 @@ def find_clean_outputs():
     pick up leftover output/ dirs from earlier failed/non-clean attempts."""
     import sqlite3
 
+    # c2rust_attempts is append-only (one row per baseline run, no
+    # dedup on c_file+c2rust_rev — see run_c2rust_baseline.py), so
+    # re-running the baseline more than once at the same rev leaves
+    # multiple identical rows behind. DISTINCT keeps this function's
+    # file list (and the "Checked: N files" figure derived from it)
+    # accurate regardless of how many times the baseline happened to
+    # be (re-)run at this rev.
     conn = sqlite3.connect(str(DB))
     rows = conn.execute(
-        "SELECT c_file FROM c2rust_attempts WHERE outcome='clean' AND c2rust_rev=?",
+        "SELECT DISTINCT c_file FROM c2rust_attempts WHERE outcome='clean' AND c2rust_rev=?",
         (C2RUST_REV,),
     ).fetchall()
     conn.close()
