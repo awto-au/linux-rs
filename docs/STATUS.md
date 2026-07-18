@@ -1,8 +1,8 @@
-# Status — 2026-07-18T12:31:41+10:00
+# Status — 2026-07-18T12:43:23+10:00
 
 ![status](status/status.png)
 
-- Translated TUs: **33**   ·   KUnit: **16 suites, 143 vectors** green   ·   Rules: **28** (t1 19 / t2 4 / t3 5)
+- Translated TUs: **33**   ·   KUnit: **16 suites, 143 vectors** green   ·   Rules: **29** (t1 20 / t2 4 / t3 5)
 
 ## KUnit (latest boot)
 

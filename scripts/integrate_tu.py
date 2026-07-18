@@ -31,6 +31,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kunit_oracle import verify_kunit_ok  # noqa: E402 — see module doc
 LOG = REPO / "tmp" / "integrate_tu.log"
 
 
@@ -129,7 +131,16 @@ def main() -> int:
     out = run(["python3", str(REPO / "scripts/boot_qemu.py"), "--tree", args.tree],
               timeout=600)
     boot_log = (REPO / "tmp/qemu-boot.log").read_text(errors="replace")
-    bad = [l for l in boot_log.splitlines() if l.lstrip().startswith("not ok")]
+    # Shared with dev.py's boot() via kunit_oracle.verify_kunit_ok — see
+    # rulesdb/rules/0028-kunit-boot-oracle-gate.toml. --suite adds an
+    # extra, integrate_tu.py-specific requirement (a named suite must be
+    # present) on top of the shared oracle's "not ok" detection. Note:
+    # unlike dev.py's boot(), this preserves integrate_tu.py's original
+    # behavior of NOT independently failing on zero "ok" lines when no
+    # --suite is given (a real gap, but out of scope for this dedup —
+    # see rule 0028's provenance note).
+    passed, ok, bad = verify_kunit_ok(boot_log)
+    bad = list(bad)
     for suite in args.suite:
         if not re.search(rf"^ok \d+ {re.escape(suite)}$", boot_log, re.M):
             bad.append(f"suite missing/failed: {suite}")

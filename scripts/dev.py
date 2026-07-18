@@ -27,12 +27,13 @@ Tree default: linux-riscv (override with LINUXRS_TREE env).
 """
 import logging
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kunit_oracle import verify_kunit_ok  # noqa: E402 — see module doc
 
 
 def print(*args, **kw):  # noqa: A001 — awto rule: all output also to tmp/dev.log
@@ -71,15 +72,16 @@ def boot():
     sh(["python3", str(S / "boot_qemu.py"), "--tree", TREE.name],
        log="dev-boot.log", timeout=600)
     txt = (REPO / "tmp/qemu-boot.log").read_text(errors="replace")
-    ok = re.findall(r"^ok \d+ .*$", txt, re.M)
-    bad = re.findall(r"^\s*not ok .*$", txt, re.M)
-    for line in ok:
-        print(line)
     # Primary gate: unchanged from before initramfs support existed —
     # any 'not ok' KUnit line is a hard fail, no KUnit output at all is a
     # hard fail. Do not weaken this; it's the project's main correctness
     # signal and initramfs/init reachability is checked separately below,
-    # additively, never in place of this.
+    # additively, never in place of this. Shared with integrate_tu.py via
+    # kunit_oracle.verify_kunit_ok — see rulesdb/rules/
+    # 0028-kunit-boot-oracle-gate.toml.
+    passed, ok, bad = verify_kunit_ok(txt)
+    for line in ok:
+        print(line)
     if bad:
         print("\n".join(bad))
         print("ORACLE FAIL")

@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "kunit-boot-oracle-gate"
+version = 1
+tier = 1
+category = "process"
+
+[match]
+c = "every kernel build+boot cycle that verifies a landed or landing-candidate translation — dev.py check (hand-translation cycle), integrate_tu.py (mechanised TU-integration cycle), sync_linux_kernel.py (delegates to dev.py check rather than reimplementing, the correct precedent for what this rule's own extraction should look like)"
+
+[emit]
+kind = "rewrite"
+rust = """
+GATE (hard FAIL): a QEMU boot's KUnit output must have zero "not ok"
+lines and at least one "ok" line, else the whole cycle fails. No KUnit
+output at all is NOT a pass by default — it means the boot never
+reached KUnit, not that there was nothing to fail.
+
+Log-line-format contract (do not let this drift silently — if the KUnit
+TAP output format ever changes, both the detection regex AND this text
+must be updated together):
+  - a PASS line matches  ^ok \\d+ .*$
+  - a FAIL line matches  ^\\s*not ok .*$  (may be indented — KUnit
+    subtests nest under their parent suite)
+
+Checked by scripts/kunit_oracle.py's verify_kunit_ok(log_text) ->
+(passed, ok_lines, bad_lines) — a shared, importable primitive, NOT
+reimplemented per caller. Callers own log discovery and their own
+printed output format (which is preserved unchanged by this rule);
+kunit_oracle.py owns only the log-text -> verdict logic:
+  - dev.py's boot() (called by both `dev.py boot` and `dev.py check`):
+    reads tmp/qemu-boot.log after boot_qemu.py, prints "ORACLE PASS (N
+    suites)" / "ORACLE FAIL", sys.exit(1) on fail.
+  - integrate_tu.py's main(): reads the same tmp/qemu-boot.log after its
+    own boot_qemu.py invocation, adds an ADDITIONAL integrate_tu.py-
+    specific requirement on top (named --suite values must each have a
+    matching "ok N <suite>" line), prints "ORACLE PASS"/"ORACLE FAIL"
+    to its own log, return 1 on fail.
+
+WARN-tier clause (weaker verdict, folded into this same rule rather than
+split out — same gate family, different severity): the initramfs
+"INIT_REACHED" milestone (configs/initramfs-init.sh prints
+"linux-rs: initramfs init reached, PID 1 alive" once /init actually runs
+as PID 1, confirming init/do_mounts.c and the initramfs -> /init
+transition worked, not just KUnit-in-kernel-space). Checked in the same
+two places (dev.py's boot(), boot_qemu.py's main()) but WARN-only, never
+sys.exit(1) — a missing initramfs milestone is a real regression worth
+flagging but is NOT part of dev.py check's historical pass/fail
+contract, and must never be promoted to a hard fail silently; that
+would be a scope change to the gate, not a bug fix.
+"""
+deviations = []
+
+[provenance]
+derivation = "independently derived"
+evidence = [
+  "2026-07-18 pipeline audit (issue #6) found dev.py's boot() (~lines 70-99) and integrate_tu.py's main() (~lines 131-140) independently reimplementing the same regex-based KUnit oracle scan — two separate implementations of the project's single most load-bearing correctness invariant, a real bug independent of whether this became a rulesdb rule",
+  "awto-au/linux-rs#6 (rulesdb-gap survey, Phase 1)",
+]
+
+[validation]
+instances = ["dev.py check: 16/16 KUnit suites, INIT REACHED (post-extraction verification, 2026-07-18)"]
+oracle = "tier1"
+negative = ["a boot log with any '^\\s*not ok' line — always a hard FAIL, never a judgement call", "a boot log with zero 'ok' lines (KUnit never ran, e.g. panic before test framework init) — also a hard FAIL, not a silent pass"]
+human_review = false
+
+[findings]
+catalogue = [
+  "duplication of a load-bearing invariant is itself a defect class worth watching for independent of whether the duplicated logic happens to still agree today — dev.py's and integrate_tu.py's copies had already started to diverge slightly in surrounding structure (list-comprehension vs re.findall) despite implementing the same rule",
+  "sync_linux_kernel.py delegating to `dev.py check` as a subprocess rather than reimplementing the oracle is the correct precedent this rule's own extraction follows — prefer calling the existing verified entry point over re-deriving its result",
+  "report.py and render_boot_log.py independently re-parse tmp/qemu-boot.log for DISPLAY purposes (suite names, pass-vector counts) — not gating, out of scope for this rule, left as-is",
+]
