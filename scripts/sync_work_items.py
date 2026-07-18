@@ -67,6 +67,37 @@ KERNEL_WORK_ITEMS = [
                  "add result instead of saturating — masked until memparse()'s new overflow "
                  "logic started relying on the saturation contract.",
     },
+    {
+        "title": "8250/16550 serial driver translation — first slice: register helpers",
+        "status": "open",
+        "priority": "P2",
+        "priority_rationale": "Real device-driver TU (first of its kind — all 30 landed TUs are "
+                 "lib/-style pure functions), and unusually high-stakes: 8250 is the live console "
+                 "driver this project's ENTIRE verification methodology depends on reading "
+                 "(dev.py check parses QEMU serial output for KUnit results). A subtly-wrong "
+                 "translation could boot yet corrupt/drop console output, silently invalidating "
+                 "the test harness itself. Not urgent (console works fine in C today, nothing is "
+                 "broken) but high-value as the next ambitious hand-translation target once "
+                 "picked up — hence P2, not P0/P1. Scoped narrowly on purpose: first slice is "
+                 "serial8250_compute_lcr / fcr_get_rxtrig_bytes / bytes_to_fcr_rxtrig only (pure, "
+                 "control-flow-simple, zero register I/O), verified via diff-oracle "
+                 "(bench/diff_8250_helpers.{c,rs}, already landed and passing byte-identical over "
+                 "7500 cases) and NOT wired into the live boot path in this first slice. See "
+                 "docs/serial-8250-translation-scoping-2026-07-18.md for full driver-structure "
+                 "analysis, risk assessment, and the staged plan for eventually reaching the live "
+                 "console path.",
+        "blocks_boot_path": 0,
+        "notes": "drivers/tty/serial/8250/8250_port.c is 3472 lines (vs a few hundred for the "
+                 "largest lib/ TU so far) — monolithic translation is not realistically scoped "
+                 "for one pass. Scoping doc breaks it into: (1) pure register-bit helpers [this "
+                 "item, oracle already passing], (2) serial_in/out register-access shims "
+                 "[unsafe MMIO, testable only via KUnit not diff-oracle], (3) startup/shutdown/ "
+                 "termios control flow [high complexity, high risk], (4) IRQ handling + tty core "
+                 "integration [out of scope indefinitely — framework plumbing, not 16550-specific]. "
+                 "No Rust-for-Linux prior art found for an in-kernel 8250/ns16550 driver using the "
+                 "`kernel` crate abstractions (only standalone no_std bare-metal crates like "
+                 "uart_16550/ns16550a exist, unrelated to this project's translation approach).",
+    },
 ]
 
 
