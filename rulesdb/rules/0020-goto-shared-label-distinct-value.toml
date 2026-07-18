@@ -19,7 +19,7 @@ derivation = "independently derived"
 evidence = ["caught during this TU's own translation: `goto out` in FIND_NTH_BIT was first (wrongly) translated as `return idx*BITS_PER_LONG + fns(tmp, nr)`, matching the `found:` exit instead of `out:`'s `return size` — the tier-2.5 diff oracle did not surface it in early ad-hoc runs by chance (the mismatching branch is only hit when idx*BITS_PER_LONG+nr >= size inside the loop, a narrower input class), it was caught by manual re-derivation against the macro source before the oracle run, and confirmed absent afterward across 20000 randomized cases"]
 
 [validation]
-instances = ["lib/find_bit.c:__find_nth_bit / __find_nth_and_bit / __find_nth_and_andnot_bit (FIND_NTH_BIT's goto out vs goto found)"]
+instances = ["lib/find_bit.c:__find_nth_bit / __find_nth_and_bit / __find_nth_and_andnot_bit (FIND_NTH_BIT's goto out vs goto found)", "lib/strncpy_from_user.c:do_strncpy_from_user (TWO distinct unsafe_get_user() fault targets, not the usual shared-label case: the word-at-a-time loop's fault goes to `byte_at_a_time` — a fallback into a DIFFERENT loop with `res`/`max` state carried forward, not a return — while the byte-at-a-time loop's own fault goes straight to `efault` -> `return -EFAULT`; translated as a `break` out of the word loop vs a direct `return`, never collapsed into one match arm despite both stemming from the same unsafe_get_user_* helper's None case)"]
 oracle = "tier2.5"
 negative = ["single-label statement-expressions (FIND_FIRST_BIT has none; FIND_NEXT_BIT's single `out:` is reached before any reassignment on every path — safe to collapse there)"]
 human_review = false

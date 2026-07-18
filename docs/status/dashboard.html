@@ -109,22 +109,31 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-18T12:34:46+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-18T13:05:58+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. See <a href="STATUS.md">docs/STATUS.md</a> for the full
   hand-translation KUnit boot report; both tracks' progress-over-time charts, the two-track work
   queue, and the awtoau/c2rust transpiler-fork issue timeline all live on this one page.</p>
 
-<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>2 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-a3446b405c30bc50d</code> — <span class="muted">1m running</span></li><li><code>worktree-agent-a3aabc6cd16f469f8</code> — <span class="muted">6m running</span></li></ul></div>
+<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>3 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>main</code> — <span class="muted">5m running</span></li><li><code>worktree-agent-a0106f8c527ad338a</code> — <span class="muted">10m running</span></li><li><code>worktree-agent-a27a31d026b66c6fe</code> — <span class="muted">14m running</span></li></ul></div>
 
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">0</div><div class="label">P0 items open</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">P1 items open</div></div>
-  <div class="stat-tile"><div class="n">9</div><div class="label">work items active (all tracks)</div></div>
+  <div class="stat-tile"><div class="n">16</div><div class="label">work items active (all tracks)</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">confirmed boot-path blocking</div></div>
   <div class="stat-tile"><div class="n">4</div><div class="label">awtoau/c2rust issues open</div></div>
   <div class="stat-tile"><div class="n">8</div><div class="label">awtoau/c2rust issues closed</div></div>
   <div class="stat-tile"><div class="n">33</div><div class="label">TUs hand-translated (live from git)</div></div>
+  <div class="stat-tile"><div class="n">3</div><div class="label">functions wired into live boot path (1 file)</div></div>
 </div>
+
+<p class="subtitle">"Wired into live boot path" (stream 2, <code>c2rust-boot-blocker</code> in
+  <a href="../streams.md">docs/streams.md</a>) is a stricter bar than "TU landed": it counts only
+  <code>linux-riscv/**/*.c</code> functions inside a real <code>#ifdef CONFIG_RUST</code> block whose
+  body calls a <code>*_rs</code>-suffixed Rust function at a pre-existing, live C call site &mdash;
+  not a standalone <code>lib/</code> whole-file swap. Live regex scan of the current
+  <code>linux-riscv/</code> tree, same detector <a href="STATUS.md">STATUS.md</a> uses
+  (<code>scripts/report.py:boot_path_wiring_status()</code>), re-run on every dashboard generation.</p>
 
 <h2>Work-in-flight queue (both tracks)</h2>
 <p class="subtitle">Live from the <code>work_items_active</code> view — open/in_progress/blocked items across the
@@ -132,7 +141,7 @@
   then files-affected. Click any column header to sort/re-sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="work-items-table">
-  <caption>9 active work items</caption>
+  <caption>16 active work items</caption>
   <thead>
     <tr>
       <th data-sort-key>Priority<span class="arrow"></span></th>
@@ -157,6 +166,26 @@
         <td><a href="https://github.com/awto-au/linux-rs/issues/6">awto-au/linux-rs#6</a></td>
       </tr>
       <tr>
+        <td data-sort-value="2"><span class="pill pill-P2">P2</span></td>
+        <td>Pipeline audit Phase 2 remainder: a4 (c2rust compile-pass-rate regression gating) + a5 (bench_math.py checksum-agreement not gated)</td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/15">awto-au/linux-rs#15</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="2"><span class="pill pill-P2">P2</span></td>
+        <td>8250 driver Tier B/C — next translation tier (serial_in/out MMIO shims, startup/shutdown/set_termios) scoped but never tracked</td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/16">awto-au/linux-rs#16</a></td>
+      </tr>
+      <tr>
         <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
         <td>tmpfs-in-Rust — blocked on missing VFS abstractions, evaluate upstream RFC PR #1037</td>
         <td data-sort-value="kernel">kernel</td>
@@ -165,6 +194,46 @@
         <td data-sort-value="-1"></td>
         <td data-sort-value="unassigned">unassigned</td>
         <td><a href="https://github.com/awto-au/linux-rs/issues/4">awto-au/linux-rs#4</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
+        <td>integrate_tu.py doesn&#x27;t fail on zero KUnit ok-lines when no --suite given</td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/9">awto-au/linux-rs#9</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
+        <td>Rust-for-Linux upstream contribution research (continuous) — requested but never dispatched</td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/12">awto-au/linux-rs#12</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
+        <td>KUnit-from-live-console (CONFIG_KUNIT_DEBUGFS) follow-up — deferred during console milestone, never done</td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/13">awto-au/linux-rs#13</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
+        <td>boot_qemu.py has no durable stdin-piping feature — deferred during console milestone, only ever a manual one-off test</td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/14">awto-au/linux-rs#14</a></td>
       </tr>
       <tr>
         <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
@@ -218,13 +287,23 @@
       </tr>
       <tr>
         <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
-        <td>Harden c2rust rule-conformance C-original path mapping for new directory families</td>
+        <td>Ollama hand-translation drafting parked with negative result — conditional revisit (raise context window) never tracked</td>
         <td data-sort-value="kernel">kernel</td>
         <td data-sort-value="open">open</td>
         <td data-sort-value="0">no</td>
         <td data-sort-value="-1"></td>
         <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awto-au/linux-rs/issues/8">awto-au/linux-rs#8</a></td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/17">awto-au/linux-rs#17</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td>Research: can Codex be a real GitHub assignee (not just a label)?</td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awto-au/linux-rs/issues/19">awto-au/linux-rs#19</a></td>
       </tr>
       <tr>
         <td data-sort-value="9"><span class="pill pill-none">—</span></td>
@@ -276,7 +355,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.0158392450578704">1.0</td>
+        <td data-sort-value="1.037490286111111">1.0</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -285,7 +364,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.8900406339467593">0.9</td>
+        <td data-sort-value="0.911691675">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -294,7 +373,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.8482929487615741">0.8</td>
+        <td data-sort-value="0.8699439898148148">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -303,7 +382,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.6129341524652778">0.6</td>
+        <td data-sort-value="0.6345851935185185">0.6</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -402,11 +481,11 @@
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
   2026-07-17T12:26:20 to 2026-07-18T02:04:09 UTC
-  (19 runs). 57 script-invocation logs in tmp/, spanning 2 days, 3:25:42.848546 from 2026-07-16T09:09+10:00 to 2026-07-18T12:34+10:00
+  (19 runs). 5 script-invocation logs in tmp/, spanning 0:01:10.110742 from 2026-07-18T13:04+10:00 to 2026-07-18T13:05+10:00
   <div class="proxy-list">
-    target_compile_test.log &mdash; 2026-07-18T12:07+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T12:08+10:00<br>check_c2rust_output_compiles-e1541023b.log &mdash; 2026-07-18T12:09+10:00<br>qemu-boot-post-spdx-check.log &mdash; 2026-07-18T12:10+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T12:15+10:00<br>qemu-boot-post-8250-verify.log &mdash; 2026-07-18T12:18+10:00<br>linux_riscv_worktree.log &mdash; 2026-07-18T12:21+10:00<br>diff_oracle.log &mdash; 2026-07-18T12:26+10:00<br>build_db.log &mdash; 2026-07-18T12:30+10:00<br>dev-build.log &mdash; 2026-07-18T12:30+10:00<br>build_initramfs.log &mdash; 2026-07-18T12:30+10:00<br>qemu-boot.log &mdash; 2026-07-18T12:31+10:00<br>dev-boot.log &mdash; 2026-07-18T12:31+10:00<br>check_spdx_provenance.log &mdash; 2026-07-18T12:31+10:00<br>readiness.log &mdash; 2026-07-18T12:31+10:00<br>report.log &mdash; 2026-07-18T12:31+10:00<br>dev.log &mdash; 2026-07-18T12:31+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T12:34+10:00<br>sync_work_items.log &mdash; 2026-07-18T12:34+10:00<br>generate_dashboard.log &mdash; 2026-07-18T12:34+10:00
+    check_spdx_provenance.log &mdash; 2026-07-18T13:04+10:00<br>qemu-boot.log &mdash; 2026-07-18T13:05+10:00<br>readiness.log &mdash; 2026-07-18T13:05+10:00<br>report.log &mdash; 2026-07-18T13:05+10:00<br>generate_dashboard.log &mdash; 2026-07-18T13:05+10:00
   </div>
-  <em>(most-recent 20 of 57 log files shown; commit/time-based proxy only, not actual token usage)</em>
+  <em>(most-recent 20 of 5 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>
 
 <h2>progress_snapshots (time-series, if &gt;1 row)</h2>

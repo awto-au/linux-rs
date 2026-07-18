@@ -21,7 +21,7 @@ derivation = "independently derived"
 evidence = []
 
 [validation]
-instances = ["lib/math/int_sqrt.c:int_sqrt (__fls)", "lib/math/int_log.c:intlog2 (fls)"]
+instances = ["lib/math/int_sqrt.c:int_sqrt (__fls)", "lib/math/int_log.c:intlog2 (fls)", "lib/string_rs.rs:sized_strscpy (fls64, word-at-a-time find_zero)", "lib/strnlen_user_rs.rs:do_strnlen_user (fls64, same find_zero instance)", "lib/strncpy_from_user_rs.rs:do_strncpy_from_user (fls64, third reuse of the identical find_zero instance — word-at-a-time NUL-scan family now spans three TUs on the same fls64 core)"]
 oracle = "tier4"
 negative = [
   "ffs() 1-based-with-zero POSIX variant — check each caller's off-by-one expectations",

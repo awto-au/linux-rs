@@ -58,6 +58,84 @@ def tu_timeline():
     return times, cum
 
 
+IFDEF_CONFIG_RUST_RE = re.compile(
+    r"#ifdef\s+CONFIG_RUST\b(.*?)(?:\n#else\b|\n#endif\b)", re.S)
+CALL_RS_FN_RE = re.compile(r"\b(\w+)_rs\s*\(")
+
+
+def boot_path_wiring_status():
+    """Live-computed distinction between the two real integration patterns
+    this project uses (docs/streams.md stream 2, "c2rust-boot-blocker"):
+
+    - "in-place wired": a *.c file has a genuine `#ifdef CONFIG_RUST`
+      block (exact token, not e.g. CONFIG_RUST_INLINE_HELPERS) whose body
+      calls a `*_rs`-suffixed function — the original C function becomes a
+      thin wrapper into Rust, kept alive in the `#else` arm. This is real
+      code executing at a live, pre-existing C call site (see
+      docs/hybrid-boot-milestone-2026-07-18.md and the *-8250-trigger
+      companion doc for the two known examples).
+    - "whole-file lib/ swap": the Makefile points straight at a `*_rs.rs`
+      TU, no C wrapper needed (the whole TU IS the Rust file) — includes
+      both files with no sibling *.c at all (drivers/8250_helpers_rs.rs,
+      extracted out of 8250_port.c) and files with a sibling *.c that has
+      no `#ifdef CONFIG_RUST` call-site wrapper (e.g. lib/bitmap.c: real
+      CONFIG_RUST guards exist, but they're `#ifndef` — dropping the C
+      function so the Rust object supplies the symbol directly, not a C
+      call into a `_rs` function).
+
+    Deliberately regex-based over the raw *.c text rather than a Makefile
+    parse: Makefile conditionals are harder to parse correctly than the
+    #ifdef/#ifndef text itself, and the wrapper-call shape is the actual
+    thing "wired into a live call site" means. Re-derived from
+    linux-riscv/'s current state every run — never hand-maintained.
+    """
+    wired_files = {}  # Path -> set of base function names (no _rs suffix)
+    for f in TREE.rglob("*.c"):
+        try:
+            text = f.read_text(errors="replace")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "#ifdef CONFIG_RUST" not in text:
+            continue
+        fns = set()
+        for m in IFDEF_CONFIG_RUST_RE.finditer(text):
+            fns.update(CALL_RS_FN_RE.findall(m.group(1)))
+        if fns:
+            wired_files[f] = fns
+
+    wired_file_count = len(wired_files)
+    wired_fn_count = sum(len(fns) for fns in wired_files.values())
+    wired_detail = sorted(
+        (str(f.relative_to(TREE)), sorted(fns)) for f, fns in wired_files.items())
+
+    rs_files = sorted(TREE.glob("lib/**/*_rs.rs")) + sorted(TREE.glob("drivers/**/*_rs.rs"))
+    whole_file_swaps = 0
+    for rs in rs_files:
+        stem = rs.name[: -len("_rs.rs")]
+        c_file = rs.with_name(stem + ".c")
+        if not c_file.exists():
+            whole_file_swaps += 1
+            continue
+        try:
+            text = c_file.read_text(errors="replace")
+        except (UnicodeDecodeError, OSError):
+            whole_file_swaps += 1
+            continue
+        has_wrapper_call = any(
+            CALL_RS_FN_RE.search(m.group(1)) for m in IFDEF_CONFIG_RUST_RE.finditer(text))
+        if not has_wrapper_call:
+            whole_file_swaps += 1
+
+    return {
+        "wired_files": wired_file_count,
+        "wired_fns": wired_fn_count,
+        "wired_detail": wired_detail,
+        "tus_total": len(rs_files),
+        "whole_file_swaps": whole_file_swaps,
+        "in_place_wired_tus": len(rs_files) - whole_file_swaps,
+    }
+
+
 def kunit_results():
     log = REPO / "tmp" / "qemu-boot.log"
     suites, vectors = [], 0
@@ -129,7 +207,15 @@ def main() -> int:
     sv = suite_vectors()
     tiers = rules_by_tier()
     ready = readiness_top()
+    wiring = boot_path_wiring_status()
     now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+    logging.info("boot-path wiring: %d functions across %d files wired in-place "
+                 "(vs %d whole-file/partial-swap TUs, %d total)",
+                 wiring["wired_fns"], wiring["wired_files"],
+                 wiring["whole_file_swaps"], wiring["tus_total"])
+    for path, fns in wiring["wired_detail"]:
+        logging.info("  wired: %s -> %s", path, ", ".join(fns))
 
     # history
     hist = OUT / "history.csv"
@@ -199,6 +285,28 @@ def main() -> int:
         f"- Translated TUs: **{cum[-1] if cum else 0}**   ·   KUnit: "
         f"**{len(suites)} suites, {vectors} vectors** green   ·   Rules: "
         f"**{sum(tiers.values())}** (t1 {tiers[1]} / t2 {tiers[2]} / t3 {tiers[3]})",
+        f"- Wired into live boot path: **{wiring['wired_fns']} functions across "
+        f"{wiring['wired_files']} file(s)** (vs. **{wiring['tus_total']}** total TUs "
+        f"landed) — see [docs/streams.md](streams.md)'s stream 2 "
+        "(\"c2rust-boot-blocker\") for why this is the harder, more important "
+        "milestone: a standalone `lib/` swap compiling clean is not the same "
+        "as real Rust executing at a live, pre-existing C call site.",
+        "",
+        "## Boot-path integration patterns (live-derived, not hand-maintained)",
+        "",
+        "| pattern | count | detection |", "|---|---|---|",
+        f"| In-place wired (`#ifdef CONFIG_RUST` C wrapper calls a `*_rs` fn) "
+        f"| **{wiring['wired_fns']} fns / {wiring['wired_files']} file(s)** "
+        "| regex scan of `linux-riscv/**/*.c` for `#ifdef CONFIG_RUST` blocks "
+        "calling a `*_rs(...)` function |",
+        f"| Whole-file `lib/` swap (Makefile points straight at `*_rs.rs`, "
+        f"no call-site wrapper) | **{wiring['whole_file_swaps']}** "
+        "| `*_rs.rs` TUs whose sibling `.c` (if any) has no `#ifdef CONFIG_RUST` "
+        "wrapper calling into it |",
+        *(["", "<details><summary>Wired functions (detail)</summary>", "",
+           "| file | functions |", "|---|---|",
+           *[f"| `{path}` | {', '.join(fns)} |" for path, fns in wiring["wired_detail"]],
+           "", "</details>"] if wiring["wired_detail"] else []),
         "", "## KUnit (latest boot)", "", "| suite | vectors |", "|---|---|",
         *[f"| {s} | {v} |" for s, v in sv],
         "", "## Next candidates by readiness", "", "| TU | readiness |", "|---|---|",
