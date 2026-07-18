@@ -33,7 +33,9 @@ import datetime
 import html
 import logging
 import sqlite3
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import matplotlib
@@ -122,6 +124,39 @@ def fetch_progress_snapshots(conn):
         "SELECT taken_at, note, tus_landed, c2rust_clean, c2rust_crash, "
         "c2rust_dropped_decls FROM progress_snapshots ORDER BY taken_at"
     ).fetchall()
+
+
+def active_workers():
+    """Real, current signal for "is a background agent working right now":
+    a live `git worktree list` entry other than the main checkout. This
+    is genuinely live (reflects state AT GENERATION TIME, not a persisted
+    claim that can go stale like a DB row would) — there's no work_items
+    column for "an agent is actively running" since that's not a durable
+    fact worth persisting, only a point-in-time one. Each row's age comes
+    from the worktree directory's own mtime, a real filesystem fact."""
+    try:
+        out = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=REPO, capture_output=True, text=True, timeout=10,
+        ).stdout
+    except Exception:
+        return []
+    workers = []
+    path = branch = None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            path = line.removeprefix("worktree ")
+        elif line.startswith("branch "):
+            branch = line.removeprefix("branch ").removeprefix("refs/heads/")
+        elif line == "" and path:
+            if Path(path).resolve() != REPO.resolve():
+                try:
+                    age_s = time.time() - Path(path).stat().st_mtime
+                except OSError:
+                    age_s = None
+                workers.append({"path": path, "branch": branch, "age_s": age_s})
+            path = branch = None
+    return workers
 
 
 def activity_proxy():
@@ -293,6 +328,9 @@ def main() -> int:
     proxy = activity_proxy()
     logging.info("activity proxy (tmp/*.log mtimes): %d files", len(proxy))
 
+    workers = active_workers()
+    logging.info("active worktrees (live agents): %d", len(workers))
+
     now = now_iso()
     open_issues = [i for i in issues if i["state"] == "open"]
     closed_issues = [i for i in issues if i["state"] == "closed"]
@@ -315,6 +353,31 @@ def main() -> int:
         proxy_rows = (f"{len(proxy)} script-invocation logs in tmp/, spanning "
                        f"{span} from {proxy[0][1].isoformat(timespec='minutes')} to "
                        f"{proxy[-1][1].isoformat(timespec='minutes')}")
+
+    if workers:
+        worker_items = "".join(
+            "<li><code>{branch}</code> — <span class=\"muted\">{age}</span></li>".format(
+                branch=esc(w["branch"] or "(detached)"),
+                age=("age unknown" if w["age_s"] is None
+                     else f"{int(w['age_s'] // 60)}m running"),
+            )
+            for w in workers
+        )
+        workers_html = (
+            f'<div class="callout" style="border-left:3px solid var(--status-warning);'
+            f'padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);">'
+            f'<strong>{len(workers)} background worker(s) currently active</strong> '
+            f'(live <code>git worktree list</code> at page-generation time — a real, '
+            f'point-in-time fact, not a persisted status that can go stale):'
+            f'<ul style="margin:0.4rem 0 0 1.2rem;">{worker_items}</ul></div>'
+        )
+    else:
+        workers_html = (
+            '<div class="callout" style="border-left:3px solid var(--status-ok, var(--border));'
+            'padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);color:var(--text-muted);">'
+            'No background workers active right now (checked via <code>git worktree list</code> '
+            'at page-generation time).</div>'
+        )
 
     html_doc = f"""<!doctype html>
 <html lang="en">
@@ -432,6 +495,8 @@ def main() -> int:
   <a href="STATUS.md">docs/STATUS.md</a> (hand-translation TU/KUnit report) — see that page for the
   30-TU landed-translation timeline and KUnit boot results; this page covers the two-track work queue and the
   awtoau/c2rust transpiler-fork issue timeline instead.</p>
+
+{workers_html}
 
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">{p0}</div><div class="label">P0 items open</div></div>
