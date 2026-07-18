@@ -33,3 +33,5 @@ queue). This file is the human-curated narrative; those are the live data.
 | 2026-07-18 | Closed awtoau/c2rust#11: goto-to-labeled-block lowering: break targets '___UNIQUE_ID_label_N that was never declared (block gets a different synthesized name) — 6/228 files, E0426 |
 | 2026-07-18 | Closed awto-au/linux-rs#3: 8250/16550 serial driver translation — remaining register-bit helpers (fcr_get_rxtrig_bytes, bytes_to_fcr_rxtrig) |
 | 2026-07-18 | linux-riscv/ pushed to a real GitHub fork (awtoau/linux, branch linux-rs/phase2-gcd) — 34 landed TUs were local-only until now, matching the durable-fork pattern already used for awtoau/c2rust |
+| 2026-07-18 | rulesdb #6 Phase 2 (a1/a2): deduped dev.py/integrate_tu.py KUnit boot-oracle regex into scripts/kunit_oracle.py, rulesdb/rules/0028-kunit-boot-oracle-gate.toml documents the hard-FAIL gate plus INIT_REACHED WARN clause |
+| 2026-07-18 | rulesdb #6 Phase 2 (a3): mechanical EXPORT_SYMBOL->_GPL silent-upgrade WARN check wired into dev.py check + check_c2rust_output_compiles.py; 135/163 checkable #[export] sites deviate; check_c2rust_rule_conformance.py rule 0001 stub replaced with a real checker |
