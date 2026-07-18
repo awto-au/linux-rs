@@ -1,6 +1,6 @@
 # Parallel work streams
 
-Established 2026-07-18. This project runs (at least) 5 continuous, parallel
+Established 2026-07-18. This project runs (at least) 6 continuous, parallel
 work streams rather than one linear task queue. This doc is the durable
 definition of what they are; `rulesdb/patterns.db`'s `work_items` table
 (synced via `scripts/sync_work_items.py`) is the live, queryable priority
@@ -52,7 +52,56 @@ slice: `serial_in`/`serial_out` register-access shims) and the tmpfs P3 item
 Landed so far: TU 31 (`serial8250_compute_lcr` wired into the live 8250
 driver — the first non-`lib/` Rust code in the actual boot path).
 
-## 3. hand-translation
+## 3. hybrid-boot-backwards
+
+**Goal:** the inverse strategy to stream 2. Stream 2 works *forward* — take
+a compile-clean file, try to wire it into the live build. This stream works
+*backwards* — start from a known-good, minimal, boot-to-**interactive
+console** baseline (zero Rust-conversion content beyond what's already
+boot-verified) and add landed translations back in one at a time, with a
+full `dev.py check` pass after each addition, so there's always a verified
+checkpoint to roll back to. Same end goal as stream 2 (real Rust executing
+in the live boot path), different, more conservative methodology — run
+both, since a forward compile-clean candidate and a backward known-good
+checkpoint are complementary evidence, not redundant.
+
+**Why this is a distinct stream, not a duplicate of stream 2:** stream 2
+answers "does this file work if I add it". This stream answers "what's the
+smallest thing that's *definitely* correct, and what's the very next safe
+step from there" — it establishes the baseline stream 2's candidates get
+layered onto, and catches regressions stream 2 might not (a forward
+candidate can compile clean and boot-pass in isolation while still being
+wrong in combination with something else already landed; working backwards
+from a real checkpoint after every single addition is what catches that).
+
+**First concrete gap found (2026-07-18):** the current minimal initramfs
+`/init` (`configs/initramfs-init.sh`) never drops to an interactive shell —
+it mounts devtmpfs/proc/sys, prints the `INIT REACHED` milestone, and
+immediately powers off (`busybox poweroff -f`). There is no way to actually
+sit at a console and poke at the running kernel today. That's the real
+stream-0 baseline this stream needs before "add translations back in" means
+anything: a genuinely minimal kernel (matching today's exact boot-verified
+config, no Rust beyond what's already landed) that boots to a live `sh`
+prompt on the serial console instead of powering off.
+
+**Where the work lives:** `configs/initramfs-init.sh` + `linux-riscv/`
+commits, staged as a sequence of individually-tagged, individually-verified
+checkpoints (e.g. git tags or a checkpoint log) rather than one big change.
+**Verification gate:** same as stream 2 (`dev.py check`, 16/16 suites,
+`ORACLE PASS`) *plus*, once the console milestone lands, a genuine
+interactive-session check — not an ad hoc command, but re-running a KUnit
+suite **from the live console** (e.g. via debugfs, `/sys/kernel/debug/kunit/
+<suite>/run`, if `CONFIG_KUNIT_DEBUGFS` is enabled — check) rather than only
+relying on the automatic boot-time run. This reuses infrastructure already
+trusted (the same suites `dev.py check` already parses) instead of
+inventing a new ad hoc verification method, and is real, load-bearing
+evidence the console is genuinely interactive: if you can type a command and
+get a real KUnit re-run with matching results back, the console works.
+**Current top item:** get the interactive-console milestone landed first;
+everything else in this stream is blocked on having a real console to work
+from.
+
+## 4. hand-translation
 
 **Goal:** the project's original mission — translate `lib/`-style C files to
 Rust by hand, one TU at a time, each individually oracle-verified and
@@ -71,7 +120,7 @@ cheapest real next step, not an arbitrary pick.
 Landed so far: 32 TUs (30 original + TU 31 8250-helper + TU 32
 `iomem_copy`).
 
-## 4. tooling/infra
+## 5. tooling/infra
 
 **Goal:** the scripts, DB schema, and dashboards that make the other 4
 streams observable and administrable — not corpus/translation work itself.
@@ -90,7 +139,7 @@ Landed so far (non-exhaustive — see `git log --oneline` for the full list):
 for tracking upstream, `render_boot_log.py`, boot-history archiving,
 parallel-QEMU-boot support, two repo-hygiene passes.
 
-## 5. research
+## 6. research
 
 **Goal:** open-ended investigation that doesn't map to a single fix — is the
 c2rust/Clang foundation sound, should `KernelIdiomRule` be redesigned, what

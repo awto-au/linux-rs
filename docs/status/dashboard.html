@@ -109,7 +109,7 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-18T10:48:22+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-18T10:52:19+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. Complements
   <a href="STATUS.md">docs/STATUS.md</a> (hand-translation TU/KUnit report) — see that page for the
   30-TU landed-translation timeline and KUnit boot results; this page covers the two-track work queue and the
@@ -119,8 +119,8 @@
 
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">0</div><div class="label">P0 items open</div></div>
-  <div class="stat-tile"><div class="n">0</div><div class="label">P1 items open</div></div>
-  <div class="stat-tile"><div class="n">8</div><div class="label">work items active (all tracks)</div></div>
+  <div class="stat-tile"><div class="n">1</div><div class="label">P1 items open</div></div>
+  <div class="stat-tile"><div class="n">9</div><div class="label">work items active (all tracks)</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">confirmed boot-path blocking</div></div>
   <div class="stat-tile"><div class="n">6</div><div class="label">awtoau/c2rust issues open</div></div>
   <div class="stat-tile"><div class="n">6</div><div class="label">awtoau/c2rust issues closed</div></div>
@@ -133,7 +133,7 @@
   then files-affected. Click any column header to sort/re-sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="work-items-table">
-  <caption>8 active work items</caption>
+  <caption>9 active work items</caption>
   <thead>
     <tr>
       <th data-sort-key>Priority<span class="arrow"></span></th>
@@ -147,6 +147,16 @@
     </tr>
   </thead>
   <tbody>
+      <tr>
+        <td data-sort-value="1"><span class="pill pill-P1">P1</span></td>
+        <td>Interactive console milestone — minimal initramfs /init drops to a live sh instead of powering off <span class="muted" title="Blocks the entire hybrid-boot-backwards stream (docs/streams.md #3): working BACKWARDS from a known-good boot-to-console baseline, adding landed translations back in one at a time with a full dev.py check after each, requires having a real interactive console to work from in the first place. Today&#x27;s configs/initramfs-init.sh mounts devtmpfs/proc/sys, prints INIT REACHED, and immediately calls `busybox poweroff -f` — there is no way to sit at a prompt and run anything today. P1 (not P0) since nothing is currently broken by this gap, but it&#x27;s the single blocking prerequisite for a whole stream, not just one item.">(?)</span></td>
+        <td data-sort-value="kernel">kernel</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td>&mdash;</td>
+      </tr>
       <tr>
         <td data-sort-value="2"><span class="pill pill-P2">P2</span></td>
         <td>goto-to-labeled-block lowering: break targets &#x27;___UNIQUE_ID_label_N that was never declared (block gets a different synthesized name) — 6/228 files, E0426</td>
@@ -267,7 +277,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.9420350470486111">0.9</td>
+        <td data-sort-value="0.9447743294328704">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -276,7 +286,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.8162364359375">0.8</td>
+        <td data-sort-value="0.8189757183217593">0.8</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -285,7 +295,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.7744887507523147">0.8</td>
+        <td data-sort-value="0.7772280331365742">0.8</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -294,7 +304,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.5391299544560185">0.5</td>
+        <td data-sort-value="0.5418692368402778">0.5</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -348,7 +358,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T23:38:17Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.04867856556712963">0.0</td>
+        <td data-sort-value="0.05141784795138889">0.1</td>
       </tr>
       <tr>
         <td data-sort-value="12">#12</td>
@@ -357,7 +367,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T23:39:40Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.04771791741898148">0.0</td>
+        <td data-sort-value="0.05045719980324074">0.1</td>
       </tr>
   </tbody>
 </table>
@@ -379,9 +389,9 @@
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
   2026-07-17T12:26:20 to 2026-07-18T00:41:35 UTC
-  (12 runs). 46 script-invocation logs in tmp/, spanning 2 days, 1:39:18.871863 from 2026-07-16T09:09+10:00 to 2026-07-18T10:48+10:00
+  (12 runs). 46 script-invocation logs in tmp/, spanning 2 days, 1:43:15.731839 from 2026-07-16T09:09+10:00 to 2026-07-18T10:52+10:00
   <div class="proxy-list">
-    diff_oracle.log &mdash; 2026-07-18T10:29+10:00<br>build_db.log &mdash; 2026-07-18T10:30+10:00<br>import_cscope.log &mdash; 2026-07-18T10:31+10:00<br>import_sparse.log &mdash; 2026-07-18T10:31+10:00<br>dev-build.log &mdash; 2026-07-18T10:33+10:00<br>dev-boot.log &mdash; 2026-07-18T10:33+10:00<br>readiness.log &mdash; 2026-07-18T10:33+10:00<br>report.log &mdash; 2026-07-18T10:33+10:00<br>render_boot_log.log &mdash; 2026-07-18T10:36+10:00<br>qemu-boot.log &mdash; 2026-07-18T10:39+10:00<br>build_initramfs.log &mdash; 2026-07-18T10:39+10:00<br>qemu-boot-verify2.log &mdash; 2026-07-18T10:39+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T10:45+10:00<br>c2rust-baseline.log &mdash; 2026-07-18T10:45+10:00<br>dev.log &mdash; 2026-07-18T10:45+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T10:46+10:00<br>check_c2rust_output_compiles.log &mdash; 2026-07-18T10:47+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T10:47+10:00<br>sync_work_items.log &mdash; 2026-07-18T10:47+10:00<br>generate_dashboard.log &mdash; 2026-07-18T10:48+10:00
+    diff_oracle.log &mdash; 2026-07-18T10:29+10:00<br>build_db.log &mdash; 2026-07-18T10:30+10:00<br>import_cscope.log &mdash; 2026-07-18T10:31+10:00<br>import_sparse.log &mdash; 2026-07-18T10:31+10:00<br>dev-build.log &mdash; 2026-07-18T10:33+10:00<br>dev-boot.log &mdash; 2026-07-18T10:33+10:00<br>readiness.log &mdash; 2026-07-18T10:33+10:00<br>report.log &mdash; 2026-07-18T10:33+10:00<br>render_boot_log.log &mdash; 2026-07-18T10:36+10:00<br>qemu-boot.log &mdash; 2026-07-18T10:39+10:00<br>build_initramfs.log &mdash; 2026-07-18T10:39+10:00<br>qemu-boot-verify2.log &mdash; 2026-07-18T10:39+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T10:46+10:00<br>check_c2rust_output_compiles.log &mdash; 2026-07-18T10:47+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T10:47+10:00<br>dev.log &mdash; 2026-07-18T10:50+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T10:52+10:00<br>c2rust-baseline.log &mdash; 2026-07-18T10:52+10:00<br>sync_work_items.log &mdash; 2026-07-18T10:52+10:00<br>generate_dashboard.log &mdash; 2026-07-18T10:52+10:00
   </div>
   <em>(most-recent 20 of 46 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>

@@ -99,6 +99,25 @@ KERNEL_WORK_ITEMS = [
                  "uart_16550/ns16550a exist, unrelated to this project's translation approach).",
     },
     {
+        "title": "Interactive console milestone — minimal initramfs /init drops to a live sh instead of powering off",
+        "status": "open",
+        "priority": "P1",
+        "priority_rationale": "Blocks the entire hybrid-boot-backwards stream (docs/streams.md #3): "
+                 "working BACKWARDS from a known-good boot-to-console baseline, adding landed "
+                 "translations back in one at a time with a full dev.py check after each, requires "
+                 "having a real interactive console to work from in the first place. Today's "
+                 "configs/initramfs-init.sh mounts devtmpfs/proc/sys, prints INIT REACHED, and "
+                 "immediately calls `busybox poweroff -f` — there is no way to sit at a prompt and "
+                 "run anything today. P1 (not P0) since nothing is currently broken by this gap, "
+                 "but it's the single blocking prerequisite for a whole stream, not just one item.",
+        "blocks_boot_path": 0,
+        "notes": "Proposed verification once landed: re-run a KUnit suite FROM the live console "
+                 "(debugfs, `/sys/kernel/debug/kunit/<suite>/run` if CONFIG_KUNIT_DEBUGFS is on) "
+                 "rather than only the automatic boot-time run — reuses trusted infrastructure "
+                 "(same suites dev.py check already parses) as real, load-bearing evidence the "
+                 "console is genuinely interactive, not just an ad hoc echo test.",
+    },
+    {
         "title": "tmpfs-in-Rust — blocked on missing VFS abstractions, evaluate upstream RFC PR #1037 first",
         "status": "open",
         "priority": "P3",
