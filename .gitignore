@@ -2,6 +2,13 @@
 /linux-riscv/
 /linux-riscv-worktrees/
 /tmp/
+# Gitignored holding area for large, stale, fully-regenerable tmp/
+# content moved aside rather than deleted outright (safer to reverse if
+# something turns out to still be wanted). NOT the same thing as this
+# project's earlier ./debris/ convention from other repos — that one is
+# tracked-in-git for non-regenerable retiring content; this repo's
+# quarantine/ is untracked scratch, purely local, safe to empty anytime.
+/quarantine/
 __pycache__/
 target/
 
