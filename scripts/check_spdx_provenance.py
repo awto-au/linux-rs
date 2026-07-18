@@ -160,6 +160,11 @@ EXCEPTIONS = {
     # Tier B (mem_serial_in/mem_serial_out) — same source file as the Tier A
     # helpers above, see docs/8250-tier-b-scoping-2026-07-18.md.
     "drivers/tty/serial/8250/8250_io_rs.rs": "drivers/tty/serial/8250/8250_port.c",
+    # Tier C (serial8250_do_startup/serial8250_do_shutdown control flow) —
+    # same source file as Tier A/B above, see
+    # docs/8250-tier-c-startup-shutdown-2026-07-18.md and
+    # awto-au/linux-rs#25.
+    "drivers/tty/serial/8250/8250_startup_rs.rs": "drivers/tty/serial/8250/8250_port.c",
 }
 
 
