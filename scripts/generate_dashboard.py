@@ -126,6 +126,31 @@ def fetch_progress_snapshots(conn):
     ).fetchall()
 
 
+def fetch_tu_growth():
+    """Cumulative hand-translation TU count over time, from the real git
+    history of linux-riscv's linux-rs/phase2-gcd branch — the same source
+    scripts/report.py's tu_timeline() uses for STATUS.md, NOT the
+    translated_tus DB table (confirmed stale: 31 rows vs. 32 real landed
+    *_rs.rs files in git — missing drivers/tty/serial/8250/8250_helpers_rs.rs
+    — because nothing keeps that table synced on every landing). Querying
+    git directly means this count can never drift from STATUS.md's."""
+    tree = REPO / "linux-riscv"
+    out = subprocess.run(
+        ["git", "-C", str(tree), "log", "--reverse", "--diff-filter=A",
+         "--date=iso-strict", "--format=C|%ad", "--name-only",
+         "linux-rs/phase2-gcd", "--", "*_rs.rs"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    rows = []
+    when = None
+    for line in out.splitlines():
+        if line.startswith("C|"):
+            when = line[2:]
+        elif line.endswith("_rs.rs"):
+            rows.append((line, when))
+    return rows, len(rows)
+
+
 def active_workers():
     """Real, current signal for "is a background agent working right now":
     a live `git worktree list` entry other than the main checkout. This
@@ -209,6 +234,27 @@ def render_progress_chart(series, out_path):
         ax.annotate(str(crash[-1]), (x[-1], crash[-1]), textcoords="offset points",
                     xytext=(6, -10), color=RED, fontsize=9)
         ax.legend(loc="center left", frameon=False, fontsize=8, labelcolor=MUTED)
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    fig.savefig(out_path, dpi=160, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def render_tu_growth_chart(rows, out_path):
+    """Cumulative TUs-landed-over-time, real git commit dates — the direct
+    counterpart to render_progress_chart's c2rust outcome series, so both
+    tracks' progress-over-time live as two charts on the same dashboard
+    page instead of two separate reports."""
+    fig, ax = plt.subplots(figsize=(9, 4.2), facecolor=SURFACE)
+    fig.subplots_adjust(top=0.85, bottom=0.28, left=0.09, right=0.97)
+    style_axes(ax, "hand-translation TUs landed, cumulative (real linux-riscv git history)")
+    if rows:
+        times = [datetime.datetime.fromisoformat(landed_at) for _, landed_at in rows]
+        y = list(range(1, len(rows) + 1))
+        ax.plot(times, y, "-o", color=BLUE, linewidth=2, markersize=4)
+        ax.annotate(str(y[-1]), (times[-1], y[-1]), textcoords="offset points",
+                    xytext=(6, 4), color=BLUE, fontsize=9)
+        fig.autofmt_xdate(rotation=30)
+        ax.tick_params(axis="x", labelsize=7)
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     fig.savefig(out_path, dpi=160, facecolor=SURFACE)
     plt.close(fig)
@@ -314,6 +360,7 @@ def main() -> int:
     series = fetch_progress_series(conn)
     snapshots = fetch_progress_snapshots(conn)
     conn.close()
+    tu_rows, tu_total = fetch_tu_growth()
 
     logging.info("work_items_active: %d rows", len(items))
     logging.info("awtoau/c2rust issues: %d (open=%d closed=%d)",
@@ -321,9 +368,13 @@ def main() -> int:
                  sum(1 for i in issues if i["state"] == "closed"))
     logging.info("c2rust_attempts distinct runs: %d", len(series))
     logging.info("progress_snapshots rows: %d", len(snapshots))
+    logging.info("TU growth (from git): %d total landed", tu_total)
 
     render_progress_chart(series, OUT / "dashboard_progress.png")
     logging.info("wrote %s", OUT / "dashboard_progress.png")
+
+    render_tu_growth_chart(tu_rows, OUT / "dashboard_tu_growth.png")
+    logging.info("wrote %s", OUT / "dashboard_tu_growth.png")
 
     proxy = activity_proxy()
     logging.info("activity proxy (tmp/*.log mtimes): %d files", len(proxy))
@@ -491,10 +542,9 @@ def main() -> int:
 
 <h1>linux-rs — live status dashboard</h1>
 <p class="subtitle">Generated {esc(now)} by <code>scripts/generate_dashboard.py</code> from live queries against
-  <code>rulesdb/patterns.db</code>. Complements
-  <a href="STATUS.md">docs/STATUS.md</a> (hand-translation TU/KUnit report) — see that page for the
-  30-TU landed-translation timeline and KUnit boot results; this page covers the two-track work queue and the
-  awtoau/c2rust transpiler-fork issue timeline instead.</p>
+  <code>rulesdb/patterns.db</code>. See <a href="STATUS.md">docs/STATUS.md</a> for the full
+  hand-translation KUnit boot report; both tracks' progress-over-time charts, the two-track work
+  queue, and the awtoau/c2rust transpiler-fork issue timeline all live on this one page.</p>
 
 {workers_html}
 
@@ -505,7 +555,7 @@ def main() -> int:
   <div class="stat-tile"><div class="n">{boot_blocking}</div><div class="label">confirmed boot-path blocking</div></div>
   <div class="stat-tile"><div class="n">{len(open_issues)}</div><div class="label">awtoau/c2rust issues open</div></div>
   <div class="stat-tile"><div class="n">{len(closed_issues)}</div><div class="label">awtoau/c2rust issues closed</div></div>
-  <div class="stat-tile"><div class="n">30</div><div class="label">TUs hand-translated (see STATUS.md)</div></div>
+  <div class="stat-tile"><div class="n">{tu_total}</div><div class="label">TUs hand-translated (live from git)</div></div>
 </div>
 
 <h2>Work-in-flight queue (both tracks)</h2>
@@ -559,10 +609,24 @@ def main() -> int:
 </div>
 
 <h2>Progress over time</h2>
+<p class="subtitle">Both tracks' progress-over-time on one page &mdash; this replaces cross-referencing
+  <a href="STATUS.md">STATUS.md</a>'s TU timeline separately from the c2rust chart below; both are real
+  queries against <code>rulesdb/patterns.db</code>, generated together.</p>
+<div class="two-col">
+<div>
+<h3>Hand-translation (TUs landed)</h3>
+<p class="subtitle">Cumulative count from real <code>linux-riscv</code> git commit dates (same source as
+  STATUS.md's TU timeline) &mdash; {tu_total} TUs landed total.</p>
+<img class="chart" src="dashboard_tu_growth.png" alt="cumulative TUs landed over time">
+</div>
+<div>
+<h3>c2rust transpiler fork (clean/crash/dropped)</h3>
 <p class="subtitle">Real <code>c2rust_attempts</code> outcome counts, grouped by revision and run timestamp
   &mdash; {esc(latest_summary)}. {len(series)} distinct baseline runs recorded today across
   {len({v['rev'] for _, v in series})} c2rust revisions.</p>
 <img class="chart" src="dashboard_progress.png" alt="c2rust transpile outcomes per baseline run">
+</div>
+</div>
 
 <h2>Token / cost tracking</h2>
 <div class="callout">
