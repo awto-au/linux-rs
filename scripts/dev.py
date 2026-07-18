@@ -39,7 +39,8 @@ from kunit_oracle import verify_kunit_ok  # noqa: E402 — see module doc
 def print(*args, **kw):  # noqa: A001 — awto rule: all output also to tmp/dev.log
     __builtins__.print(*args, **kw)
     logging.info(" ".join(str(a) for a in args))
-TREE = REPO / os.environ.get("LINUXRS_TREE", "linux-riscv")
+TREE_REL = os.environ.get("LINUXRS_TREE", "linux-riscv")
+TREE = REPO / TREE_REL
 S = REPO / "scripts"
 TRAILER = "\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
@@ -69,7 +70,13 @@ def kmake(*targets):
 
 
 def boot():
-    sh(["python3", str(S / "boot_qemu.py"), "--tree", TREE.name],
+    # Pass the full relative path (e.g. "linux-riscv-worktrees/8250-tier-b"),
+    # not TREE.name — TREE.name silently strips any subdirectory prefix,
+    # which broke boot_qemu.py's `REPO / args.tree` join for any tree that
+    # isn't a direct child of REPO (i.e. every linux_riscv_worktree.py
+    # worktree, which lives under linux-riscv-worktrees/<name>/). Found
+    # while boot-testing a Tier B worktree per that script's own guidance.
+    sh(["python3", str(S / "boot_qemu.py"), "--tree", TREE_REL],
        log="dev-boot.log", timeout=600)
     txt = (REPO / "tmp/qemu-boot.log").read_text(errors="replace")
     # Primary gate: unchanged from before initramfs support existed —

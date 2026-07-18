@@ -1,8 +1,8 @@
-# Status — 2026-07-18T13:25:23+10:00
+# Status — 2026-07-18T13:40:22+10:00
 
 ![status](status/status.png)
 
-- Translated TUs: **34**   ·   KUnit: **16 suites, 143 vectors** green   ·   Rules: **29** (t1 20 / t2 4 / t3 5)
+- Translated TUs: **34**   ·   KUnit: **17 suites, 147 vectors** green   ·   Rules: **29** (t1 20 / t2 4 / t3 5)
 - Wired into live boot path: **3 functions across 1 file(s)** (vs. **34** total TUs landed) — see [docs/streams.md](streams.md)'s stream 2 ("c2rust-boot-blocker") for why this is the harder, more important milestone: a standalone `lib/` swap compiling clean is not the same as real Rust executing at a live, pre-existing C call site.
 
 ## Boot-path integration patterns (live-derived, not hand-maintained)
@@ -40,6 +40,7 @@
 | cmdline | 8 |
 | list_sort | 1 |
 | lib_sort | 1 |
+| rust_8250_mem_serial_io | 4 |
 
 ## Next candidates by readiness
 
