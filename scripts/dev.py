@@ -72,25 +72,36 @@ def kmake(*targets):
 
 INIT_REACHED_MARKER = INIT_REACHED
 
-# The real, explicit list of what `dev.py check` runs after a successful
-# boot — a check-registry, not a hand-wired sequence. Existed as a growing
-# list of individual sh([...]) calls inside main()'s `elif cmd == "check"`
-# branch instead (each new check = one more manually-added line + a
-# comment explaining why it's there) — exactly the "why does this new
+# Check-registry, not a hand-wired sequence — see the "why does this new
 # check feel bolted-on" pattern check_spdx_provenance.py ran into
-# (2026-07-18) — every future check would hit the same thing.
+# (2026-07-18) that motivated this. Split into two stages so a check that
+# CAN fail without a build/boot fails fast, before paying for either:
+# cheapest-first is this project's own stated oracle principle (PLAN.md's
+# "Layered, cheapest first"), and dev.py check previously ran the full
+# kmake()+boot() cycle before check_spdx_provenance.py even though that
+# check only reads source files — a pure-source SPDX/idiom violation was
+# only discovered after minutes of build+boot, when it could have been
+# caught in seconds. PRE_BUILD_CHECKS run before kmake()/boot() (must
+# have no build/boot dependency); POST_BOOT_CHECKS run after (may read
+# tmp/qemu-boot.log or similar boot-produced state, like report.py does).
 #
-# Adding a new post-boot check: append one CHECKS entry (script name,
-# relative to scripts/). sh() already treats any nonzero exit as a hard
-# failure (sys.exit()s) — every check registered here is a gate by
-# construction, same as before this refactor. A genuinely non-gating
-# (warn-only) check would need its own explicit handling when one is
-# actually added; not built speculatively ahead of a real need.
-CHECKS = ["check_spdx_provenance.py", "report.py"]
+# Adding a new check: append one entry to whichever list matches its real
+# dependency, script name relative to scripts/. sh() already treats any
+# nonzero exit as a hard failure (sys.exit()s) — every check registered
+# here is a gate by construction. A genuinely non-gating (warn-only)
+# check would need its own explicit handling when one is actually added;
+# not built speculatively ahead of a real need.
+PRE_BUILD_CHECKS = ["check_spdx_provenance.py"]
+POST_BOOT_CHECKS = ["report.py"]
 
 
-def run_checks():
-    for script in CHECKS:
+def run_pre_build_checks():
+    for script in PRE_BUILD_CHECKS:
+        sh(["python3", str(S / script)], quiet_ok=False)
+
+
+def run_post_boot_checks():
+    for script in POST_BOOT_CHECKS:
         sh(["python3", str(S / script)], quiet_ok=False)
 
 
@@ -150,9 +161,10 @@ def main() -> int:
     elif cmd == "boot":
         boot()
     elif cmd == "check":
+        run_pre_build_checks()
         kmake()
         boot()
-        run_checks()
+        run_post_boot_checks()
     elif cmd == "report":
         sh(["python3", str(S / "report.py")], quiet_ok=False)
     elif cmd == "config":

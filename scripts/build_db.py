@@ -212,6 +212,7 @@ def main() -> int:
         "c2rust_issues",
         "c2rust_fix_patterns",
         "c2rust_rule_conformance",
+        "file_oracle_status",
         "progress_snapshots",
         "doc_sources",
         "work_items",

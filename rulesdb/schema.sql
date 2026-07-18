@@ -579,3 +579,56 @@ ORDER BY
                    WHEN 'P3' THEN 3 WHEN 'P4' THEN 4 ELSE 5 END,
     blocks_boot_path DESC,
     files_affected DESC;
+
+-- Per-file, per-tier validation history — the real answer to "what
+-- stages has this file been through", queryable in one place instead of
+-- cross-referencing c2rust_attempts/c2rust_compile_outcomes/
+-- c2rust_rule_conformance/boot-history.csv/tmp/qemu-boot.log by hand
+-- (found 2026-07-18: no such table existed; PLAN.md's 5-tier oracle
+-- "records the highest tier passed" per instance was aspirational, not
+-- actually implemented as queryable state).
+--
+-- Deliberately NOT the same axis as rule-conformance
+-- (c2rust_rule_conformance) or SPDX/licensing checks
+-- (check_spdx_provenance.py) — those check STYLE/CONVENTION/LICENSING
+-- correctness (does this look like our idiom, does the export macro
+-- match the C original's license), not BEHAVIORAL correctness (does the
+-- translated code do the same thing as the C). A file can be fully
+-- rule-conformant and still be behaviorally wrong; passing rule
+-- conformance is not a tier here and must not be conflated with one.
+--
+-- One row per (file, tier) — a file's current status per tier, not a
+-- run-history log (c2rust_attempts already serves that purpose for
+-- tier-1-adjacent c2rust runs; this table is the DERIVED "where does
+-- this file currently stand" summary, refreshed by whatever script owns
+-- each tier's check, not hand-maintained).
+CREATE TABLE file_oracle_status (
+    id INTEGER PRIMARY KEY,
+    c_file TEXT NOT NULL,          -- relative to linux-riscv/, e.g. "lib/bcd.c"
+    population TEXT NOT NULL,      -- 'landed_tu' | 'c2rust_corpus' -- which pipeline produced the .rs being tracked; a file can appear in both (e.g. c2rust-clean AND later hand-landed)
+    -- PLAN.md's 5 tiers, by number (1=compiles, 2=ABI/symbol diff,
+    -- 3=KUnit differential, 4=boot+kselftest, 5=human review) --
+    -- INTEGER not TEXT so "highest tier passed" is a plain MAX() query.
+    tier INTEGER NOT NULL CHECK (tier BETWEEN 1 AND 5),
+    status TEXT NOT NULL,          -- 'pass' | 'fail' | 'not_attempted' | 'not_applicable'
+    detail TEXT,                   -- short human-readable evidence (e.g. "8 boots, 28 pairwise diffs byte-identical")
+    evidence_ref TEXT,             -- pointer to the real artifact: a boot-log path, a commit hash, a GitHub issue/comment URL
+    checked_at TEXT NOT NULL,      -- ISO 8601
+    UNIQUE (c_file, population, tier)
+);
+CREATE INDEX idx_file_oracle_cfile ON file_oracle_status(c_file);
+CREATE INDEX idx_file_oracle_tier ON file_oracle_status(tier);
+CREATE INDEX idx_file_oracle_status ON file_oracle_status(status);
+
+-- Convenience view: highest tier actually passed per file, so "how far
+-- has this file gotten" is one row per file, not a manual MAX() each
+-- time. NULL highest_tier_passed means every attempted tier failed (or
+-- nothing has been attempted yet) -- check file_oracle_status directly
+-- for the per-tier detail in that case.
+CREATE VIEW file_oracle_summary AS
+SELECT c_file, population,
+       MAX(CASE WHEN status = 'pass' THEN tier END) AS highest_tier_passed,
+       GROUP_CONCAT(CASE WHEN status = 'fail' THEN tier END) AS failed_tiers,
+       MAX(checked_at) AS last_checked_at
+FROM file_oracle_status
+GROUP BY c_file, population;
