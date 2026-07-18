@@ -177,11 +177,11 @@ def find_clean_outputs():
         if not matches:
             missing.append(c_file)
             continue
-        files.extend(matches)
+        files.extend((m, c_file) for m in matches)
     if missing:
         logging.warning("%d clean DB rows had no output/src/*.rs on disk: %s",
                          len(missing), missing[:10])
-    return sorted(files)
+    return sorted(files, key=lambda pair: pair[0])
 
 
 def inject_no_std(rs_path, dest_path):
@@ -256,13 +256,31 @@ def main():
         files = files[: args.limit]
     logging.info("checking %d c2rust output files against real riscv64 target", len(files))
 
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from check_spdx_provenance import check_pair as spdx_check_pair
+
+    spdx_fails = []
     results = {}
     error_samples = {}
     error_first_lines = {}
-    for i, rs_path in enumerate(files, 1):
+    for i, (rs_path, c_file) in enumerate(files, 1):
         outcome, stderr = rustc_check(rs_path)
         rel = str(rs_path.relative_to(REPO))
         results[rel] = outcome
+
+        # Same SPDX-provenance check the hand-translation cycle runs
+        # (scripts/check_spdx_provenance.py) — c2rust mechanically
+        # carries the source header through by default, but that's an
+        # assumption, not a guarantee (e.g. a future c2rust flag or
+        # idiom-rewrite pass could touch the header), so every clean
+        # output file is checked here too, not just files that survive
+        # to a real hand-verified landing.
+        c_path = TREE / c_file
+        if c_path.exists():
+            spdx_status, spdx_detail = spdx_check_pair(rs_path, c_path)
+            if spdx_status == "fail":
+                logging.error("SPDX FAIL %s", spdx_detail)
+                spdx_fails.append(spdx_detail)
         if outcome == "error":
             # Scan the FULL stderr (not the truncated sample below) for the
             # first genuine `error[...]`/`error: ...` line, skipping the
@@ -283,6 +301,8 @@ def main():
     from collections import Counter
     counts = Counter(results.values())
     logging.info("DONE: %s", dict(counts))
+    logging.info("SPDX provenance (rulesdb/rules/0029-spdx-provenance.toml): "
+                 "%d fail, %d checked", len(spdx_fails), len(files))
 
     # First-line error signature counts, for prioritization
     sig_counts = Counter(error_first_lines.values())
@@ -292,7 +312,16 @@ def main():
         "",
         f"Checked: {len(files)} files (c2rust 'clean' outcome)",
         f"Results: {dict(counts)}",
+        f"SPDX provenance (rule 0029): {len(spdx_fails)} mismatch(es) of {len(files)} checked",
         "",
+    ]
+    if spdx_fails:
+        lines.append("## SPDX provenance failures")
+        lines.append("")
+        for detail in spdx_fails:
+            lines.append(f"- {detail}")
+        lines.append("")
+    lines += [
         "## Top error signatures (first `error:` line, one sample file each)",
         "",
     ]

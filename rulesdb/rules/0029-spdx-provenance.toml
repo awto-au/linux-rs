@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "spdx-provenance"
+version = 1
+tier = 1
+category = "process"
+
+[match]
+c = "every translated .rs file (hand-translated or c2rust-transpiled) that lands from a C original"
+
+[emit]
+kind = "rewrite"
+rust = """
+GATE: a translated file's SPDX-License-Identifier must be an EXACT string
+match to its C original's — GPL-2.0, GPL-2.0-only, and GPL-2.0+ are three
+distinct real SPDX identifiers with different legal meaning, never
+interchangeable or normalized as equivalent. This is a copy-through
+invariant, not a translation choice: the header does not get reinterpreted
+or "improved," it gets carried over unchanged.
+
+Checked by scripts/check_spdx_provenance.py (spdx_of/check_pair, importable
+— NOT a one-off script bolted onto a single cycle) in BOTH places a
+translated file can land:
+  - dev.py check (hand-translation cycle): walks every linux-riscv/**/*_rs.rs
+    via check_spdx_provenance.py's own __main__, hard gate (exit 1 on any
+    FAIL blocks the check).
+  - check_c2rust_output_compiles.py (c2rust-transpiled-output cycle):
+    imports check_pair() directly, checks every c2rust 'clean'-outcome
+    candidate against its real C source before it's counted as
+    compile-clean/landing-worthy — c2rust mechanically carries the header
+    through by default, but that's an assumption, not a guarantee, and
+    isn't exempted from the check just because it seems less likely to
+    drift.
+"""
+deviations = []
+
+[provenance]
+derivation = "independently derived"
+evidence = [
+  "2026-07-18 licensing audit found two real drift instances: lib/iomem_copy_rs.rs said GPL-2.0 vs lib/iomem_copy.c's real GPL-2.0-only; drivers/tty/serial/8250/8250_helpers_rs.rs said GPL-2.0 vs 8250_port.c's real GPL-2.0+ — both caught only by manual review, nothing in the pipeline checked this until this rule",
+  "awto-au/linux-rs#1 (licensing checklist)",
+]
+
+[validation]
+instances = ["lib/iomem_copy_rs.rs (fixed, GPL-2.0-only)", "drivers/tty/serial/8250/8250_helpers_rs.rs (fixed, GPL-2.0+)", "all 33 currently-landed translated files re-verified PASS after the fix"]
+oracle = "tier1"
+negative = ["a translated file choosing a DIFFERENT (even if compatible-seeming) SPDX identifier than its C original — e.g. GPL-2.0 vs GPL-2.0-only — is always a FAIL, never a judgement call"]
+human_review = false
+
+[findings]
+catalogue = [
+  "hand-translation SPDX drift is a copy-paste-boilerplate failure mode, not a translation-logic one — the header line gets typed fresh per new file rather than literally copied from the C original, so it silently drifts to whatever the author's habitual default is",
+  "the 8250_helpers_rs.rs case needed an exception-table entry (not the default 1:1 <name>_rs.rs <-> <name>.c mapping) since it's a PARTIAL translation of a differently-named C file — see check_spdx_provenance.py's EXCEPTIONS table",
+]

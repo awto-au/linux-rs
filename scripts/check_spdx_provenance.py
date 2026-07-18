@@ -1,17 +1,39 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Verify every hand-translated *_rs.rs file's SPDX-License-Identifier
-exactly matches its C original's.
+"""SPDX-provenance checking: verify a translated .rs file's
+SPDX-License-Identifier exactly matches its C original's.
 
 Why this exists: on 2026-07-18 a licensing audit found two translated
 files whose SPDX line silently drifted from the C original during
 hand-translation (lib/iomem_copy_rs.rs said GPL-2.0 when
 lib/iomem_copy.c says GPL-2.0-only; 8250_helpers_rs.rs said GPL-2.0
 when 8250_port.c says GPL-2.0+). Both were caught only by manual
-review — nothing in the pipeline checked this. This script is that
-check, made permanent and wired into `dev.py check`.
+review — nothing in the pipeline checked this.
 
-Mapping from .rs to .c original:
+This is a SHARED check, not special-cased dev.py-only logic: the core
+functions (spdx_of, check_pair) are imported by BOTH verification
+cycles that can land a translated file —
+  1. dev.py check (this module's own __main__, hand-translation cycle):
+     walks every linux-riscv/**/*_rs.rs.
+  2. check_c2rust_output_compiles.py (the c2rust-transpiled-output
+     cycle): imports check_pair() directly and checks each candidate
+     .rs output against its real C source before counting it as a
+     compile-clean/landing-worthy file — a c2rust-produced file has
+     the same drift risk as a hand-translated one, even though c2rust
+     mechanically carries the header through by default (untested
+     assumption prior to this wiring, not something to leave
+     unchecked just because it seems less likely to drift).
+Both cycles report through their own CLI/logging; this module only
+owns the comparison logic, not how each cycle discovers its file list
+(hand-translation uses a fixed naming convention across a small stable
+tree; c2rust's candidate set is a rotating baseline-run output dir) —
+trying to unify file *discovery* across both would be more contortion
+than the shared logic is worth.
+
+Mapping from .rs to .c original (used by this module's own __main__,
+i.e. the hand-translation cycle only — check_c2rust_output_compiles.py
+already knows its own .rs<->.c pairing and calls check_pair() directly
+with both paths, bypassing this lookup):
   - Default (all but one file): 1:1 same-directory, strip the `_rs`
     suffix — lib/bcd_rs.rs -> lib/bcd.c. This covers every current
     translated file except the one exception below.
@@ -82,6 +104,24 @@ def c_original_for(rs_path: Path, tree: Path) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def check_pair(rs_path: Path, c_path: Path) -> tuple[str, str]:
+    """Compare one .rs/.c pair's SPDX identifiers directly — the shared
+    primitive both verification cycles call, independent of how each
+    cycle found the pair. Returns (status, detail): status is
+    "pass"/"fail"/"warn"; detail is a human-readable one-liner for the
+    caller's own logging (this function does not log itself, so it
+    composes cleanly inside either cycle's own log format)."""
+    rs_spdx = spdx_of(rs_path)
+    c_spdx = spdx_of(c_path)
+    if rs_spdx is None:
+        return "warn", f"{rs_path} — no SPDX-License-Identifier found"
+    if c_spdx is None:
+        return "warn", f"{c_path} — C original has no SPDX-License-Identifier"
+    if rs_spdx == c_spdx:
+        return "pass", f"{rs_path} == {c_path} ({rs_spdx})"
+    return "fail", f"{rs_path}: {rs_spdx!r} != {c_path}: {c_spdx!r}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tree", default=str(TREE))
@@ -109,24 +149,16 @@ def main() -> int:
                             rel_rs)
             warns.append(rel_rs)
             continue
-        rel_c = c.relative_to(tree)
-        rs_spdx = spdx_of(rs)
-        c_spdx = spdx_of(c)
-        if rs_spdx is None:
-            logging.warning("WARN %s — no SPDX-License-Identifier found", rel_rs)
-            warns.append(rel_rs)
-            continue
-        if c_spdx is None:
-            logging.warning("WARN %s — C original %s has no "
-                            "SPDX-License-Identifier", rel_rs, rel_c)
-            warns.append(rel_rs)
-            continue
-        if rs_spdx == c_spdx:
-            logging.info("PASS %s == %s (%s)", rel_rs, rel_c, rs_spdx)
+        status, detail = check_pair(rs, c)
+        if status == "pass":
+            logging.info("PASS %s", detail)
             passes.append(rel_rs)
+        elif status == "warn":
+            logging.warning("WARN %s", detail)
+            warns.append(rel_rs)
         else:
-            logging.error("FAIL %s: %r != %s: %r", rel_rs, rs_spdx, rel_c, c_spdx)
-            fails.append((rel_rs, rs_spdx, rel_c, c_spdx))
+            logging.error("FAIL %s", detail)
+            fails.append(rel_rs)
 
     logging.info("SPDX provenance: %d pass, %d fail, %d warn (of %d translated files)",
                  len(passes), len(fails), len(warns), len(rs_files))
