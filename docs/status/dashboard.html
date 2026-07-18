@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>linux-rs — live status dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #ffffff;
+    --surface-1: #fcfcfb;
+    --surface-2: #f3f2ee;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --border: #e1e0d9;
+    --blue: #2a78d6;
+    --green: #008300;
+    --red: #e34948;
+    --yellow: #eda100;
+    --status-good: #0ca30c;
+    --status-critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #121211;
+      --surface-1: #1a1a19;
+      --surface-2: #232322;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8f8d84;
+      --border: #38372f;
+      --blue: #3987e5;
+      --green: #1baf7a;
+      --red: #e66767;
+      --yellow: #c98500;
+      --status-good: #1baf7a;
+      --status-critical: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8d84;
+    --border: #38372f;
+    --blue: #3987e5;
+    --green: #1baf7a;
+    --red: #e66767;
+    --yellow: #c98500;
+    --status-good: #1baf7a;
+    --status-critical: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 2.5rem 4rem;
+    background: var(--surface-0); color: var(--text-primary);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+  h2 { font-size: 1.1rem; margin: 2.5rem 0 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+  .subtitle { color: var(--text-secondary); margin: 0 0 1.5rem; font-size: 0.9rem; }
+  .stat-row { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0 2rem; }
+  .stat-tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.9rem 1.2rem; min-width: 140px;
+  }
+  .stat-tile .n { font-size: 1.6rem; font-weight: 600; }
+  .stat-tile .label { color: var(--text-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat-tile.p0 .n { color: var(--status-critical); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.87rem; margin-bottom: 0.5rem; }
+  caption { text-align: left; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.4rem; caption-side: top; }
+  th, td { text-align: left; padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em;
+        position: sticky; top: 0; background: var(--surface-0); cursor: pointer; user-select: none; }
+  th:hover { color: var(--text-primary); }
+  th .arrow { font-size: 0.7em; color: var(--blue); }
+  tbody tr:hover { background: var(--surface-1); }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .muted { color: var(--text-muted); font-size: 0.85em; cursor: help; }
+  .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+  .pill-P0 { background: var(--status-critical); color: #fff; }
+  .pill-P1 { background: var(--yellow); color: #1a1500; }
+  .pill-P2 { background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); }
+  .pill-P3 { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+  .pill-P4 { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+  .pill-none { background: var(--surface-2); color: var(--text-muted); }
+  .state { font-size: 0.8rem; font-weight: 600; }
+  .state-open { color: var(--status-critical); }
+  .state-closed { color: var(--status-good); }
+  .callout {
+    background: var(--surface-1); border: 1px solid var(--border); border-left: 4px solid var(--yellow);
+    border-radius: 6px; padding: 0.9rem 1.1rem; margin: 1rem 0; font-size: 0.87rem; color: var(--text-secondary);
+  }
+  .proxy-list { font-size: 0.8rem; color: var(--text-muted); max-height: 10rem; overflow-y: auto;
+                 border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.8rem; background: var(--surface-1); }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.8rem; }
+  img.chart { max-width: 100%; border: 1px solid var(--border); border-radius: 8px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+  .scroll-x { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<h1>linux-rs — live status dashboard</h1>
+<p class="subtitle">Generated 2026-07-18T10:02:16+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+  <code>rulesdb/patterns.db</code>. Complements
+  <a href="STATUS.md">docs/STATUS.md</a> (hand-translation TU/KUnit report) — see that page for the
+  30-TU landed-translation timeline and KUnit boot results; this page covers the two-track work queue and the
+  awtoau/c2rust transpiler-fork issue timeline instead.</p>
+
+<div class="stat-row">
+  <div class="stat-tile p0"><div class="n">1</div><div class="label">P0 items open</div></div>
+  <div class="stat-tile"><div class="n">1</div><div class="label">P1 items open</div></div>
+  <div class="stat-tile"><div class="n">8</div><div class="label">work items active (all tracks)</div></div>
+  <div class="stat-tile"><div class="n">0</div><div class="label">confirmed boot-path blocking</div></div>
+  <div class="stat-tile"><div class="n">8</div><div class="label">awtoau/c2rust issues open</div></div>
+  <div class="stat-tile"><div class="n">4</div><div class="label">awtoau/c2rust issues closed</div></div>
+  <div class="stat-tile"><div class="n">30</div><div class="label">TUs hand-translated (see STATUS.md)</div></div>
+</div>
+
+<h2>Work-in-flight queue (both tracks)</h2>
+<p class="subtitle">Live from the <code>work_items_active</code> view — open/in_progress/blocked items across the
+  hand-translation (<code>kernel</code>) and <code>c2rust</code> tracks, ranked P0 first, then boot-path-blocking,
+  then files-affected. Click any column header to sort/re-sort.</p>
+<div class="scroll-x">
+<table class="sortable" id="work-items-table">
+  <caption>8 active work items</caption>
+  <thead>
+    <tr>
+      <th data-sort-key>Priority<span class="arrow"></span></th>
+      <th data-sort-key>Title<span class="arrow"></span></th>
+      <th data-sort-key>Track<span class="arrow"></span></th>
+      <th data-sort-key>Status<span class="arrow"></span></th>
+      <th data-sort-key>Blocks boot path<span class="arrow"></span></th>
+      <th data-sort-key>Files affected<span class="arrow"></span></th>
+      <th data-sort-key>Assigned to<span class="arrow"></span></th>
+      <th>Issue</th>
+    </tr>
+  </thead>
+  <tbody>
+      <tr>
+        <td data-sort-value="0"><span class="pill pill-P0">P0</span></td>
+        <td>Enum with both a forward decl and a real definition in-TU: enumerator consts typed against opaque extern-type placeholder (E0277, 97/228 files)</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/9">awtoau/c2rust#9</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="1"><span class="pill pill-P1">P1</span></td>
+        <td>RISC-V inline asm: unmapped GCC constraint letters (A/I/J/K) passed through raw as invalid Rust asm! register classes; unreferenced output operands not handled (25/228 files)</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/10">awtoau/c2rust#10</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="2"><span class="pill pill-P2">P2</span></td>
+        <td>goto-to-labeled-block lowering: break targets &#x27;___UNIQUE_ID_label_N that was never declared (block gets a different synthesized name) — 6/228 files, E0426</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/11">awtoau/c2rust#11</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
+        <td>convert_warn_on emits &#x27;as c_int&#x27; cast on an already-bool condition, mismatching kernel::warn_on!&#x27;s bool parameter (E0308)</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/12">awtoau/c2rust#12</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td>Concurrency scaling is sub-linear: 4x jobs (8-&gt;32) only buys ~1.5x wall-clock</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/2">awtoau/c2rust#2</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td>Speedup investigation closed: neither PCH nor batching move wall-clock — bottleneck is Rust-side codegen (~82% of per-file time)</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/3">awtoau/c2rust#3</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td>locate_comments() re-walks shared AST subtrees per top-level decl: O(N x subtree) blowup on files with large header closures</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/4">awtoau/c2rust#4</a></td>
+      </tr>
+      <tr>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td>Known limitation: routine-run stability exclusion (linux-rs) can&#x27;t detect idiom-rule content changes</td>
+        <td data-sort-value="c2rust">c2rust</td>
+        <td data-sort-value="open">open</td>
+        <td data-sort-value="0">no</td>
+        <td data-sort-value="-1"></td>
+        <td data-sort-value="unassigned">unassigned</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/5">awtoau/c2rust#5</a></td>
+      </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>awtoau/c2rust issue/PR timeline</h2>
+<p class="subtitle">All 12 issues filed against our fork (<code>awtoau/c2rust</code>, not upstream
+  <code>immunant/c2rust</code>). "Days open" is real elapsed time from <code>created_at</code> to
+  <code>closed_at</code> (or to now, for open issues) — a genuine time-in-flight metric per issue, not
+  per assignee (no worker-assignment tracking exists to query). Click headers to sort.</p>
+<div class="scroll-x">
+<table class="sortable" id="c2rust-issues-table">
+  <caption>12 issues total &mdash; 8 open, 4 closed</caption>
+  <thead>
+    <tr>
+      <th data-sort-key>#<span class="arrow"></span></th>
+      <th data-sort-key>Title<span class="arrow"></span></th>
+      <th data-sort-key>Priority<span class="arrow"></span></th>
+      <th data-sort-key>State<span class="arrow"></span></th>
+      <th data-sort-key>Created<span class="arrow"></span></th>
+      <th data-sort-key>Closed<span class="arrow"></span></th>
+      <th data-sort-key>Days open<span class="arrow"></span></th>
+    </tr>
+  </thead>
+  <tbody>
+      <tr>
+        <td data-sort-value="1">#1</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/1">transpile panics on GNU label-address expr (&amp;&amp;label) -&gt; TagTypeUnknown at conversion.rs:1024</a></td>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td data-sort-value="closed"><span class="state state-closed">closed</span></td>
+        <td data-sort-value="2026-07-16T21:59:25Z">2026-07-16</td>
+        <td data-sort-value="2026-07-17T23:53:48Z">2026-07-17</td>
+        <td data-sort-value="1.0794328703703704">1.1</td>
+      </tr>
+      <tr>
+        <td data-sort-value="2">#2</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/2">Concurrency scaling is sub-linear: 4x jobs (8-&gt;32) only buys ~1.5x wall-clock</a></td>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.9100170417361111">0.9</td>
+      </tr>
+      <tr>
+        <td data-sort-value="3">#3</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/3">Speedup investigation closed: neither PCH nor batching move wall-clock — bottleneck is Rust-side codegen (~82% of per-file time)</a></td>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.784218430625">0.8</td>
+      </tr>
+      <tr>
+        <td data-sort-value="4">#4</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/4">locate_comments() re-walks shared AST subtrees per top-level decl: O(N x subtree) blowup on files with large header closures</a></td>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.7424707454398148">0.7</td>
+      </tr>
+      <tr>
+        <td data-sort-value="5">#5</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/5">Known limitation: routine-run stability exclusion (linux-rs) can&#x27;t detect idiom-rule content changes</a></td>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.5071119491435185">0.5</td>
+      </tr>
+      <tr>
+        <td data-sort-value="6">#6</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/6">cfg: dangling jump-target labels crash prune_empty_blocks_mut/prune_unreachable_blocks_mut (fixed in d1cfda9e1)</a></td>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td data-sort-value="closed"><span class="state state-closed">closed</span></td>
+        <td data-sort-value="2026-07-17T14:05:41Z">2026-07-17</td>
+        <td data-sort-value="2026-07-17T23:53:50Z">2026-07-17</td>
+        <td data-sort-value="0.4084375">0.4</td>
+      </tr>
+      <tr>
+        <td data-sort-value="7">#7</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/7">Two more dangling-AST-reference panics fixed (commit 9d7fc590e): prune_unwanted_decls, imports_for_type</a></td>
+        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
+        <td data-sort-value="closed"><span class="state state-closed">closed</span></td>
+        <td data-sort-value="2026-07-17T14:19:55Z">2026-07-17</td>
+        <td data-sort-value="2026-07-17T23:53:53Z">2026-07-17</td>
+        <td data-sort-value="0.39858796296296295">0.4</td>
+      </tr>
+      <tr>
+        <td data-sort-value="8">#8</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/8">Stale/removed nightly stdlib API names emitted regardless of toolchain (from_exposed_addr, VaListImpl, pref_align_of): 121/228 files fail real rustc compile</a></td>
+        <td data-sort-value="1"><span class="pill pill-P1">P1</span></td>
+        <td data-sort-value="closed"><span class="state state-closed">closed</span></td>
+        <td data-sort-value="2026-07-17T23:36:18Z">2026-07-17</td>
+        <td data-sort-value="2026-07-17T23:43:05Z">2026-07-17</td>
+        <td data-sort-value="0.004710648148148148">0.0</td>
+      </tr>
+      <tr>
+        <td data-sort-value="9">#9</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/9">Enum with both a forward decl and a real definition in-TU: enumerator consts typed against opaque extern-type placeholder (E0277, 97/228 files)</a></td>
+        <td data-sort-value="0"><span class="pill pill-P0">P0</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T23:36:53Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.017632782476851853">0.0</td>
+      </tr>
+      <tr>
+        <td data-sort-value="10">#10</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/10">RISC-V inline asm: unmapped GCC constraint letters (A/I/J/K) passed through raw as invalid Rust asm! register classes; unreferenced output operands not handled (25/228 files)</a></td>
+        <td data-sort-value="1"><span class="pill pill-P1">P1</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T23:37:35Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.017146671365740742">0.0</td>
+      </tr>
+      <tr>
+        <td data-sort-value="11">#11</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/11">goto-to-labeled-block lowering: break targets &#x27;___UNIQUE_ID_label_N that was never declared (block gets a different synthesized name) — 6/228 files, E0426</a></td>
+        <td data-sort-value="2"><span class="pill pill-P2">P2</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T23:38:17Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.01666056025462963">0.0</td>
+      </tr>
+      <tr>
+        <td data-sort-value="12">#12</td>
+        <td><a href="https://github.com/awtoau/c2rust/issues/12">convert_warn_on emits &#x27;as c_int&#x27; cast on an already-bool condition, mismatching kernel::warn_on!&#x27;s bool parameter (E0308)</a></td>
+        <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
+        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="2026-07-17T23:39:40Z">2026-07-17</td>
+        <td data-sort-value="">&mdash;</td>
+        <td data-sort-value="0.015699912106481483">0.0</td>
+      </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Progress over time</h2>
+<p class="subtitle">Real <code>c2rust_attempts</code> outcome counts, grouped by revision and run timestamp
+  &mdash; latest run (rev 3bf2aca5b, 2026-07-17T23:43:41): 226 clean / 0 crash / 326 dropped_decls out of 552 files. 9 distinct baseline runs recorded today across
+  7 c2rust revisions.</p>
+<img class="chart" src="dashboard_progress.png" alt="c2rust transpile outcomes per baseline run">
+
+<h2>Token / cost tracking</h2>
+<div class="callout">
+  <strong>Not available.</strong> This project's tooling (<code>rulesdb/schema.sql</code>) has no table or
+  column tracking LLM token usage or API cost anywhere &mdash; confirmed by grep, no match. No real token/cost
+  figure can be shown, and none is fabricated here.
+  <br><br>
+  As a labeled, honest <em>proxy</em> for "how much wall-clock activity work went into this" (not tokens, not
+  dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
+  real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
+  2026-07-17T12:26:20 to 2026-07-17T23:43:41 UTC
+  (9 runs). 43 script-invocation logs in tmp/, spanning 2 days, 0:53:12.512987 from 2026-07-16T09:09+10:00 to 2026-07-18T10:02+10:00
+  <div class="proxy-list">
+    c2rust_regression_check.log &mdash; 2026-07-18T00:35+10:00<br>dev-config.log &mdash; 2026-07-18T09:31+10:00<br>dev-build.log &mdash; 2026-07-18T09:35+10:00<br>build_initramfs.log &mdash; 2026-07-18T09:35+10:00<br>qemu-boot.log &mdash; 2026-07-18T09:35+10:00<br>dev-boot.log &mdash; 2026-07-18T09:35+10:00<br>readiness.log &mdash; 2026-07-18T09:36+10:00<br>report.log &mdash; 2026-07-18T09:36+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T09:47+10:00<br>c2rust-baseline.log &mdash; 2026-07-18T09:47+10:00<br>check_c2rust_output_compiles.log &mdash; 2026-07-18T09:48+10:00<br>sync_linux_kernel.log &mdash; 2026-07-18T09:48+10:00<br>check_c2rust_rule_conformance.log &mdash; 2026-07-18T09:48+10:00<br>import_cscope.log &mdash; 2026-07-18T09:49+10:00<br>import_sparse.log &mdash; 2026-07-18T09:49+10:00<br>dev.log &mdash; 2026-07-18T09:49+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T09:54+10:00<br>build_db.log &mdash; 2026-07-18T09:56+10:00<br>sync_work_items.log &mdash; 2026-07-18T10:00+10:00<br>generate_dashboard.log &mdash; 2026-07-18T10:02+10:00
+  </div>
+  <em>(most-recent 20 of 43 log files shown; commit/time-based proxy only, not actual token usage)</em>
+</div>
+
+<h2>progress_snapshots (time-series, if &gt;1 row)</h2>
+<p class="subtitle">1 row(s) currently in <code>progress_snapshots</code>
+  (taken via <code>scripts/take_progress_snapshot.py</code>).
+  Only one snapshot exists so far — no trend to chart yet; the c2rust_attempts chart above is the real time-series available today.</p>
+<p class="subtitle">2026-07-17T00:22:36.262775+00:00 &mdash; session baseline after DFExpr/asm-goto/attributed-stmt fixes, TU29 (kstrtox.c) &mdash; TUs 29, clean 84, crash None, dropped 20</p>
+
+<footer>
+  linux-rs live dashboard &middot; generated by <code>scripts/generate_dashboard.py</code> &middot;
+  source data: <code>rulesdb/patterns.db</code> (work_items, c2rust_issues, c2rust_attempts, progress_snapshots) &middot;
+  see also <a href="STATUS.md">STATUS.md</a> for the hand-translation KUnit/TU report.
+</footer>
+
+<script>
+
+function makeSortable(tableId) {
+  const table = document.getElementById(tableId);
+  if (!table) return;
+  const tbody = table.tBodies[0];
+  const ths = table.tHead.querySelectorAll('th[data-sort-key]');
+  ths.forEach((th, idx) => {
+    th.addEventListener('click', () => {
+      const rows = Array.from(tbody.rows);
+      const asc = th.getAttribute('data-sort-dir') !== 'asc';
+      ths.forEach(other => { other.removeAttribute('data-sort-dir'); other.querySelector('.arrow').textContent = ''; });
+      th.setAttribute('data-sort-dir', asc ? 'asc' : 'desc');
+      th.querySelector('.arrow').textContent = asc ? ' \u25B2' : ' \u25BC';
+      rows.sort((r1, r2) => {
+        const c1 = r1.cells[idx], c2 = r2.cells[idx];
+        const v1 = c1.hasAttribute('data-sort-value') ? c1.getAttribute('data-sort-value') : c1.textContent.trim();
+        const v2 = c2.hasAttribute('data-sort-value') ? c2.getAttribute('data-sort-value') : c2.textContent.trim();
+        const n1 = parseFloat(v1), n2 = parseFloat(v2);
+        const bothNumeric = !isNaN(n1) && !isNaN(n2) && v1 !== '' && v2 !== '';
+        let cmp;
+        if (bothNumeric) { cmp = n1 - n2; } else { cmp = String(v1).localeCompare(String(v2)); }
+        return asc ? cmp : -cmp;
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+}
+document.querySelectorAll('table.sortable').forEach(t => makeSortable(t.id));
+
+</script>
+</body>
+</html>
