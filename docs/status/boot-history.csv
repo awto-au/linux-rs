@@ -61,3 +61,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-18T14:55:19+10:00,tierc-rust-3,17,0,1,0,docs/status/boot-logs/20260718T145519+1000-tierc-rust-3.log
 2026-07-18T14:56:43+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T145643+1000-default.log
 2026-07-18T14:58:53+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T145853+1000-default.log
+2026-07-18T15:00:15+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T150015+1000-default.log
