@@ -44,6 +44,12 @@ section; this list is the scannable index.
    `nm`) yourself. This project has caught real problems this way (stale
    binaries, mislabeled DB revisions, agents stalling before close-out,
    PRs branched too early and gone stale/conflicting).
+6. **"No KUnit fake" ≠ "untestable"** (stream 2, full detail below). A real
+   QEMU boot is a real machine — default to "verify via a real boot" for
+   anything touching interrupts/registers/hardware state, not "give up, no
+   unit-test harness exists." Keep the actual short list of genuinely
+   untestable things in stream 2's section; don't let "untestable" become
+   a reflexive excuse.
 
 ## 1. c2rust-breadth
 
@@ -148,12 +154,47 @@ the very serial output the test harness reads, so changes are staged
 swaps) — see `docs/serial-8250-translation-scoping-2026-07-18.md` and
 `docs/hybrid-boot-milestone-2026-07-18.md`.
 **Current top item:** query `work_items WHERE track='kernel' AND
-blocks_boot_path=1 AND status='open'`, or check the 8250 P2 item (next
-slice: `serial_in`/`serial_out` register-access shims) and the tmpfs P3 item
-(blocked on upstream VFS abstractions, not a live candidate yet).
+blocks_boot_path=1 AND status='open'`, or check issue #25 (standing,
+8250 Tier C).
 
-Landed so far: TU 31 (`serial8250_compute_lcr` wired into the live 8250
-driver — the first non-`lib/` Rust code in the actual boot path).
+**What "can't be tested" actually means here (general rule, 2026-07-18):**
+a real QEMU boot on the virt board is a real machine — it has a real
+(emulated) interrupt controller, real MMIO, real timers. Code that touches
+`request_irq`/`synchronize_irq`/register I/O/interrupt context is NOT
+untestable just because no KUnit-reachable in-kernel fake exists for it —
+every boot log already proves the real subsystem works (e.g. `ttyS0 at
+MMIO 0x10000000 (irq = 1, ...)` is a real, successful IRQ registration on
+every single boot). "No KUnit fake exists" and "cannot be verified" are
+different claims — don't conflate them. The default assumption for any
+Tier-C-shaped function should be "testable via a real boot," not
+"untestable" — proven wrong once already (see
+`docs/8250-tier-c-blocker-2026-07-18.md`'s correction note).
+
+**What genuinely can't be tested (the real, short list) — document
+additions here as they're found, don't let this become a dumping ground:**
+- Anything requiring real, non-emulated hardware behavior QEMU's virt
+  board doesn't model faithfully (timing-sensitive races that depend on
+  real silicon latencies, not just "an interrupt happens" — QEMU's timing
+  is not cycle-accurate).
+- Anything requiring multiple physical machines/hosts (this project's
+  target is a single QEMU instance).
+- Anything requiring a real hardware fault (a real bit-flip, a real power
+  loss) rather than a simulated one.
+- Anything gated on hardware this project's board doesn't have (e.g. this
+  is why the 8250 Tier B work only translated `mem_serial_in`/`_out` —
+  QEMU virt's UART is exactly one iotype variant; `io_*`/`hub6_*` are
+  real but genuinely unexercised on THIS target, not untestable in
+  general on a board that has that hardware).
+
+If a function seems untestable, the right question is "can a real boot
+exercise this," not "is there a KUnit fake" — the latter is a much weaker,
+narrower bar this project should stop defaulting to.
+
+Landed so far: 8250 Tier A (`serial8250_compute_lcr`,
+`fcr_get_rxtrig_bytes`, `bytes_to_fcr_rxtrig` — wired live, issue #3),
+Tier B (`mem_serial_in`/`mem_serial_out` — KUnit-verified against a fake
+register backing, compiled in but not wired, issue #16), Tier C in
+progress (issue #25, standing).
 
 ## 3. hybrid-boot-backwards
 
