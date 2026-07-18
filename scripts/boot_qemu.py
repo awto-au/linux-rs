@@ -14,7 +14,18 @@ than baking the cpio into the kernel image via CONFIG_INITRAMFS_SOURCE:
 keeps kernel and rootfs rebuilds independent, matching how dev.py
 already treats `build` and `boot` as separate steps.
 
-Usage: boot_qemu.py [--tree linux-riscv] [--append "extra args"]
+Each QEMU invocation is already a fully isolated process (own PID, own
+serial pipe) — the only actual barrier to running boots in parallel was
+this script hardcoding tmp/qemu-boot.log, so N concurrent runs would
+clobber the same file. --run-id gives each caller its own
+tmp/qemu-boot-<id>.log instead; omit it (the default) for the existing
+single-run behavior and path, unchanged for every caller that doesn't
+opt in (dev.py boot()/check() included — they still read plain
+tmp/qemu-boot.log and are not parallel-safe on their own yet, a caller
+wanting parallel runs must pass distinct --run-id values itself, e.g.
+one per kernel image variant being boot-compared).
+
+Usage: boot_qemu.py [--tree linux-riscv] [--append "extra args"] [--run-id NAME]
 """
 import argparse
 import subprocess
@@ -22,7 +33,6 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-LOG = REPO / "tmp" / "qemu-boot.log"
 INITRD = REPO / "tmp" / "initramfs" / "initramfs.cpio.gz"
 
 # Printed by configs/initramfs-init.sh once /init actually runs as PID 1 —
@@ -46,7 +56,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tree", default="linux-riscv")
     ap.add_argument("--append", default="")
+    ap.add_argument("--run-id", default=None,
+                     help="isolate this run's log to tmp/qemu-boot-<id>.log instead of "
+                          "the shared tmp/qemu-boot.log, so multiple boots can run "
+                          "concurrently without clobbering each other's output")
     args = ap.parse_args()
+
+    log_name = f"qemu-boot-{args.run_id}.log" if args.run_id else "qemu-boot.log"
+    LOG = REPO / "tmp" / log_name
 
     image = REPO / args.tree / "arch/riscv/boot/Image"
     if not image.exists():
