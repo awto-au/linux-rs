@@ -6,3 +6,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-18T10:58:08+10:00,shelltest2,16,0,1,0,tmp/boot-history/20260718T105808+1000-shelltest2.log
 2026-07-18T10:59:25+10:00,default,16,0,1,0,tmp/boot-history/20260718T105925+1000-default.log
 2026-07-18T11:03:39+10:00,default,16,0,1,0,tmp/boot-history/20260718T110339+1000-default.log
+2026-07-18T11:13:46+10:00,autopushtest,16,0,1,0,tmp/boot-history/20260718T111346+1000-autopushtest.log
