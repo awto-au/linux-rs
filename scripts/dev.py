@@ -69,6 +69,9 @@ def kmake(*targets):
        log="dev-build.log")
 
 
+INIT_REACHED_MARKER = "linux-rs: initramfs init reached, PID 1 alive"
+
+
 def boot():
     # Pass the full relative path (e.g. "linux-riscv-worktrees/8250-tier-b"),
     # not TREE.name — TREE.name silently strips any subdirectory prefix,
@@ -82,10 +85,8 @@ def boot():
     # Primary gate: unchanged from before initramfs support existed —
     # any 'not ok' KUnit line is a hard fail, no KUnit output at all is a
     # hard fail. Do not weaken this; it's the project's main correctness
-    # signal and initramfs/init reachability is checked separately below,
-    # additively, never in place of this. Shared with integrate_tu.py via
-    # kunit_oracle.verify_kunit_ok — see rulesdb/rules/
-    # 0028-kunit-boot-oracle-gate.toml.
+    # signal. Shared with integrate_tu.py via kunit_oracle.verify_kunit_ok
+    # — see rulesdb/rules/0028-kunit-boot-oracle-gate.toml.
     passed, ok, bad = verify_kunit_ok(txt)
     for line in ok:
         print(line)
@@ -97,15 +98,15 @@ def boot():
         print("ORACLE FAIL: no KUnit output found")
         sys.exit(1)
     print(f"ORACLE PASS ({len(ok)} suites)")
-    # Additional, non-gating milestone: confirms init/do_mounts.c and the
-    # initramfs -> /init transition actually ran (see boot_qemu.py's
-    # INIT_REACHED). Surfaced as a warning, not sys.exit(1), because a
-    # missing initramfs milestone is a real regression worth flagging but
-    # is not what dev.py check's pass/fail contract has ever covered.
-    if "linux-rs: initramfs init reached, PID 1 alive" in txt:
-        print("INIT REACHED (initramfs userspace boot verified)")
-    else:
-        print("WARNING: initramfs init milestone not seen")
+    # Hard gate since 2026-07-18 (awto-au/linux-rs#7): missing initramfs
+    # reachability now fails the run, not just a warning. Streams 2/3
+    # depend on proving the boot actually reached PID 1 userspace, not
+    # merely that in-kernel KUnit ran before a later boot-path regression
+    # — a warning-only signal was easy to silently ignore.
+    if INIT_REACHED_MARKER not in txt:
+        print("ORACLE FAIL: initramfs init milestone not seen")
+        sys.exit(1)
+    print("INIT REACHED (initramfs userspace boot verified)")
 
 
 def main() -> int:
