@@ -304,6 +304,34 @@ def binary_stale_warning():
     for bin_path in bin_paths:
         if not bin_path.exists():
             return f"c2rust binary not found at {bin_path}"
+    try:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=C2RUST_FORK,
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.strip()
+    except Exception as e:
+        return f"could not check {C2RUST_FORK} working-tree status: {e}"
+    if dirty:
+        # Distinct from the mtime check below: even a binary freshly built
+        # from the CURRENT working tree gets every row it writes tagged
+        # with git_rev(C2RUST_FORK) -- the last COMMIT, not the dirty
+        # working tree the binary was actually compiled from. Found for
+        # real 2026-07-18: committed a fix after building+baselining, and
+        # the resulting rows were silently mislabeled under the pre-fix
+        # commit hash, making that baseline unrecoverably ambiguous (no
+        # way to tell after the fact which uncommitted diff was actually
+        # in the binary). Unlike the mtime check, there's no way to
+        # "rebuild and clear it" after the fact -- the only fix is commit
+        # first, build second, never the other way around. Hard block
+        # (caller must fix, no warn-and-continue) because a warn-only
+        # message is easy to miss in the middle of baseline progress
+        # output, which is exactly how this was missed the first time.
+        return (
+            f"{C2RUST_FORK} has uncommitted changes -- commit before "
+            f"building/baselining, never after, or every row this run "
+            f"writes will be silently mislabeled under the wrong "
+            f"c2rust_rev:\n{dirty}"
+        )
     bin_mtime = min(bin_path.stat().st_mtime for bin_path in bin_paths)
     try:
         tracked = subprocess.run(
@@ -1184,12 +1212,19 @@ def main():
         return 1
     stale_warning = binary_stale_warning()
     if stale_warning:
-        # Loud, not just logged — same principle as build_db.py's
-        # dropped-table warning: a state mismatch here silently mislabels
-        # every row this run writes until someone happens to notice the
-        # results don't match the c2rust_rev they expected.
-        print(f"WARNING: {stale_warning}")
-        logging.warning(stale_warning)
+        # Hard fail, not warn-and-continue — a state mismatch here
+        # silently mislabels every row this run writes under a c2rust_rev
+        # that doesn't match what the binary actually reflects, and
+        # there's no way to detect this after the fact from the DB alone
+        # (the WARNING line lives at the top of hundreds of lines of
+        # per-file progress output and is trivial to miss — found for
+        # real 2026-07-18: a baseline ran clean-looking with correct
+        # per-file numbers, but every row was tagged under the pre-fix
+        # commit hash because the fix had been built but not yet
+        # committed. This used to be a warn-and-continue; that's exactly
+        # what let it slip through unnoticed once already).
+        logging.error(stale_warning)
+        return 1
     conn = sqlite3.connect(DB)
     ensure_schema(conn)
     run_at = datetime.now(timezone.utc).isoformat()
