@@ -1,0 +1,794 @@
+From b5f563ef3ad8195330d1f5b519f5948662112dc1 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Sat, 18 Jul 2026 14:57:55 +1000
+Subject: [PATCH] drivers/tty/8250: translate serial8250_do_startup/shutdown
+ control flow to Rust, wire live (Tier C, linux-rs TU 38, awto-au/linux-rs#25)
+
+Translates serial8250_do_startup()/serial8250_do_shutdown() control
+flow (branching, ordering, error handling) to
+drivers/tty/serial/8250/8250_startup_rs.rs, wired into the live
+.startup/.shutdown uart_ops via a new CONFIG_RUST_8250_STARTUP Kconfig
+option (deliberately separate from CONFIG_RUST, which already gates
+the landed Tier A/B translations in this same driver).
+
+struct uart_port/uart_8250_port stay opaque (*mut c_void) on the Rust
+side -- neither struct has bindgen bindings in this tree, and both are
+large/deeply nested (embedded spinlock, op-table function pointers,
+DMA/RS485 sub-structs). Every field access and subsystem call the C
+originals perform is exposed as a narrow extern "C" shim function in
+8250_port.c (serial8250_startup_rs_*), a one-for-one mechanical mirror
+of each line of the C bodies -- the Rust side carries only the control
+flow. upf_t flag-bit tests stay in C (not a stable UAPI type, evaluated
+in C so width/encoding can't drift between languages).
+
+NO KUNIT COVERAGE, BY DESIGN: both functions call the real IRQ
+subsystem (request_irq/synchronize_irq/free_irq via
+ops->setup_irq()/release_irq()) and take the real port spinlock. Per
+docs/8250-tier-c-blocker-2026-07-18.md, a KUnit fake can stand in for
+data (Tier B's register buffer) but not for "the interrupt subsystem
+accepted this registration" -- faking that would mean reimplementing
+genuine IRQ-core semantics inside the test. Dan explicitly accepted
+this as a scoped exception (2026-07-18, awto-au/linux-rs#25), gated
+instead on a byte-for-byte side-by-side boot-transcript comparison
+against the unmodified C path across 3 repeat boots per side: clean
+from "KTAP version 1" (start of KUnit output) through end of
+transcript across all 6 logs, zero deviation. See
+docs/8250-tier-c-startup-shutdown-2026-07-18.md (linux-rs repo) for
+the full comparison record.
+
+dev.py check: 17/17 KUnit suites, ORACLE PASS, INIT REACHED, SPDX
+PROVENANCE PASS (37/37 translated files).
+---
+ drivers/tty/serial/8250/8250_port.c        | 369 +++++++++++++++++++++
+ drivers/tty/serial/8250/8250_startup_rs.rs | 299 +++++++++++++++++
+ drivers/tty/serial/8250/Kconfig            |  20 ++
+ drivers/tty/serial/8250/Makefile           |   9 +
+ 4 files changed, 697 insertions(+)
+ create mode 100644 drivers/tty/serial/8250/8250_startup_rs.rs
+
+diff --git a/drivers/tty/serial/8250/8250_port.c b/drivers/tty/serial/8250/8250_port.c
+index a0911f6f948c..e21055c352d6 100644
+--- a/drivers/tty/serial/8250/8250_port.c
++++ b/drivers/tty/serial/8250/8250_port.c
+@@ -2268,6 +2268,374 @@ static void serial8250_initialize(struct uart_port *port)
+ 	serial8250_iir_txen_test(port);
+ }
+ 
++#ifdef CONFIG_RUST_8250_STARTUP
++/* linux-rs: Tier C translation — serial8250_do_startup()/serial8250_do_shutdown()
++ * control flow, see docs/8250-tier-c-startup-shutdown-2026-07-18.md (linux-rs
++ * repo) and awto-au/linux-rs#25.
++ *
++ * NO KUNIT COVERAGE, BY DESIGN, NOT AN OMISSION: both functions call the real
++ * IRQ subsystem (up->ops->setup_irq()/release_irq(), which for this project's
++ * actual driver resolve to serial_link_irq_chain()/serial_unlink_irq_chain()
++ * wrapping real request_irq()/free_irq(), plus a real synchronize_irq() that
++ * blocks on in-flight interrupt completion) and take the real port spinlock
++ * (guard(uart_port_lock_irqsave)). Per
++ * docs/8250-tier-c-blocker-2026-07-18.md's analysis: a KUnit fake can stand
++ * in for *data* (Tier B's register-file buffer) but not for "the interrupt
++ * subsystem accepted this registration" or "no interrupt is currently in
++ * flight" — faking those would mean reimplementing genuine IRQ-core
++ * chain-walking/shared-IRQ bookkeeping/completion-wait semantics inside the
++ * test, which would verify the fake against itself, not the driver against
++ * anything real. Dan explicitly accepted this as a scoped, documented
++ * exception to this project's normal KUnit-gate discipline (2026-07-18):
++ * this code is translated and wired into the LIVE startup/shutdown path
++ * without KUnit coverage, gated instead on a byte-for-byte side-by-side
++ * boot-transcript comparison against the unmodified C path (documented in
++ * the landing doc above) — the verification tier the original scoping doc
++ * (docs/serial-8250-translation-scoping-2026-07-18.md) always required
++ * before any live-console-adjacent swap, kept even though KUnit is skipped
++ * here. This exception is scoped to exactly these two functions; it is not
++ * a general loosening of this project's verification bar.
++ *
++ * Struct-marshalling shim, not bindgen: struct uart_port/uart_8250_port are
++ * large, deeply nested (embedded spinlock, function-pointer op tables,
++ * list_head, DMA/RS485 sub-structs) and this project has no bindgen bindings
++ * for them (confirmed: neither type appears in rust/bindings/bindings_helper.h
++ * anywhere in this tree). Generating full bindgen coverage for both structs
++ * so Rust could hold a real `*mut uart_port` and dereference fields directly
++ * would be a large, separate undertaking with its own correctness risk,
++ * architecturally out of proportion to this slice, and contrary to this project's established
++ * discipline (Tier A/B: never let Rust assume ownership/layout of a struct it
++ * doesn't own — see docs/8250-tier-b-scoping-2026-07-18.md's Mmio discussion
++ * for the same reasoning applied to `membase`). Instead: `port`/`up` stay
++ * opaque `*mut c_void` on the Rust side; every field read/write and every
++ * subsystem call the two C originals perform is exposed here as a plain,
++ * narrow, individually-auditable extern "C" shim function — a one-for-one
++ * mechanical mirror of each line of the original C body, not a
++ * reimplementation or simplification of any of it. Flag-bit tests
++ * (UPF_BUGGY_UART, UPF_SHARE_IRQ, UPF_FOURPORT — all `upf_t`, a
++ * project-internal bitflag type not part of any stable UAPI this project
++ * pins elsewhere, unlike Tier A's tcflag_t bits) are deliberately evaluated
++ * here in C rather than ported as Rust constants, so their width/encoding can
++ * never silently drift between the two languages; Rust only ever receives
++ * the already-evaluated boolean.
++ */
++
++bool serial8250_startup_rs_port_buggy_uart(struct uart_port *port)
++{
++	return port->flags & UPF_BUGGY_UART;
++}
++
++bool serial8250_startup_rs_port_share_irq(struct uart_port *port)
++{
++	return port->irq && (port->flags & UPF_SHARE_IRQ);
++}
++
++void serial8250_startup_rs_port_set_shared_irq(struct uart_port *port)
++{
++	port->irqflags |= IRQF_SHARED;
++}
++
++bool serial8250_startup_rs_port_fourport(struct uart_port *port)
++{
++	return port->flags & UPF_FOURPORT;
++}
++
++unsigned int serial8250_startup_rs_uart_config_fifo_size(struct uart_port *port)
++{
++	return uart_config[port->type].fifo_size;
++}
++
++unsigned int serial8250_startup_rs_uart_config_tx_loadsz(struct uart_port *port)
++{
++	return uart_config[port->type].tx_loadsz;
++}
++
++unsigned int serial8250_startup_rs_uart_config_flags(struct uart_port *port)
++{
++	return uart_config[port->type].flags;
++}
++
++unsigned int serial8250_startup_rs_get_fifosize(struct uart_port *port)
++{
++	return port->fifosize;
++}
++
++void serial8250_startup_rs_set_fifosize(struct uart_port *port, unsigned int v)
++{
++	port->fifosize = v;
++}
++
++unsigned int serial8250_startup_rs_get_tx_loadsz(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	return up->tx_loadsz;
++}
++
++void serial8250_startup_rs_set_tx_loadsz(struct uart_port *port, unsigned int v)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->tx_loadsz = v;
++}
++
++unsigned int serial8250_startup_rs_get_capabilities(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	return up->capabilities;
++}
++
++void serial8250_startup_rs_set_capabilities(struct uart_port *port, unsigned int v)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->capabilities = v;
++}
++
++void serial8250_startup_rs_set_mcr(struct uart_port *port, unsigned char v)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->mcr = v;
++}
++
++bool serial8250_startup_rs_iotype_changed(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	return port->iotype != up->cur_iotype;
++}
++
++void serial8250_startup_rs_set_io_from_upio(struct uart_port *port)
++{
++	set_io_from_upio(port);
++}
++
++void serial8250_startup_rs_rpm_get(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	serial8250_rpm_get(up);
++}
++
++void serial8250_startup_rs_rpm_put(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	serial8250_rpm_put(up);
++}
++
++void serial8250_startup_rs_startup_special(struct uart_port *port)
++{
++	serial8250_startup_special(port);
++}
++
++void serial8250_startup_rs_clear_fifos(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	serial8250_clear_fifos(up);
++}
++
++void serial8250_startup_rs_clear_interrupts(struct uart_port *port)
++{
++	serial8250_clear_interrupts(port);
++}
++
++unsigned char serial8250_startup_rs_lsr_in(struct uart_port *port)
++{
++	return serial_port_in(port, UART_LSR);
++}
++
++void serial8250_startup_rs_lsr_safety_warn(struct uart_port *port)
++{
++	dev_info_ratelimited(port->dev, "LSR safety check engaged!\n");
++}
++
++void serial8250_startup_rs_set_TRG_levels(struct uart_port *port)
++{
++	serial8250_set_TRG_levels(port);
++}
++
++int serial8250_startup_rs_setup_irq(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	return up->ops->setup_irq(up);
++}
++
++void serial8250_startup_rs_release_irq(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->ops->release_irq(up);
++}
++
++void serial8250_startup_rs_THRE_test(struct uart_port *port)
++{
++	serial8250_THRE_test(port);
++}
++
++void serial8250_startup_rs_setup_timer(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->ops->setup_timer(up);
++}
++
++void serial8250_startup_rs_initialize(struct uart_port *port)
++{
++	serial8250_initialize(port);
++}
++
++void serial8250_startup_rs_clear_saved_flags(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->lsr_saved_flags = 0;
++	up->msr_saved_flags = 0;
++}
++
++bool serial8250_startup_rs_has_dma(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	return up->dma != NULL;
++}
++
++bool serial8250_startup_rs_is_console(struct uart_port *port)
++{
++	return uart_console(port);
++}
++
++bool serial8250_startup_rs_request_dma(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	return serial8250_request_dma(up) != 0;
++}
++
++void serial8250_startup_rs_dma_forbidden_console(struct uart_port *port)
++{
++	dev_warn_ratelimited(port->dev, "%s\n", "forbid DMA for kernel console");
++}
++
++void serial8250_startup_rs_dma_request_failed(struct uart_port *port)
++{
++	dev_warn_ratelimited(port->dev, "%s\n", "failed to request DMA");
++}
++
++void serial8250_startup_rs_clear_dma(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->dma = NULL;
++}
++
++void serial8250_startup_rs_set_ier_rx_shadow(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	up->ier = UART_IER_RLSI | UART_IER_RDI;
++}
++
++void serial8250_startup_rs_fourport_enable_irq(struct uart_port *port)
++{
++	unsigned int icp;
++
++	icp = (port->iobase & 0xfe0) | 0x01f;
++	outb_p(0x80, icp);
++	inb_p(icp);
++}
++
++/* --- shutdown-specific shims (startup's shared shims above are reused) --- */
++
++void serial8250_startup_rs_ier_off_locked(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	guard(uart_port_lock_irqsave)(port);
++	up->ier = 0;
++	serial_port_out(port, UART_IER, 0);
++}
++
++void serial8250_startup_rs_synchronize_irq(struct uart_port *port)
++{
++	synchronize_irq(port->irq);
++}
++
++void serial8250_startup_rs_release_dma(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	serial8250_release_dma(up);
++}
++
++void serial8250_startup_rs_mctrl_reset_locked(struct uart_port *port)
++{
++	u32 lcr;
++
++	guard(uart_port_lock_irqsave)(port);
++
++	if (port->flags & UPF_FOURPORT) {
++		/* reset interrupts on the AST Fourport board */
++		inb((port->iobase & 0xfe0) | 0x1f);
++		port->mctrl |= TIOCM_OUT1;
++	} else {
++		port->mctrl &= ~TIOCM_OUT2;
++	}
++
++	serial8250_set_mctrl(port, port->mctrl);
++
++	/* Disable break condition */
++	lcr = serial_port_in(port, UART_LCR);
++	lcr &= ~UART_LCR_SBC;
++	serial_port_out(port, UART_LCR, lcr);
++}
++
++void serial8250_startup_rs_rsa_disable(struct uart_port *port)
++{
++	struct uart_8250_port *up = up_to_u8250p(port);
++
++	rsa_disable(up);
++}
++
++void serial8250_startup_rs_rx_in(struct uart_port *port)
++{
++	serial_port_in(port, UART_RX);
++}
++
++extern int serial8250_do_startup_rs(struct uart_port *port);
++extern void serial8250_do_shutdown_rs(struct uart_port *port);
++
++int serial8250_do_startup(struct uart_port *port)
++{
++	return serial8250_do_startup_rs(port);
++}
++
++void serial8250_do_shutdown(struct uart_port *port)
++{
++	serial8250_do_shutdown_rs(port);
++}
++EXPORT_SYMBOL_GPL(serial8250_do_startup);
++EXPORT_SYMBOL_GPL(serial8250_do_shutdown);
++
++static int serial8250_startup(struct uart_port *port)
++{
++	if (port->startup)
++		return port->startup(port);
++	return serial8250_do_startup(port);
++}
++
++static void serial8250_shutdown(struct uart_port *port)
++{
++	if (port->shutdown)
++		port->shutdown(port);
++	else
++		serial8250_do_shutdown(port);
++}
++#else /* !CONFIG_RUST_8250_STARTUP */
+ int serial8250_do_startup(struct uart_port *port)
+ {
+ 	struct uart_8250_port *up = up_to_u8250p(port);
+@@ -2441,6 +2809,7 @@ static void serial8250_shutdown(struct uart_port *port)
+ 	else
+ 		serial8250_do_shutdown(port);
+ }
++#endif /* CONFIG_RUST_8250_STARTUP */
+ 
+ static void serial8250_flush_buffer(struct uart_port *port)
+ {
+diff --git a/drivers/tty/serial/8250/8250_startup_rs.rs b/drivers/tty/serial/8250/8250_startup_rs.rs
+new file mode 100644
+index 000000000000..232485bbce3c
+--- /dev/null
++++ b/drivers/tty/serial/8250/8250_startup_rs.rs
+@@ -0,0 +1,299 @@
++// SPDX-License-Identifier: GPL-2.0+
++//! `serial8250_do_startup()`/`serial8250_do_shutdown()` — Rust translation of
++//! device bring-up/teardown control flow from
++//! `drivers/tty/serial/8250/8250_port.c`.
++//!
++//! Scope: Tier C per docs/serial-8250-translation-scoping-2026-07-18.md and
++//! awto-au/linux-rs#25 — the "least-bad of the four" Tier C candidates per
++//! docs/8250-tier-c-blocker-2026-07-18.md's ranking (`autoconfig` is
++//! order/timing-fragile probing; `serial8250_do_set_termios` has the same
++//! entanglement and stays explicitly deferred; the IRQ handler runs on every
++//! live interrupt with zero margin).
++//!
++//! # NO KUNIT COVERAGE — BY DESIGN, NOT AN OMISSION
++//!
++//! Every other Rust TU in this project (30+ `lib/`-style translations, plus
++//! Tier A/B in this same driver) is either diff-oracle-verified host-side or
++//! KUnit-verified against a fake/real buffer. This TU has neither, and that
++//! is a deliberate, explicitly-approved exception (Dan, 2026-07-18; see
++//! awto-au/linux-rs#25 and docs/8250-tier-c-blocker-2026-07-18.md), not a
++//! lapse:
++//!
++//! - `serial8250_do_startup_rs` calls (via the C shim below)
++//!   `up->ops->setup_irq(up)`, which for this project's actual driver
++//!   (`univ8250_driver_ops`, `8250_core.c`) resolves to
++//!   `univ8250_setup_irq -> serial_link_irq_chain -> request_irq()` against
++//!   a live IRQ line with real shared-IRQ bookkeeping.
++//! - `serial8250_do_shutdown_rs` calls `synchronize_irq(port->irq)` — blocks
++//!   until any in-flight interrupt handler completes, meaningless without a
++//!   real interrupt controller — then (via the shim)
++//!   `up->ops->release_irq(up) -> univ8250_release_irq -> free_irq`.
++//! - Both take the real port spinlock (`guard(uart_port_lock_irqsave)`,
++//!   real `spin_lock_irqsave`/`spin_unlock_irqrestore` under the hood).
++//!
++//! A KUnit fake can stand in for *data* (Tier B's `[u8; N]` register-file
++//! buffer — a plain byte array behaves identically to real MMIO for
++//! byte-shuffling correctness). It cannot stand in for "the interrupt
++//! subsystem accepted this registration" or "no interrupt is currently in
++//! flight": faking those would mean reimplementing genuine IRQ-core
++//! chain-walking/shared-IRQ bookkeeping/completion-wait semantics inside the
++//! test, which would verify the fake against itself, not the driver against
++//! anything real — exactly the interrupt-context/locking-semantics condition
++//! the blocker doc identified as a legitimate stop trigger, now instead
++//! accepted as a scoped, documented risk trade-off rather than a blocker.
++//! This exception is scoped to exactly these two functions; it does not
++//! extend to any other function/file without being separately re-confirmed.
++//!
++//! In place of KUnit, this TU is gated on a byte-for-byte side-by-side
++//! boot-transcript comparison against the unmodified C path across multiple
++//! repeat boots — the verification tier
++//! docs/serial-8250-translation-scoping-2026-07-18.md always required before
++//! any live-console-adjacent swap, kept here even though KUnit itself is
++//! skipped. See docs/8250-tier-c-startup-shutdown-2026-07-18.md (linux-rs
++//! repo) for the actual comparison results.
++//!
++//! # Why `struct uart_port`/`struct uart_8250_port` stay opaque
++//!
++//! Neither struct has bindgen bindings anywhere in this tree (confirmed:
++//! neither type appears in `rust/bindings/bindings_helper.h`). Both are
++//! large and deeply nested (embedded spinlock, function-pointer op tables,
++//! `list_head`, DMA/RS485 sub-structs) — generating full bindgen coverage
++//! for a first driver-control-flow TU would be a separate, much larger
++//! undertaking with its own correctness risk, and contrary to this
++//! project's established discipline of never letting Rust assume
++//! ownership/layout of a struct it doesn't own (see
++//! docs/8250-tier-b-scoping-2026-07-18.md's `Mmio`-vs-`membase` discussion
++//! for the same reasoning applied one tier down).
++//!
++//! Instead, `port` stays an opaque `*mut c_void` on this side. Every field
++//! read/write and every subsystem call the C originals perform is exposed as
++//! a narrow, individually-named, individually-auditable `extern "C"` shim
++//! function in `8250_port.c` (`serial8250_startup_rs_*` — see that file's
++//! `CONFIG_RUST_8250_STARTUP` block) — a one-for-one mechanical mirror of
++//! each line of the original C bodies, not a reimplementation or
++//! simplification. This Rust file therefore carries the *control
++//! flow*—branching, ordering, early-return error handling—while every
++//! register access, lock, and subsystem call happens on the C side exactly
++//! as it always did. `upf_t` flag-bit tests (`UPF_BUGGY_UART`,
++//! `UPF_SHARE_IRQ`, `UPF_FOURPORT`) are deliberately evaluated in the C shim
++//! rather than ported as Rust constants: `upf_t` is a project-internal
++//! bitflag type (some bits `BIT_ULL`-defined), not a stable UAPI this
++//! project pins elsewhere the way Tier A pins `tcflag_t` bits — evaluating
++//! the test in C means its width/encoding can never silently drift between
++//! the two languages. Only the resulting `bool` crosses the FFI boundary.
++//!
++//! # Faithfulness
++//!
++//! Every branch, early return, and call ordering below matches
++//! `serial8250_do_startup()`/`serial8250_do_shutdown()` in `8250_port.c`
++//! line-for-line (see that file's `#else` arm, kept verbatim as the
++//! non-Rust build path, for direct comparison). No behavior was added,
++//! removed, or reordered relative to the C original.
++
++use kernel::ffi::{c_int, c_void};
++
++const ENODEV: c_int = 19; // include/uapi/asm-generic/errno-base.h
++
++unsafe extern "C" {
++    fn serial8250_startup_rs_port_buggy_uart(port: *mut c_void) -> bool;
++    fn serial8250_startup_rs_port_share_irq(port: *mut c_void) -> bool;
++    fn serial8250_startup_rs_port_set_shared_irq(port: *mut c_void);
++    fn serial8250_startup_rs_port_fourport(port: *mut c_void) -> bool;
++
++    fn serial8250_startup_rs_uart_config_fifo_size(port: *mut c_void) -> u32;
++    fn serial8250_startup_rs_uart_config_tx_loadsz(port: *mut c_void) -> u32;
++    fn serial8250_startup_rs_uart_config_flags(port: *mut c_void) -> u32;
++
++    fn serial8250_startup_rs_get_fifosize(port: *mut c_void) -> u32;
++    fn serial8250_startup_rs_set_fifosize(port: *mut c_void, v: u32);
++    fn serial8250_startup_rs_get_tx_loadsz(port: *mut c_void) -> u32;
++    fn serial8250_startup_rs_set_tx_loadsz(port: *mut c_void, v: u32);
++    fn serial8250_startup_rs_get_capabilities(port: *mut c_void) -> u32;
++    fn serial8250_startup_rs_set_capabilities(port: *mut c_void, v: u32);
++    fn serial8250_startup_rs_set_mcr(port: *mut c_void, v: u8);
++
++    fn serial8250_startup_rs_iotype_changed(port: *mut c_void) -> bool;
++    fn serial8250_startup_rs_set_io_from_upio(port: *mut c_void);
++
++    fn serial8250_startup_rs_rpm_get(port: *mut c_void);
++    fn serial8250_startup_rs_rpm_put(port: *mut c_void);
++
++    fn serial8250_startup_rs_startup_special(port: *mut c_void);
++    fn serial8250_startup_rs_clear_fifos(port: *mut c_void);
++    fn serial8250_startup_rs_clear_interrupts(port: *mut c_void);
++    fn serial8250_startup_rs_lsr_in(port: *mut c_void) -> u8;
++    fn serial8250_startup_rs_lsr_safety_warn(port: *mut c_void);
++    fn serial8250_startup_rs_set_TRG_levels(port: *mut c_void);
++
++    fn serial8250_startup_rs_setup_irq(port: *mut c_void) -> c_int;
++    fn serial8250_startup_rs_release_irq(port: *mut c_void);
++    fn serial8250_startup_rs_THRE_test(port: *mut c_void);
++    fn serial8250_startup_rs_setup_timer(port: *mut c_void);
++    fn serial8250_startup_rs_initialize(port: *mut c_void);
++    fn serial8250_startup_rs_clear_saved_flags(port: *mut c_void);
++
++    fn serial8250_startup_rs_has_dma(port: *mut c_void) -> bool;
++    fn serial8250_startup_rs_is_console(port: *mut c_void) -> bool;
++    fn serial8250_startup_rs_request_dma(port: *mut c_void) -> bool;
++    fn serial8250_startup_rs_dma_forbidden_console(port: *mut c_void);
++    fn serial8250_startup_rs_dma_request_failed(port: *mut c_void);
++    fn serial8250_startup_rs_clear_dma(port: *mut c_void);
++
++    fn serial8250_startup_rs_set_ier_rx_shadow(port: *mut c_void);
++    fn serial8250_startup_rs_fourport_enable_irq(port: *mut c_void);
++
++    fn serial8250_startup_rs_ier_off_locked(port: *mut c_void);
++    fn serial8250_startup_rs_synchronize_irq(port: *mut c_void);
++    fn serial8250_startup_rs_release_dma(port: *mut c_void);
++    fn serial8250_startup_rs_mctrl_reset_locked(port: *mut c_void);
++    fn serial8250_startup_rs_rsa_disable(port: *mut c_void);
++    fn serial8250_startup_rs_rx_in(port: *mut c_void);
++}
++
++/// `8250_port.c:serial8250_do_startup()`.
++///
++/// # Safety
++/// `port` must be a valid, non-null `struct uart_port *` for the duration of
++/// the call, satisfying the same preconditions the C original required of
++/// its caller (a port that has completed probe/registration but not yet
++/// been started) — this function performs no additional validation beyond
++/// what the C original performed, matching it branch-for-branch.
++#[no_mangle]
++pub unsafe extern "C" fn serial8250_do_startup_rs(port: *mut c_void) -> c_int {
++    // SAFETY: shim calls below all share the single caller contract above —
++    // `port` valid and non-null for the duration of this function — and each
++    // shim touches only the fields/subsystems its C body already touched.
++    unsafe {
++        if serial8250_startup_rs_get_fifosize(port) == 0 {
++            let v = serial8250_startup_rs_uart_config_fifo_size(port);
++            serial8250_startup_rs_set_fifosize(port, v);
++        }
++        if serial8250_startup_rs_get_tx_loadsz(port) == 0 {
++            let v = serial8250_startup_rs_uart_config_tx_loadsz(port);
++            serial8250_startup_rs_set_tx_loadsz(port, v);
++        }
++        if serial8250_startup_rs_get_capabilities(port) == 0 {
++            let v = serial8250_startup_rs_uart_config_flags(port);
++            serial8250_startup_rs_set_capabilities(port, v);
++        }
++        serial8250_startup_rs_set_mcr(port, 0);
++
++        if serial8250_startup_rs_iotype_changed(port) {
++            serial8250_startup_rs_set_io_from_upio(port);
++        }
++
++        // guard(serial8250_rpm)(up) — RAII in C, get-now/put-on-every-return
++        // here since Rust has no equivalent scope-exit guard for an opaque
++        // extern type without introducing a new abstraction for a single
++        // call site.
++        serial8250_startup_rs_rpm_get(port);
++
++        serial8250_startup_rs_startup_special(port);
++
++        // Clear the FIFO buffers and disable them (re-enabled in
++        // set_termios()).
++        serial8250_startup_rs_clear_fifos(port);
++
++        serial8250_startup_rs_clear_interrupts(port);
++
++        // At this point, there's no way the LSR could still be 0xff; if it
++        // is, bail out, because there's likely no UART here.
++        if !serial8250_startup_rs_port_buggy_uart(port) && serial8250_startup_rs_lsr_in(port) == 0xff {
++            serial8250_startup_rs_lsr_safety_warn(port);
++            serial8250_startup_rs_rpm_put(port);
++            return -ENODEV;
++        }
++
++        serial8250_startup_rs_set_TRG_levels(port);
++
++        // Check if we need to have shared IRQs.
++        if serial8250_startup_rs_port_share_irq(port) {
++            serial8250_startup_rs_port_set_shared_irq(port);
++        }
++
++        let retval = serial8250_startup_rs_setup_irq(port);
++        if retval != 0 {
++            serial8250_startup_rs_rpm_put(port);
++            return retval;
++        }
++
++        serial8250_startup_rs_THRE_test(port);
++
++        serial8250_startup_rs_setup_timer(port);
++
++        serial8250_startup_rs_initialize(port);
++
++        // Clear the interrupt registers again for luck, and clear the saved
++        // flags to avoid getting false values from polling routines or the
++        // previous session.
++        serial8250_startup_rs_clear_interrupts(port);
++        serial8250_startup_rs_clear_saved_flags(port);
++
++        // Request DMA channels for both RX and TX.
++        if serial8250_startup_rs_has_dma(port) {
++            if serial8250_startup_rs_is_console(port) {
++                serial8250_startup_rs_dma_forbidden_console(port);
++                serial8250_startup_rs_clear_dma(port);
++            } else if serial8250_startup_rs_request_dma(port) {
++                serial8250_startup_rs_dma_request_failed(port);
++                serial8250_startup_rs_clear_dma(port);
++            }
++        }
++
++        // Set the IER shadow for rx interrupts but defer actual interrupt
++        // enable until after the FIFOs are enabled; otherwise, an
++        // already-active sender can swamp the interrupt handler with "too
++        // much work".
++        serial8250_startup_rs_set_ier_rx_shadow(port);
++
++        if serial8250_startup_rs_port_fourport(port) {
++            // Enable interrupts on the AST Fourport board.
++            serial8250_startup_rs_fourport_enable_irq(port);
++        }
++
++        serial8250_startup_rs_rpm_put(port);
++        0
++    }
++}
++
++/// `8250_port.c:serial8250_do_shutdown()`.
++///
++/// # Safety
++/// Same contract as `serial8250_do_startup_rs`: `port` must be a valid,
++/// non-null `struct uart_port *`, previously started, for the duration of
++/// the call.
++#[no_mangle]
++pub unsafe extern "C" fn serial8250_do_shutdown_rs(port: *mut c_void) {
++    // SAFETY: see serial8250_do_startup_rs — identical caller contract, same
++    // shim-boundary reasoning.
++    unsafe {
++        serial8250_startup_rs_rpm_get(port);
++
++        // Disable interrupts from this port. Synchronize UART_IER access
++        // against the console (real port lock, taken in the C shim).
++        serial8250_startup_rs_ier_off_locked(port);
++
++        serial8250_startup_rs_synchronize_irq(port);
++
++        serial8250_startup_rs_release_dma(port);
++        serial8250_startup_rs_clear_dma(port);
++
++        serial8250_startup_rs_mctrl_reset_locked(port);
++
++        serial8250_startup_rs_clear_fifos(port);
++
++        serial8250_startup_rs_rsa_disable(port);
++
++        // Read data port to reset things, and then unlink from the IRQ
++        // chain.
++        serial8250_startup_rs_rx_in(port);
++
++        // LCR writes on DW UART can trigger late (unmaskable) IRQs. Handle
++        // them before releasing the handler.
++        serial8250_startup_rs_synchronize_irq(port);
++
++        serial8250_startup_rs_rpm_put(port);
++
++        serial8250_startup_rs_release_irq(port);
++    }
++}
+diff --git a/drivers/tty/serial/8250/Kconfig b/drivers/tty/serial/8250/Kconfig
+index fc3e58d62233..1d7d94df4d4b 100644
+--- a/drivers/tty/serial/8250/Kconfig
++++ b/drivers/tty/serial/8250/Kconfig
+@@ -34,6 +34,26 @@ config SERIAL_8250
+ 	  Most people will say Y or M here, so that they can use serial mice,
+ 	  modems and similar devices connecting to the standard serial ports.
+ 
++config RUST_8250_STARTUP
++	bool "Rust translation of serial8250_do_startup/serial8250_do_shutdown"
++	depends on SERIAL_8250 && RUST
++	default n
++	help
++	  Build and wire the Rust translation of serial8250_do_startup() and
++	  serial8250_do_shutdown() (linux-rs Tier C, see
++	  docs/8250-tier-c-startup-shutdown-2026-07-18.md in the linux-rs
++	  tree) into this port's live .startup/.shutdown uart_ops. Deliberately
++	  a separate knob from CONFIG_RUST (which gates the already-landed
++	  Tier A/B translations in this same driver): this code calls the real
++	  IRQ subsystem (request_irq/synchronize_irq/free_irq via
++	  ops->setup_irq()/ops->release_irq()) with no KUnit-fakeable
++	  substitute, so it needs to be independently toggleable for a clean
++	  A/B boot-transcript comparison against the untouched C path without
++	  disturbing Tier A/B's own already-verified CONFIG_RUST wiring.
++
++	  If unsure, say N: the unmodified C serial8250_do_startup/_do_shutdown
++	  remain the default and are functionally identical either way.
++
+ config SERIAL_8250_PNP
+ 	bool "8250/16550 PNP device support" if EXPERT
+ 	depends on SERIAL_8250 && PNP
+diff --git a/drivers/tty/serial/8250/Makefile b/drivers/tty/serial/8250/Makefile
+index bfd5e4221a75..a5c66a710d43 100644
+--- a/drivers/tty/serial/8250/Makefile
++++ b/drivers/tty/serial/8250/Makefile
+@@ -23,6 +23,15 @@ obj-$(CONFIG_SERIAL_8250)		+= 8250_base.o
+ # untouched. This object exists purely to be reachable-and-unit-testable,
+ # per that doc's gate, not to affect the live console path.
+ 8250_base-$(CONFIG_RUST)		+= 8250_io_rs.o
++# linux-rs: Tier C translation — serial8250_do_startup()/serial8250_do_shutdown()
++# control flow only, see docs/8250-tier-c-startup-shutdown-2026-07-18.md and
++# awto-au/linux-rs#25. Deliberately gated on CONFIG_RUST_8250_STARTUP, NOT
++# plain CONFIG_RUST: this wires into the LIVE .startup/.shutdown uart_ops
++# (unlike 8250_io_rs.o above, compiled-in but inert), has no KUnit coverage
++# (real IRQ-subsystem calls, no fake possible — see that doc), and needs an
++# independent on/off switch from Tier A/B's already-verified CONFIG_RUST
++# wiring so the two can be A/B boot-compared without disturbing each other.
++8250_base-$(CONFIG_RUST_8250_STARTUP)	+= 8250_startup_rs.o
+ 8250_base-$(CONFIG_SERIAL_8250_DMA)	+= 8250_dma.o
+ 8250_base-$(CONFIG_SERIAL_8250_DWLIB)	+= 8250_dwlib.o
+ 8250_base-$(CONFIG_SERIAL_8250_FINTEK)	+= 8250_fintek.o
+-- 
+2.55.0
+
