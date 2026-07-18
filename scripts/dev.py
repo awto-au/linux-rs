@@ -7,7 +7,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
 
   dev.py build                  # make riscv kernel (LLVM=1 -j32)
   dev.py boot                   # boot QEMU -> tmp/qemu-boot.log, KUnit summary
-  dev.py check                  # build + boot + fail on any 'not ok'
+  dev.py check                  # build + boot + fail on KUnit/initramfs oracle
   dev.py report                 # regenerate docs/STATUS.md + status.png only
   dev.py config -e OPT [-e ..]  # scripts/config -e + olddefconfig
   dev.py integrate --obj lib/foo.o --header linux/foo.h --kunit CONFIG_X --suite s
@@ -41,6 +41,7 @@ def print(*args, **kw):  # noqa: A001 — awto rule: all output also to tmp/dev.
 TREE = REPO / os.environ.get("LINUXRS_TREE", "linux-riscv")
 S = REPO / "scripts"
 TRAILER = "\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+INIT_REACHED_MARKER = "linux-rs: initramfs init reached, PID 1 alive"
 
 
 def sh(cmd, log=None, timeout=3600, quiet_ok=True):
@@ -67,19 +68,29 @@ def kmake(*targets):
        log="dev-build.log")
 
 
+def parse_boot_oracle(txt: str):
+    """Return (ok_lines, bad_lines, init_reached) from a captured boot log."""
+    ok = re.findall(r"^ok \d+ .*$", txt, re.M)
+    bad = re.findall(r"^\s*not ok .*$", txt, re.M)
+    return ok, bad, INIT_REACHED_MARKER in txt
+
+
 def boot():
     sh(["python3", str(S / "boot_qemu.py"), "--tree", TREE.name],
        log="dev-boot.log", timeout=600)
     txt = (REPO / "tmp/qemu-boot.log").read_text(errors="replace")
-    ok = re.findall(r"^ok \d+ .*$", txt, re.M)
-    bad = re.findall(r"^\s*not ok .*$", txt, re.M)
+    ok, bad, init_reached = parse_boot_oracle(txt)
     for line in ok:
         print(line)
-    # Primary gate: unchanged from before initramfs support existed —
-    # any 'not ok' KUnit line is a hard fail, no KUnit output at all is a
-    # hard fail. Do not weaken this; it's the project's main correctness
-    # signal and initramfs/init reachability is checked separately below,
-    # additively, never in place of this.
+    # Hard oracle gates:
+    #  - any KUnit 'not ok' is a failure,
+    #  - no KUnit output is a failure,
+    #  - missing initramfs reachability is a failure.
+    #
+    # The initramfs marker used to be reported as a warning only. It is now
+    # part of the contract because streams 2/3 rely on proving that the boot
+    # reached PID 1 userspace, not merely that in-kernel KUnit ran before a
+    # later boot-path regression.
     if bad:
         print("\n".join(bad))
         print("ORACLE FAIL")
@@ -88,15 +99,10 @@ def boot():
         print("ORACLE FAIL: no KUnit output found")
         sys.exit(1)
     print(f"ORACLE PASS ({len(ok)} suites)")
-    # Additional, non-gating milestone: confirms init/do_mounts.c and the
-    # initramfs -> /init transition actually ran (see boot_qemu.py's
-    # INIT_REACHED). Surfaced as a warning, not sys.exit(1), because a
-    # missing initramfs milestone is a real regression worth flagging but
-    # is not what dev.py check's pass/fail contract has ever covered.
-    if "linux-rs: initramfs init reached, PID 1 alive" in txt:
-        print("INIT REACHED (initramfs userspace boot verified)")
-    else:
-        print("WARNING: initramfs init milestone not seen")
+    if not init_reached:
+        print("ORACLE FAIL: initramfs init milestone not seen")
+        sys.exit(1)
+    print("INIT REACHED (initramfs userspace boot verified)")
 
 
 def main() -> int:
