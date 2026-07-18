@@ -152,6 +152,38 @@ KERNEL_WORK_ITEMS = [
                  "function-tiering scoping pass before being a real candidate, not pre-scoped by "
                  "this doc. No code written or linux-riscv/ changes made in this scoping pass.",
     },
+    {
+        "title": "target_compile_test.py — cross-compile+riscv64-execute oracle for candidate .rs files",
+        "status": "open",
+        "priority": "P3",
+        "priority_rationale": "New verification capability (intermediate rung between stream 1's "
+                 "host-side real-ABI compile-check and stream 2/3's full boot-and-KUnit gate), not "
+                 "a fix for something broken. Scoping (docs/target-compile-test-scoping-2026-07-18.md) "
+                 "confirmed the marginal signal over the existing host-native diff-oracle "
+                 "(scripts/diff_oracle.py) is real but modest for the lib/-style code translated so "
+                 "far (no architecture-dependent behavior in what's landed) — real value shows up "
+                 "once register/MMIO/asm-shaped candidates (8250 Tier B and beyond) need evaluating, "
+                 "which is not yet the case for anything currently in flight. P3: worth building "
+                 "(cheap — reuses ~existing, already-verified toolchain/runtime, small extension of "
+                 "diff_oracle.py's own ~80-line structure) but nothing is blocked on it today.",
+        "blocks_boot_path": 0,
+        "notes": "Scoping's key finding: 'rustc inside the QEMU guest' is NOT the right shape "
+                 "(confirmed — no native riscv64 rustc exists or is practical to build, and the "
+                 "256M guest has no room for one). Right shape verified end-to-end instead: cross-"
+                 "compile on host with `rustc --target riscv64gc-unknown-linux-musl -C target-"
+                 "feature=+crt-static -C link-self-contained=on -C linker-flavor=ld.lld` (self-"
+                 "contained via rust-lld — sidesteps a real, reproduced ISA-version link "
+                 "incompatibility between the project's cached musl.cc riscv64-linux-musl-cross "
+                 "toolchain and rustc's own prebuilt riscv64gc-unknown-linux-musl static libs), then "
+                 "execute directly via qemu-riscv64-static (already installed: qemu-user-static-riscv "
+                 "package, confirmed via rpm -q) — usermode emulation, no qemu-system-riscv64/kernel "
+                 "image/initramfs/boot involved at all, verified with a real cross-compiled binary "
+                 "producing correct output and exit code. Proposed first step: implement against one "
+                 "existing bench/diff_bcd or diff_win_minmax pair (smallest, fastest iteration) as a "
+                 "second execution backend for scripts/diff_oracle.py's existing harness contract, "
+                 "reporting host-native and riscv64-emulated verdicts side by side. No code written "
+                 "in this scoping pass; linux-riscv/, linux/, and the c2rust fork untouched.",
+    },
 ]
 
 
