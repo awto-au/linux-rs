@@ -46,10 +46,26 @@ Required stages, none optional:
    separate numbers.
 4. Only escalate to a paid/independent model review once free gates pass.
 
-Good first candidate: issue #11 (goto-to-labeled-block lowering, P2,
-6/228 files, one clearly-stated root cause — two code paths disagree on a
-synthesized label's name). Small, localized, single-cause bugs like this
-are the right shape for this pipeline; broad/ambiguous bugs are not.
+**Standing policy (2026-07-18): keep Ollama fed off the open c2rust-breadth
+queue, not just a one-off.** Every open `awtoau/c2rust` issue that is a real
+bug with a fix to draft (small, single-root-cause, mechanical-shaped) gets
+dispatched through the gate above as agents free up — don't let idle local
+GPU capacity sit unused while the queue has candidates. NOT every open issue
+qualifies: P4-labeled items in this tracker are so far all investigations /
+known-limitations already closed out with a negative or informational
+result (see #2 concurrency scaling, #3 speedup investigation, #4
+locate_comments profiling, #5 stability-exclusion limitation) — there is no
+fix to draft for those, so don't dispatch Ollama at them; they stay P4/open
+as documented findings, not fix targets. Re-check this list's shape each
+time a new issue lands, since "investigation vs. fixable bug" isn't a
+priority-label distinction (fixable bugs span the same P0-P4 range) and has
+to be judged from the issue body each time.
+
+Dispatched so far: #11 (goto-to-labeled-block lowering, P2, 6/228 files —
+two code paths disagree on a synthesized label's name), #12 (`convert_warn_on`
+emits a stray `as c_int` cast against a `bool`-typed macro parameter, P3,
+1/228 files but recurs at every call site in the affected file). Both are
+the right shape: one clearly-stated root cause, no cross-cutting ambiguity.
 
 ## 2. c2rust-boot-blocker
 
