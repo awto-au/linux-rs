@@ -134,13 +134,11 @@ def main() -> int:
     # Shared with dev.py's boot() via kunit_oracle.verify_kunit_ok — see
     # rulesdb/rules/0028-kunit-boot-oracle-gate.toml. --suite adds an
     # extra, integrate_tu.py-specific requirement (a named suite must be
-    # present) on top of the shared oracle's "not ok" detection. Note:
-    # unlike dev.py's boot(), this preserves integrate_tu.py's original
-    # behavior of NOT independently failing on zero "ok" lines when no
-    # --suite is given (a real gap, but out of scope for this dedup —
-    # see rule 0028's provenance note).
+    # present) on top of the shared oracle's KUnit pass/fail scan.
     passed, ok, bad = verify_kunit_ok(boot_log)
     bad = list(bad)
+    if not passed and not ok:
+        bad.append("no KUnit output found")
     for suite in args.suite:
         if not re.search(rf"^ok \d+ {re.escape(suite)}$", boot_log, re.M):
             bad.append(f"suite missing/failed: {suite}")
