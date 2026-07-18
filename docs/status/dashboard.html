@@ -109,7 +109,7 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-18T10:31:32+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-18T10:40:02+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. Complements
   <a href="STATUS.md">docs/STATUS.md</a> (hand-translation TU/KUnit report) — see that page for the
   30-TU landed-translation timeline and KUnit boot results; this page covers the two-track work queue and the
@@ -277,7 +277,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.9303419418634259">0.9</td>
+        <td data-sort-value="0.9362422371527777">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -286,7 +286,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.8045433307523148">0.8</td>
+        <td data-sort-value="0.8104436260416666">0.8</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -295,7 +295,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.7627956455671296">0.8</td>
+        <td data-sort-value="0.7686959408564814">0.8</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -304,7 +304,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.5274368492708333">0.5</td>
+        <td data-sort-value="0.5333371445601852">0.5</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -349,7 +349,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T23:37:35Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.03747157149305556">0.0</td>
+        <td data-sort-value="0.04337186678240741">0.0</td>
       </tr>
       <tr>
         <td data-sort-value="11">#11</td>
@@ -358,7 +358,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T23:38:17Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.036985460381944446">0.0</td>
+        <td data-sort-value="0.0428857556712963">0.0</td>
       </tr>
       <tr>
         <td data-sort-value="12">#12</td>
@@ -367,7 +367,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T23:39:40Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.0360248122337963">0.0</td>
+        <td data-sort-value="0.04192510752314815">0.0</td>
       </tr>
   </tbody>
 </table>
@@ -375,8 +375,8 @@
 
 <h2>Progress over time</h2>
 <p class="subtitle">Real <code>c2rust_attempts</code> outcome counts, grouped by revision and run timestamp
-  &mdash; latest run (rev 5ebffdef3, 2026-07-18T00:09:29): 226 clean / 0 crash / 326 dropped_decls out of 552 files. 10 distinct baseline runs recorded today across
-  8 c2rust revisions.</p>
+  &mdash; latest run (rev cdc8febf7, 2026-07-18T00:34:30): 226 clean / 0 crash / 326 dropped_decls out of 552 files. 11 distinct baseline runs recorded today across
+  9 c2rust revisions.</p>
 <img class="chart" src="dashboard_progress.png" alt="c2rust transpile outcomes per baseline run">
 
 <h2>Token / cost tracking</h2>
@@ -388,12 +388,12 @@
   As a labeled, honest <em>proxy</em> for "how much wall-clock activity work went into this" (not tokens, not
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
-  2026-07-17T12:26:20 to 2026-07-18T00:09:29 UTC
-  (10 runs). 44 script-invocation logs in tmp/, spanning 2 days, 1:22:28.589784 from 2026-07-16T09:09+10:00 to 2026-07-18T10:31+10:00
+  2026-07-17T12:26:20 to 2026-07-18T00:34:30 UTC
+  (11 runs). 46 script-invocation logs in tmp/, spanning 2 days, 1:30:58.373557 from 2026-07-16T09:09+10:00 to 2026-07-18T10:40+10:00
   <div class="proxy-list">
-    run_c2rust_baseline.log &mdash; 2026-07-18T10:13+10:00<br>c2rust-baseline.log &mdash; 2026-07-18T10:13+10:00<br>check_c2rust_output_compiles.log &mdash; 2026-07-18T10:14+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T10:14+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T10:15+10:00<br>check_c2rust_rule_conformance.log &mdash; 2026-07-18T10:15+10:00<br>integrate_tu.log &mdash; 2026-07-18T10:28+10:00<br>diff_oracle.log &mdash; 2026-07-18T10:29+10:00<br>dev-build.log &mdash; 2026-07-18T10:29+10:00<br>build_initramfs.log &mdash; 2026-07-18T10:29+10:00<br>qemu-boot.log &mdash; 2026-07-18T10:29+10:00<br>dev-boot.log &mdash; 2026-07-18T10:29+10:00<br>readiness.log &mdash; 2026-07-18T10:30+10:00<br>report.log &mdash; 2026-07-18T10:30+10:00<br>build_db.log &mdash; 2026-07-18T10:30+10:00<br>import_cscope.log &mdash; 2026-07-18T10:31+10:00<br>import_sparse.log &mdash; 2026-07-18T10:31+10:00<br>dev.log &mdash; 2026-07-18T10:31+10:00<br>sync_work_items.log &mdash; 2026-07-18T10:31+10:00<br>generate_dashboard.log &mdash; 2026-07-18T10:31+10:00
+    integrate_tu.log &mdash; 2026-07-18T10:28+10:00<br>diff_oracle.log &mdash; 2026-07-18T10:29+10:00<br>build_db.log &mdash; 2026-07-18T10:30+10:00<br>import_cscope.log &mdash; 2026-07-18T10:31+10:00<br>import_sparse.log &mdash; 2026-07-18T10:31+10:00<br>sync_work_items.log &mdash; 2026-07-18T10:31+10:00<br>dev-build.log &mdash; 2026-07-18T10:33+10:00<br>dev-boot.log &mdash; 2026-07-18T10:33+10:00<br>readiness.log &mdash; 2026-07-18T10:33+10:00<br>report.log &mdash; 2026-07-18T10:33+10:00<br>render_boot_log.log &mdash; 2026-07-18T10:36+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T10:38+10:00<br>c2rust-baseline.log &mdash; 2026-07-18T10:38+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T10:38+10:00<br>dev.log &mdash; 2026-07-18T10:38+10:00<br>qemu-boot.log &mdash; 2026-07-18T10:39+10:00<br>build_initramfs.log &mdash; 2026-07-18T10:39+10:00<br>qemu-boot-verify2.log &mdash; 2026-07-18T10:39+10:00<br>check_c2rust_output_compiles.log &mdash; 2026-07-18T10:40+10:00<br>generate_dashboard.log &mdash; 2026-07-18T10:40+10:00
   </div>
-  <em>(most-recent 20 of 44 log files shown; commit/time-based proxy only, not actual token usage)</em>
+  <em>(most-recent 20 of 46 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>
 
 <h2>progress_snapshots (time-series, if &gt;1 row)</h2>
