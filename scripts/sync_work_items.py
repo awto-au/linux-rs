@@ -100,7 +100,7 @@ KERNEL_WORK_ITEMS = [
     },
     {
         "title": "Interactive console milestone — minimal initramfs /init drops to a live sh instead of powering off",
-        "status": "open",
+        "status": "done",
         "priority": "P1",
         "priority_rationale": "Blocks the entire hybrid-boot-backwards stream (docs/streams.md #3): "
                  "working BACKWARDS from a known-good boot-to-console baseline, adding landed "
@@ -111,11 +111,22 @@ KERNEL_WORK_ITEMS = [
                  "run anything today. P1 (not P0) since nothing is currently broken by this gap, "
                  "but it's the single blocking prerequisite for a whole stream, not just one item.",
         "blocks_boot_path": 0,
-        "notes": "Proposed verification once landed: re-run a KUnit suite FROM the live console "
-                 "(debugfs, `/sys/kernel/debug/kunit/<suite>/run` if CONFIG_KUNIT_DEBUGFS is on) "
-                 "rather than only the automatic boot-time run — reuses trusted infrastructure "
-                 "(same suites dev.py check already parses) as real, load-bearing evidence the "
-                 "console is genuinely interactive, not just an ad hoc echo test.",
+        "fixed_by_commit": "linux-rs 72bebc7",
+        "notes": "/init now does a single bounded `read -t 15` on /dev/console after INIT_REACHED: "
+                 "real input hands off to `exec /bin/sh -i` for a genuinely open-ended interactive "
+                 "session (manually verified with a piped `busybox uname -a` that actually executed "
+                 "and returned real output, not just an echoed prompt); no input within 15s falls "
+                 "through to the existing SBI poweroff, so dev.py check still terminates on its own "
+                 "and never hangs. 15s is sized off this project's own fresh-boot timings (well "
+                 "under 1s of wall-clock QEMU time from decompress through all 16 KUnit suites "
+                 "through INIT_REACHED) and stays two orders of magnitude below dev.py's outer 600s "
+                 "subprocess timeout. Re-verified dev.py check after landing: 16/16 KUnit suites, "
+                 "ORACLE PASS, INIT REACHED, plus a real '/ #' prompt now visible in "
+                 "tmp/qemu-boot.log. Re-running a KUnit suite FROM the live console (debugfs, "
+                 "CONFIG_KUNIT_DEBUGFS) remains explicitly deferred to a separate follow-up task, "
+                 "as does generic stdin-piping support in boot_qemu.py itself (this task only "
+                 "proved input reaches the shell via a manual subprocess.Popen test, not a durable "
+                 "script feature) — see docs/streams.md stream 3 for the sequencing.",
     },
     {
         "title": "tmpfs-in-Rust — blocked on missing VFS abstractions, evaluate upstream RFC PR #1037 first",
