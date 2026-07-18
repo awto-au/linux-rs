@@ -98,6 +98,27 @@ linux/       pinned kernel tree (local clone, not committed)
 tmp/         scratch + logs (not committed)
 ```
 
+## Tooling & credits
+
+Besides the Linux kernel and Rust-for-Linux themselves (see [Thesis](#thesis)
+above), this project's pipeline relies on:
+
+- **[c2rust](https://github.com/immunant/c2rust)** ([Immunant](https://immunant.com/)) —
+  the base C→Rust transpiler; this project maintains a fork,
+  [`awtoau/c2rust`](https://github.com/awtoau/c2rust), with fixes for
+  kernel-specific translation gaps (see `docs/status/dashboard.html`'s issue
+  timeline for what's changed and why).
+- **[Ollama](https://ollama.com/)** running local open-weight coder models
+  (tested: [Qwen2.5-Coder](https://github.com/QwenLM/Qwen2.5-Coder) 14B/32B,
+  [DeepSeek-Coder](https://github.com/deepseek-ai/DeepSeek-Coder) 33B) as a
+  first-drafter for small, well-scoped fixes to the c2rust fork — always
+  behind a compiler-retry gate and independent verification before a draft
+  is trusted or merged; never unsupervised (see `docs/streams.md`'s
+  c2rust-breadth stream for the gating discipline and why it's mandatory).
+- **[clang/LLVM](https://llvm.org/)** and **[bindgen](https://github.com/rust-lang/rust-bindgen)** —
+  AST export and FFI binding generation the census/translation tooling is
+  built on.
+
 ## Reproduce
 
 Fedora 44-ish with clang/LLVM 22, bindgen, QEMU. Then:

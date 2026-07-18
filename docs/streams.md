@@ -46,6 +46,16 @@ Required stages, none optional:
    separate numbers.
 4. Only escalate to a paid/independent model review once free gates pass.
 
+**Attribution, mandatory (2026-07-18):** any commit whose draft came from
+an Ollama-run model must credit it — a trailer line naming the tool and
+model (e.g. `Drafted-By: Ollama (qwen2.5-coder:14b)`), in addition to the
+usual `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` for the
+agent that supervised/verified/finished the fix. Both are real
+contributors to the result and both get named — see README.md's
+"Tooling & credits" section for the standing project-level credit
+(Ollama itself, the specific model projects used). Don't let "the agent
+committed it" erase that a local model produced the first draft.
+
 **Standing policy (2026-07-18): keep Ollama fed off the open c2rust-breadth
 queue, not just a one-off.** Every open `awtoau/c2rust` issue that is a real
 bug with a fix to draft (small, single-root-cause, mechanical-shaped) gets
