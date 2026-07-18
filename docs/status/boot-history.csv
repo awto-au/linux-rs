@@ -54,3 +54,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-18T14:47:15+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T144715+1000-default.log
 2026-07-18T14:51:55+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T145155+1000-default.log
 2026-07-18T14:53:41+10:00,tierc-c-1,17,0,1,0,docs/status/boot-logs/20260718T145341+1000-tierc-c-1.log
+2026-07-18T14:54:02+10:00,tierc-c-2,17,0,1,0,docs/status/boot-logs/20260718T145402+1000-tierc-c-2.log
