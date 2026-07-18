@@ -253,6 +253,51 @@ CREATE TABLE c2rust_compile_outcomes (
 CREATE INDEX idx_c2rust_compile_outcomes_rev ON c2rust_compile_outcomes(c2rust_rev);
 CREATE INDEX idx_c2rust_compile_outcomes_run_at ON c2rust_compile_outcomes(run_at);
 
+-- Per-file clippy outcomes for each c2rust_rev — populated by
+-- scripts/check_c2rust_output_clippy.py, one row per (rs_file, run).
+-- Mirrors c2rust_compile_outcomes' shape/rev-tagging discipline so
+-- c2rust_regression_check.py can diff these rev-over-rev the same way,
+-- but clippy warnings are individually interesting (lint name, span),
+-- not just a pass/fail outcome, so each warning gets its own row rather
+-- than a single count column — a file with 0 rows here at a given
+-- (c2rust_rev, run_at) is a file that lint-checked clean, not a file
+-- that was never checked (see checked_files/checked_at columns below
+-- for that distinction, same "run happened but found nothing" problem
+-- c2rust_decl_outcomes solves for translated decls).
+CREATE TABLE c2rust_clippy_outcomes (
+    id INTEGER PRIMARY KEY,
+    c2rust_rev TEXT NOT NULL,    -- awtoau/c2rust git rev clippy-checked
+    run_at TEXT NOT NULL,        -- ISO 8601, when this clippy run happened
+    rs_file TEXT NOT NULL,       -- path of .rs file (relative to REPO root)
+    lint_name TEXT NOT NULL,     -- e.g. 'clippy::needless_return', or
+                                  -- 'compile_error' for a file that didn't
+                                  -- reach the lint stage (SVH mismatch etc)
+    level TEXT NOT NULL,         -- 'warning' | 'error'
+    message TEXT NOT NULL,       -- clippy's rendered message, first line
+    line INTEGER,                -- 1-based source line, if clippy gave a span
+    col INTEGER                  -- 1-based source column, if clippy gave a span
+);
+CREATE INDEX idx_c2rust_clippy_outcomes_rev ON c2rust_clippy_outcomes(c2rust_rev);
+CREATE INDEX idx_c2rust_clippy_outcomes_run_at ON c2rust_clippy_outcomes(run_at);
+CREATE INDEX idx_c2rust_clippy_outcomes_lint ON c2rust_clippy_outcomes(lint_name);
+CREATE INDEX idx_c2rust_clippy_outcomes_rsfile ON c2rust_clippy_outcomes(rs_file);
+
+-- Which files were actually clippy-checked in a given run (independent
+-- of how many warnings they produced — a clean file has 0 rows in
+-- c2rust_clippy_outcomes above but must still show up as "checked" for
+-- summary/regression purposes, same reasoning as c2rust_compile_outcomes
+-- recording 'ok' explicitly rather than only ever recording errors).
+CREATE TABLE c2rust_clippy_runs (
+    id INTEGER PRIMARY KEY,
+    c2rust_rev TEXT NOT NULL,
+    run_at TEXT NOT NULL,
+    rs_file TEXT NOT NULL,
+    warning_count INTEGER NOT NULL,  -- rows in c2rust_clippy_outcomes for this (rev, run_at, rs_file)
+    outcome TEXT NOT NULL            -- 'ok' (ran, 0+ warnings) | 'error' | 'timeout'
+);
+CREATE INDEX idx_c2rust_clippy_runs_rev ON c2rust_clippy_runs(c2rust_rev);
+CREATE INDEX idx_c2rust_clippy_runs_run_at ON c2rust_clippy_runs(run_at);
+
 -- Upstream immunant/c2rust intel: forks, issues, PRs — so before writing
 -- our own fix we can check "has someone already solved this" in one
 -- query instead of manually re-searching GitHub every time (2026-07-17:

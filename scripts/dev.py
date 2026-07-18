@@ -17,6 +17,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py c2rust-build [--fork-dir DIR]   # full workspace build + verify every binary the dispatcher needs is fresh
   dev.py c2rust-baseline [--limit N]     # full-corpus c2rust triage -> patterns.db directly
   dev.py c2rust-regress BEFORE AFTER [--file-issue]  # per-decl regression diff between 2 baselined revs
+  dev.py c2rust-clippy [--limit N]       # clippy-check c2rust clean outputs -> patterns.db
   dev.py db                     # rebuild rulesdb/patterns.db (ephemeral, rebuild-not-migrate)
   dev.py q <subcommand> ...     # quick SQL checks against patterns.db (see query_db.py --help)
   dev.py patch N                # format-patch HEAD -> patches/ start-number N
@@ -204,6 +205,13 @@ def main() -> int:
         # why file-level outcomes (clean/dropped_decls) are too noisy to
         # gate on directly.
         sh(["python3", str(S / "c2rust_regression_check.py"), *rest], quiet_ok=False)
+    elif cmd == "c2rust-clippy":
+        # Second quality gate on top of c2rust-build's plain rustc
+        # compile-check (check_c2rust_output_compiles.py) — same
+        # kernel-toolchain-linked rmeta approach, clippy-driver in place
+        # of rustc. See check_c2rust_output_clippy.py's module doc for
+        # the SVH-mismatch pitfall this avoids.
+        sh(["python3", str(S / "check_c2rust_output_clippy.py"), *rest], quiet_ok=False)
     elif cmd == "db":
         sh(["python3", str(S / "build_db.py")], quiet_ok=False)
         sh(["python3", str(S / "import_cscope.py")], quiet_ok=False)

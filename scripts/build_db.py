@@ -208,6 +208,8 @@ def main() -> int:
         "c2rust_failure_signatures",
         "c2rust_decl_outcomes",
         "c2rust_compile_outcomes",
+        "c2rust_clippy_outcomes",
+        "c2rust_clippy_runs",
         "c2rust_forks",
         "c2rust_issues",
         "c2rust_fix_patterns",
