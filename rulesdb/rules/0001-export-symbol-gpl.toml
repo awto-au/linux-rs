@@ -23,3 +23,14 @@ instances = ["lib/math/gcd.c:gcd"]
 oracle = "tier4"
 negative = ["EXPORT_SYMBOL (non-GPL) — needs review before this rule applies", "fn called via vtable/function pointer — export macro documented as wrong there"]
 human_review = false
+
+# Licensing note (issue #1, 2026-07-18): the "all Rust symbols are
+# auto-EXPORT_SYMBOL_GPL" deviation above silently upgrades any plain
+# EXPORT_SYMBOL (non-GPL) C original to EXPORT_SYMBOL_GPL when translated.
+# This is licence-inert today only because CONFIG_MODULES is not set
+# (confirmed: `# CONFIG_MODULES is not set` in linux-riscv/.config as of
+# 2026-07-18) — with no loadable modules, EXPORT_SYMBOL vs _GPL has no
+# runtime effect. Revisit before enabling CONFIG_MODULES: any translated
+# symbol whose C original used plain EXPORT_SYMBOL needs to keep that
+# non-GPL export (not silently tighten it), or the tightening needs to be
+# a deliberate, reviewed decision rather than a macro side effect.
