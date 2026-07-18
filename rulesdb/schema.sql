@@ -293,6 +293,33 @@ CREATE INDEX idx_c2rust_issues_repo ON c2rust_issues(repo);
 CREATE INDEX idx_c2rust_issues_state ON c2rust_issues(state);
 CREATE INDEX idx_c2rust_issues_ispr ON c2rust_issues(is_pr);
 
+-- One row per c2rust bug root-cause SHAPE, hand-curated from closed
+-- awtoau/c2rust issues -- exists so a future triage/dispatch can query
+-- "have we seen a failure signature/AST node kind like this before" and
+-- get a real fix-location pointer instead of re-deriving the whole
+-- investigation method from scratch every time (found 2026-07-18: 11
+-- closed c2rust issues, each independently traced, no queryable record
+-- of the accumulated method). Hand-curated, not auto-populated from
+-- issue bodies -- the useful part is the classification judgement
+-- (which layer, which AST node kind), not the raw text (c2rust_issues.
+-- body already has that).
+CREATE TABLE c2rust_fix_patterns (
+    id INTEGER PRIMARY KEY,
+    issue_repo TEXT NOT NULL,      -- "owner/repo", e.g. "awtoau/c2rust"
+    issue_number INTEGER NOT NULL,
+    layer TEXT NOT NULL,           -- ast-exporter | c_ast | cfg | translator | multiple
+    fix_files TEXT NOT NULL,       -- comma-joined relative paths within the c2rust repo
+    ast_node_kind TEXT,            -- e.g. "FileScopeAsmDecl", "TagImplicitCastExpr" -- NULL if not AST-node-specific
+    failure_signature_pattern TEXT NOT NULL,  -- a substring/regex-ish description matching c2rust_failure_signatures.detail or the raw warning/error text, for lookup
+    root_cause_summary TEXT NOT NULL,
+    fix_summary TEXT NOT NULL,
+    files_affected_at_discovery INTEGER,  -- how many corpus files hit this, when found -- a breadth signal for future prioritisation
+    status TEXT NOT NULL DEFAULT 'fixed',  -- fixed | open | wontfix
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_c2rust_fixpat_layer ON c2rust_fix_patterns(layer);
+CREATE INDEX idx_c2rust_fixpat_node ON c2rust_fix_patterns(ast_node_kind);
+
 -- FTS5 full-text index over issue/PR title+body — the actual "check for
 -- existing code before we write our own" search surface (e.g. MATCH
 -- '"address of label" OR TagTypeUnknown OR AddrLabelExpr').

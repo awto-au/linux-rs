@@ -210,6 +210,7 @@ def main() -> int:
         "c2rust_compile_outcomes",
         "c2rust_forks",
         "c2rust_issues",
+        "c2rust_fix_patterns",
         "c2rust_rule_conformance",
         "progress_snapshots",
         "doc_sources",
