@@ -417,12 +417,25 @@ def c_top_level_functions(c_path):
     return names
 
 
+# Attributes c2rust emits directly above a translated top-level function
+# of the target TU (header-inline pulls-in get neither). #[export] was
+# added 2026-07-18 (awtoau/c2rust#19: EXPORT_SYMBOL_GPL functions now get
+# #[export] instead of always #[no_mangle]) — rs_translated_functions()
+# below silently stopped recognizing every #[export]-tagged function as
+# translated at all until this was added, producing a false ~1341-decl
+# "regression" (c2rust_regression_check.py) where nothing had actually
+# regressed; the functions were right there in the output, just under an
+# attribute this detector didn't know about yet. Any future c2rust
+# kernel-idiom rule that changes which attribute gets emitted needs a
+# matching update here.
+OWN_TU_FN_ATTRS = ("#[no_mangle]", "#[export]")
+
+
 def rs_translated_functions(rs_path):
     """Enumerate function names c2rust actually emitted for THIS file's
-    own decls — identified by the #[no_mangle] attribute immediately
+    own decls — identified by one of OWN_TU_FN_ATTRS immediately
     preceding `fn <name>(`, which c2rust only emits for the target TU's
-    own top-level functions (header-inline pulls-in have no #[no_mangle]).
-    """
+    own top-level functions."""
     if not rs_path.exists():
         return set()
     try:
@@ -431,7 +444,7 @@ def rs_translated_functions(rs_path):
         return set()
     names = set()
     for i, line in enumerate(lines):
-        if line.strip() == "#[no_mangle]":
+        if line.strip() in OWN_TU_FN_ATTRS:
             for j in range(i + 1, min(i + 4, len(lines))):
                 m = NO_MANGLE_FN_RE.match(lines[j])
                 if m:
