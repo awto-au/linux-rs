@@ -1,5 +1,6 @@
 /linux/
 /linux-riscv/
+/linux-riscv-worktrees/
 /tmp/
 __pycache__/
 target/
