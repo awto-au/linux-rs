@@ -165,6 +165,10 @@ EXCEPTIONS = {
     # docs/8250-tier-c-startup-shutdown-2026-07-18.md and
     # awto-au/linux-rs#25.
     "drivers/tty/serial/8250/8250_startup_rs.rs": "drivers/tty/serial/8250/8250_port.c",
+    # Tier C (serial8250_handle_irq_locked control flow) — same source file
+    # as Tier A/B/C above, see docs/8250-tier-c-irq-2026-07-18.md and
+    # awto-au/linux-rs#25.
+    "drivers/tty/serial/8250/8250_irq_rs.rs": "drivers/tty/serial/8250/8250_port.c",
 }
 
 
