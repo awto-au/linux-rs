@@ -98,6 +98,41 @@ KERNEL_WORK_ITEMS = [
                  "`kernel` crate abstractions (only standalone no_std bare-metal crates like "
                  "uart_16550/ns16550a exist, unrelated to this project's translation approach).",
     },
+    {
+        "title": "tmpfs-in-Rust — blocked on missing VFS abstractions, evaluate upstream RFC PR #1037 first",
+        "status": "open",
+        "priority": "P3",
+        "priority_rationale": "Not a translation TU today — scoping confirmed this project's vendored "
+                 "`rust/kernel/` has ZERO VFS filesystem-registration abstractions (no SuperBlock, "
+                 "Inode, Dentry, address_space, file_system_type, register_filesystem; fs.rs is 11 "
+                 "lines covering only already-open File/Kiocb). A Rust tmpfs has nowhere to attach "
+                 "regardless of translation quality. CONFIG_SHMEM is also unset in .config. Below "
+                 "8250 (P2, which has a real struct uart_ops attachment point today) and c2rust "
+                 "fixes. Not P4 because the recommended next step (attempt rebasing upstream RFC "
+                 "PR #1037 onto this project's HEAD in an isolated branch) is a concrete, boundable, "
+                 "single-session evaluation, not indefinitely blocked — PR #1037's base commit "
+                 "(43a393185e33) turned out to be a direct git ancestor of this project's current "
+                 "linux-riscv HEAD (~1 month back), a much better starting position than assumed, "
+                 "which makes this more tractable than a generic 'wait for upstream' P4.",
+        "blocks_boot_path": 0,
+        "notes": "Three options assessed in docs/tmpfs-rust-scoping-2026-07-18.md: (a) write VFS "
+                 "abstractions (SuperBlock/Inode/Dentry/AddressSpace/file_system_type) into "
+                 "rust/kernel/ from scratch — rejected as a first move, kernel-architecture-level "
+                 "work that upstream's own RFC hasn't finished in ~3 years; (b) adapt unmerged "
+                 "upstream Rust-for-Linux PR #1037 ('vfs abstractions and tarfs', open since "
+                 "2023-09-29, still just a draft against rust-next, last rebased 2026-06-16) — "
+                 "RECOMMENDED first step, scoped as 'attempt a mechanical rebase onto this "
+                 "project's HEAD in an isolated branch, report conflict size' rather than a full "
+                 "port; PR adds rust/kernel/fs.rs (+1290 lines), folio.rs (+214, new), "
+                 "fs/buffer.rs (+60, new), mem_cache.rs (+62, new), plus a worked tarfs example "
+                 "(fs/tarfs/, +426 lines) and a simpler rust_rofs sample (+154) — none of these "
+                 "paths exist in this project's tree today; (c) standalone not-yet-integrated "
+                 "translation of mm/shmem.c (5963 lines, ~197 top-level functions, 641 hits for "
+                 "swap_/struct inode/struct address_space/folio — heavily entangled with core mm, "
+                 "not a lib/-style pure-function file) — deferred, needs its own 8250-style "
+                 "function-tiering scoping pass before being a real candidate, not pre-scoped by "
+                 "this doc. No code written or linux-riscv/ changes made in this scoping pass.",
+    },
 ]
 
 
