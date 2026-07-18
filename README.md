@@ -76,28 +76,16 @@ target ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)).
 **Live dashboard: [docs/STATUS.md](docs/STATUS.md)** — graphs + tables
 regenerated on every validated boot (`dev.py check`); **two-track
 dashboard: [docs/status/dashboard.html](docs/status/dashboard.html)** adds
-the work-item queue and `awtoau/c2rust` fork timeline. The table below is a
-curated highlight reel, not exhaustive — see `docs/` for the full set of
-phase/scoping/research reports as they land.
+the work-item queue and `awtoau/c2rust` fork timeline. Full milestone log:
+**[docs/HISTORY.md](docs/HISTORY.md)**. Most recent:
 
 | Date | Milestone |
 |---|---|
-| 2026-07-16 | Phase 0 complete: kernel v7.1 pinned, x86_64 defconfig+RUST, LLVM=1 build + QEMU boot verified, Rust-for-Linux working, coccinelle/c2rust evaluated ([docs/phase0-evals.md](docs/phase0-evals.md)) |
-| 2026-07-16 | Phase 1 v0 census: 85,773 functions fingerprinted in 76 s. Whole functions do **not** collapse (8.4%); external call vocabulary does (top-2000 APIs cover 51% of functions' call surface) ([docs/phase1-census-v0.md](docs/phase1-census-v0.md)) |
-| 2026-07-16 | **Phase 1 v1 census — GATE: GO.** 1.44M statement instances → 199 families cover 50%, 15 cover 25% ([docs/phase1-census-v1.md](docs/phase1-census-v1.md)) |
-| 2026-07-16 | **Phase 1 v2: tail is cheap composition.** Singleton statements have median **2** novel glue nodes; 91% of their AST is already-common subtrees ([docs/phase1-census-v2-composition.md](docs/phase1-census-v2-composition.md)) |
-| 2026-07-16 | Phase 2 re-scoped: minimal **riscv64** boot path; corpus measured at **511 TUs (~16% of lab)**, slim-serial kernel **boots in QEMU** ([docs/phase2-minimal-target.md](docs/phase2-minimal-target.md)) |
-| 2026-07-16 | **Correctness review → census v1.1/v2.1.** Macro-internal inflation, brace bias, type erasure fixed. Corrected gate: **26 families = 25%, 713 = 50%** of 1.06M statements — GO stands; tail: median **1** non-root glue node ([docs/review-findings-2026-07-16.md](docs/review-findings-2026-07-16.md)) |
-| 2026-07-16 | Reference corpus added: Asterinas, Moss, Kerla, linux-0.11-rs, rCore as target-design evidence ([docs/reference-projects.md](docs/reference-projects.md)) |
-| 2026-07-16 | **First translated TU running in the kernel.** `lib/math/gcd.c` → Rust, in-tree on the riscv64 target, all 11 KUnit vectors pass on the booted kernel — including the static-key fallback path a naive translation would have dropped. 5 rules extracted ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)) |
-| 2026-07-16 | **Batch 3 (readiness-ranked): rational, bcd, hweight — 9 Rust TUs, all suites green.** The transfer metric works: after 6 TUs, hweight/bcd were 100% in-vocabulary, rational 96.8% (`scripts/readiness.py`, patches/0004) |
-| 2026-07-16 | **First tier-2 TU: `lib/sort.c` heapsort in Rust — `ok 11 lib_sort` on the booted kernel.** Sentinel fn-pointers, raw `void*` arithmetic, callback dispatch, `cond_resched` C shim; rules 0012–0014 (patches/0003) |
-| 2026-07-16 | **Batch 2: five Rust TUs in the booted kernel, 58/58 KUnit vectors.** lcm/int_log/int_pow/int_sqrt; first Rust→Rust cross-TU call; rules 0006–0010. Benchmark: **faithful Rust ≡ C** at equal opt level; `isqrt` optimised lane 2.1× — but "idiomatic" gcd 2× slower, so per-function measurement gates the lane ([docs/phase2-batch2-and-bench.md](docs/phase2-batch2-and-bench.md)) |
-| 2026-07-17 | `awtoau/c2rust` transpiler fork adopted as a second, faster-but-lower-confidence track alongside hand-translation; systematic Clang-AST-consumption bugs found and fixed upstream in the fork (issue tracking in `rulesdb/patterns.db`'s `c2rust_*` tables) |
-| 2026-07-18 | **30 hand-translated TUs, 15 KUnit suites green.** Batches 18–30 (find_bit, cmdline, checksum, decompress, earlycpio, hexdump, div64, parser, string, bitmap, kstrtox, bitmap-str) landed; c2rust track adds real `rustc --emit=metadata` compile-checking against the kernel's own `libcore`, not just transpile-clean status ([docs/status/session-report-2026-07-18.md](docs/status/session-report-2026-07-18.md)) |
-| 2026-07-18 | **Hybrid boot-path milestone: first Rust code in a live device driver**, not a whole-file `lib/` swap — `8250_port.c`'s `serial8250_compute_lcr()` now calls a Rust implementation under `CONFIG_RUST`, verified boot-clean with the Rust symbol present in `vmlinux` ([docs/hybrid-boot-milestone-2026-07-18.md](docs/hybrid-boot-milestone-2026-07-18.md), scoping: [docs/serial-8250-translation-scoping-2026-07-18.md](docs/serial-8250-translation-scoping-2026-07-18.md)) |
-| 2026-07-18 | tmpfs-in-Rust scoped and found **blocked**: the vendored `rust/kernel/fs.rs` has no VFS filesystem-registration abstractions to attach a Rust tmpfs to — a harder gap than any TU landed so far ([docs/tmpfs-rust-scoping-2026-07-18.md](docs/tmpfs-rust-scoping-2026-07-18.md)) |
-| 2026-07-18 | 32 TUs, 16 KUnit suites / 143 vectors green (`iomem_copy`, TU 32); two-track work-item dashboard added ([docs/status/dashboard.html](docs/status/dashboard.html)) |
+| 2026-07-18 | Kernel-track work items moved from hand-curated DB rows to real GitHub issues — both tracks now sync from real issue trackers, not memory |
+| 2026-07-18 | Boot-log history system: every boot archived, diffable, browsable, auto-committed+pushed |
+| 2026-07-18 | Interactive console milestone: minimal initramfs `/init` drops to a live `sh` prompt, verified genuinely interactive |
+| 2026-07-18 | **Hybrid boot-path milestone: first Rust code in a live device driver** — `8250_port.c`'s `serial8250_compute_lcr()` now calls Rust under `CONFIG_RUST` ([docs/hybrid-boot-milestone-2026-07-18.md](docs/hybrid-boot-milestone-2026-07-18.md)) |
+| 2026-07-18 | 32 TUs, 16 KUnit suites / 143 vectors green; two-track work-item dashboard added |
 
 ## Layout
 

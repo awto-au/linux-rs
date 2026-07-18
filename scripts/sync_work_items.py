@@ -4,8 +4,12 @@
 index of what needs doing across both tracks (hand-translation in
 linux-riscv/, the awtoau/c2rust fork) — from real sources of truth:
 c2rust_issues (crawled from GitHub via crawl_c2rust_upstream.py --repo
-awtoau/c2rust) for the c2rust track, and hand-curated entries for
-kernel-track work that has no GitHub issue tracker of its own.
+<repo>, for BOTH awtoau/c2rust and awto-au/linux-rs — the table name is
+legacy, it holds issues from any crawled repo). KERNEL_WORK_ITEMS below
+is now only for already-closed historical items that predate
+awto-au/linux-rs issue tracking (added 2026-07-18) — do not add new
+open items there; open a real GitHub issue instead so kernel-track work
+gets the same durability/visibility as c2rust-track work.
 
 work_items is an INDEX, not the handoff mechanism — actual work still
 happens via real GitHub issues/PRs (an agent, Copilot, or a person
@@ -13,13 +17,15 @@ picks one up and opens a real commit). This just answers "what should
 be worked on next" in one query instead of scanning multiple trackers.
 
 Usage: sync_work_items.py
-Inputs: rulesdb/patterns.db's c2rust_issues (run crawl_c2rust_upstream.py
-        --repo awtoau/c2rust first if stale)
+Inputs: rulesdb/patterns.db's c2rust_issues (run
+        crawl_c2rust_upstream.py --repo awtoau/c2rust and --repo
+        awto-au/linux-rs first if stale)
 Output: rulesdb/patterns.db's work_items table
 Log: tmp/sync_work_items.log
 """
 import logging
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -68,37 +74,6 @@ KERNEL_WORK_ITEMS = [
                  "logic started relying on the saturation contract.",
     },
     {
-        "title": "8250/16550 serial driver translation — first slice: register helpers",
-        "status": "open",
-        "priority": "P2",
-        "priority_rationale": "Real device-driver TU (first of its kind — all 30 landed TUs are "
-                 "lib/-style pure functions), and unusually high-stakes: 8250 is the live console "
-                 "driver this project's ENTIRE verification methodology depends on reading "
-                 "(dev.py check parses QEMU serial output for KUnit results). A subtly-wrong "
-                 "translation could boot yet corrupt/drop console output, silently invalidating "
-                 "the test harness itself. Not urgent (console works fine in C today, nothing is "
-                 "broken) but high-value as the next ambitious hand-translation target once "
-                 "picked up — hence P2, not P0/P1. Scoped narrowly on purpose: first slice is "
-                 "serial8250_compute_lcr / fcr_get_rxtrig_bytes / bytes_to_fcr_rxtrig only (pure, "
-                 "control-flow-simple, zero register I/O), verified via diff-oracle "
-                 "(bench/diff_8250_helpers.{c,rs}, already landed and passing byte-identical over "
-                 "7500 cases) and NOT wired into the live boot path in this first slice. See "
-                 "docs/serial-8250-translation-scoping-2026-07-18.md for full driver-structure "
-                 "analysis, risk assessment, and the staged plan for eventually reaching the live "
-                 "console path.",
-        "blocks_boot_path": 0,
-        "notes": "drivers/tty/serial/8250/8250_port.c is 3472 lines (vs a few hundred for the "
-                 "largest lib/ TU so far) — monolithic translation is not realistically scoped "
-                 "for one pass. Scoping doc breaks it into: (1) pure register-bit helpers [this "
-                 "item, oracle already passing], (2) serial_in/out register-access shims "
-                 "[unsafe MMIO, testable only via KUnit not diff-oracle], (3) startup/shutdown/ "
-                 "termios control flow [high complexity, high risk], (4) IRQ handling + tty core "
-                 "integration [out of scope indefinitely — framework plumbing, not 16550-specific]. "
-                 "No Rust-for-Linux prior art found for an in-kernel 8250/ns16550 driver using the "
-                 "`kernel` crate abstractions (only standalone no_std bare-metal crates like "
-                 "uart_16550/ns16550a exist, unrelated to this project's translation approach).",
-    },
-    {
         "title": "Interactive console milestone — minimal initramfs /init drops to a live sh instead of powering off",
         "status": "done",
         "priority": "P1",
@@ -127,41 +102,6 @@ KERNEL_WORK_ITEMS = [
                  "as does generic stdin-piping support in boot_qemu.py itself (this task only "
                  "proved input reaches the shell via a manual subprocess.Popen test, not a durable "
                  "script feature) — see docs/streams.md stream 3 for the sequencing.",
-    },
-    {
-        "title": "tmpfs-in-Rust — blocked on missing VFS abstractions, evaluate upstream RFC PR #1037 first",
-        "status": "open",
-        "priority": "P3",
-        "priority_rationale": "Not a translation TU today — scoping confirmed this project's vendored "
-                 "`rust/kernel/` has ZERO VFS filesystem-registration abstractions (no SuperBlock, "
-                 "Inode, Dentry, address_space, file_system_type, register_filesystem; fs.rs is 11 "
-                 "lines covering only already-open File/Kiocb). A Rust tmpfs has nowhere to attach "
-                 "regardless of translation quality. CONFIG_SHMEM is also unset in .config. Below "
-                 "8250 (P2, which has a real struct uart_ops attachment point today) and c2rust "
-                 "fixes. Not P4 because the recommended next step (attempt rebasing upstream RFC "
-                 "PR #1037 onto this project's HEAD in an isolated branch) is a concrete, boundable, "
-                 "single-session evaluation, not indefinitely blocked — PR #1037's base commit "
-                 "(43a393185e33) turned out to be a direct git ancestor of this project's current "
-                 "linux-riscv HEAD (~1 month back), a much better starting position than assumed, "
-                 "which makes this more tractable than a generic 'wait for upstream' P4.",
-        "blocks_boot_path": 0,
-        "notes": "Three options assessed in docs/tmpfs-rust-scoping-2026-07-18.md: (a) write VFS "
-                 "abstractions (SuperBlock/Inode/Dentry/AddressSpace/file_system_type) into "
-                 "rust/kernel/ from scratch — rejected as a first move, kernel-architecture-level "
-                 "work that upstream's own RFC hasn't finished in ~3 years; (b) adapt unmerged "
-                 "upstream Rust-for-Linux PR #1037 ('vfs abstractions and tarfs', open since "
-                 "2023-09-29, still just a draft against rust-next, last rebased 2026-06-16) — "
-                 "RECOMMENDED first step, scoped as 'attempt a mechanical rebase onto this "
-                 "project's HEAD in an isolated branch, report conflict size' rather than a full "
-                 "port; PR adds rust/kernel/fs.rs (+1290 lines), folio.rs (+214, new), "
-                 "fs/buffer.rs (+60, new), mem_cache.rs (+62, new), plus a worked tarfs example "
-                 "(fs/tarfs/, +426 lines) and a simpler rust_rofs sample (+154) — none of these "
-                 "paths exist in this project's tree today; (c) standalone not-yet-integrated "
-                 "translation of mm/shmem.c (5963 lines, ~197 top-level functions, 641 hits for "
-                 "swap_/struct inode/struct address_space/folio — heavily entangled with core mm, "
-                 "not a lib/-style pure-function file) — deferred, needs its own 8250-style "
-                 "function-tiering scoping pass before being a real candidate, not pre-scoped by "
-                 "this doc. No code written or linux-riscv/ changes made in this scoping pass.",
     },
     {
         "title": "target_compile_test.py — cross-compile+riscv64-execute oracle for candidate .rs files",
@@ -198,18 +138,41 @@ KERNEL_WORK_ITEMS = [
 ]
 
 
-def sync_from_c2rust_issues(conn):
-    """One work_item per open-or-recently-closed awtoau/c2rust issue,
+def sync_from_issues(conn, repo, track):
+    """One work_item per open-or-recently-closed GitHub issue in `repo`,
     matched on (repo, issue_number) so re-running updates rather than
     duplicates. Priority comes from the real GitHub label (P0-P4) —
     this is the denormalized copy, kept in sync here, not the source
-    of truth (the GitHub label is)."""
+    of truth (the GitHub label is). Requires crawl_c2rust_upstream.py
+    --repo <repo> to have populated c2rust_issues for this repo first
+    (the table name is legacy — it holds issues from any crawled repo,
+    not just awtoau/c2rust).
+
+    Used for BOTH tracks: awtoau/c2rust issues (track='c2rust') and
+    awto-au/linux-rs issues (track='kernel') — kernel-track work used to
+    be hand-curated only in KERNEL_WORK_ITEMS below with no real issue
+    tracker backing it, which meant it could silently drift out of sync
+    with reality (found 2026-07-18: an item's rationale claimed a
+    translation wasn't wired into the boot path when it actually already
+    was). Real GitHub issues are the source of truth for both tracks now;
+    KERNEL_WORK_ITEMS is kept only for already-closed historical items
+    that predate awto-au/linux-rs issue tracking.
+
+    Returns (count, newly_closed) — newly_closed is every issue whose
+    status flipped open->done since the last sync (detected by comparing
+    against work_items' own previous status, not by tracking a separate
+    "last seen" file), for the caller to append to docs/HISTORY.md via
+    scripts/append_history.py. This is the "automatically updated via gh
+    issue closing" path — no hand-editing HISTORY.md for routine issue
+    closures."""
     rows = conn.execute(
-        "SELECT number, title, state, labels, html_url FROM c2rust_issues "
-        "WHERE repo='awtoau/c2rust' AND is_pr=0"
+        "SELECT number, title, state, labels, html_url, closed_at FROM c2rust_issues "
+        "WHERE repo=? AND is_pr=0",
+        (repo,),
     ).fetchall()
     n = 0
-    for number, title, state, labels, html_url in rows:
+    newly_closed = []
+    for number, title, state, labels, html_url, closed_at in rows:
         priority = None
         for label in (labels or "").split(","):
             label = label.strip()
@@ -217,24 +180,27 @@ def sync_from_c2rust_issues(conn):
                 priority = label
         status = "done" if state == "closed" else "open"
         existing = conn.execute(
-            "SELECT id FROM work_items WHERE repo=? AND issue_number=?",
-            ("awtoau/c2rust", number),
+            "SELECT id, status FROM work_items WHERE repo=? AND issue_number=?",
+            (repo, number),
         ).fetchone()
         if existing:
+            prev_status = existing[1]
             conn.execute(
                 "UPDATE work_items SET title=?, priority=?, status=?, updated_at=datetime('now') "
                 "WHERE id=?",
                 (title, priority, status, existing[0]),
             )
+            if status == "done" and prev_status != "done":
+                newly_closed.append((title, repo, number, closed_at))
         else:
             conn.execute(
                 "INSERT INTO work_items (track, title, repo, issue_number, priority, status, "
-                "created_at, updated_at) VALUES ('c2rust', ?, 'awtoau/c2rust', ?, ?, ?, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, "
                 "datetime('now'), datetime('now'))",
-                (title, number, priority, status),
+                (track, title, repo, number, priority, status),
             )
         n += 1
-    return n
+    return n, newly_closed
 
 
 def sync_kernel_items(conn):
@@ -276,8 +242,9 @@ def main():
         return 1
 
     conn = sqlite3.connect(DB)
-    n_c2rust = sync_from_c2rust_issues(conn)
-    n_kernel = sync_kernel_items(conn)
+    n_c2rust, closed_c2rust = sync_from_issues(conn, "awtoau/c2rust", "c2rust")
+    n_kernel_issues, closed_kernel = sync_from_issues(conn, "awto-au/linux-rs", "kernel")
+    n_kernel = sync_kernel_items(conn) + n_kernel_issues
     conn.commit()
 
     active = conn.execute(
@@ -289,7 +256,16 @@ def main():
     logging.info("top of work_items_active:")
     for track, priority, title in active:
         logging.info("  [%s/%s] %s", track, priority, title[:80])
-    print(f"SYNC OK: {n_c2rust} c2rust + {n_kernel} kernel work items")
+
+    for title, repo, number, closed_at in closed_c2rust + closed_kernel:
+        date = (closed_at or "")[:10] or "unknown-date"
+        milestone = f"Closed {repo}#{number}: {title}"
+        subprocess.run([sys.executable, str(REPO / "scripts" / "append_history.py"),
+                         date, milestone], check=False)
+        logging.info("history: appended closure of %s#%s", repo, number)
+
+    print(f"SYNC OK: {n_c2rust} c2rust + {n_kernel} kernel work items, "
+          f"{len(closed_c2rust) + len(closed_kernel)} newly-closed issues logged to HISTORY.md")
     return 0
 
 

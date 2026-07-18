@@ -27,6 +27,30 @@ regress. Both checked before an issue is closed.
 Landed so far (2026-07-17/18): issues #1, #6, #7, #8, #9, #10 — see
 `gh issue list --repo awtoau/c2rust --state closed`.
 
+**Ollama offload for small/mechanical fixes (2026-07-18):** local coder
+models (via Ollama, this machine's RTX 5060 Ti) are a viable *first-drafter*
+for well-scoped, single-root-cause c2rust bugs — but ONLY behind a
+multi-stage gate. Confirmed by real testing this session (not synthetic):
+"compiles clean" is necessary, never sufficient — a model will silently
+substitute a simpler/wrong implementation that still passes rustc+clippy.
+Required stages, none optional:
+1. Draft with a local coder model (tested: `qwen2.5-coder:14b`; this host
+   also has `qwen2.5-coder:32b`, `deepseek-coder:33b`, `codellama:34b` for
+   harder cases).
+2. Free compiler-retry gate: rustc + clippy, feed the exact diagnostic back
+   for a fix-only retry, repeat up to N rounds (`scripts/offload_cycle.py`
+   pattern). This reliably converges to *compiling* code.
+3. Real diff-oracle or independent content review before trusting the
+   result — the gap free compiler gates cannot close. A rustc/clippy pass
+   is not evidence of correctness; report pass-rate and correctness-rate as
+   separate numbers.
+4. Only escalate to a paid/independent model review once free gates pass.
+
+Good first candidate: issue #11 (goto-to-labeled-block lowering, P2,
+6/228 files, one clearly-stated root cause — two code paths disagree on a
+synthesized label's name). Small, localized, single-cause bugs like this
+are the right shape for this pipeline; broad/ambiguous bugs are not.
+
 ## 2. c2rust-boot-blocker
 
 **Goal:** get real Rust code (hand-translated or c2rust-transpiled) actually
