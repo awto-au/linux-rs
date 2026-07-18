@@ -58,7 +58,7 @@ evidence = [
 ]
 
 [validation]
-instances = ["dev.py check: 16/16 KUnit suites, INIT REACHED (post-extraction verification, 2026-07-18)"]
+instances = ["dev.py check: 16/16 KUnit suites, INIT REACHED (post-extraction verification, 2026-07-18)", "dev.py check post-strncpy_from_user landing: 16/16 KUnit suites, ORACLE PASS, INIT REACHED (2026-07-18)"]
 oracle = "tier1"
 negative = ["a boot log with any '^\\s*not ok' line — always a hard FAIL, never a judgement call", "a boot log with zero 'ok' lines (KUnit never ran, e.g. panic before test framework init) — also a hard FAIL, not a silent pass"]
 human_review = false

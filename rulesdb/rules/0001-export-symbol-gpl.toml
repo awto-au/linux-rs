@@ -19,7 +19,7 @@ derivation = "API-inspired"
 evidence = ["rust/macros/lib.rs export docs (v7.1)", "drivers/gpu/drm/drm_panic_qr.rs precedent"]
 
 [validation]
-instances = ["lib/math/gcd.c:gcd"]
+instances = ["lib/math/gcd.c:gcd", "lib/strncpy_from_user.c:strncpy_from_user (plain EXPORT_SYMBOL C original, #[export] emits EXPORT_SYMBOL_GPL — same accepted deviation as strnlen_user)"]
 oracle = "tier4"
 negative = ["EXPORT_SYMBOL (non-GPL) — needs review before this rule applies", "fn called via vtable/function pointer — export macro documented as wrong there"]
 human_review = false

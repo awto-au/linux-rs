@@ -41,7 +41,7 @@ evidence = [
 ]
 
 [validation]
-instances = ["lib/iomem_copy_rs.rs (fixed, GPL-2.0-only)", "drivers/tty/serial/8250/8250_helpers_rs.rs (fixed, GPL-2.0+)", "all 33 currently-landed translated files re-verified PASS after the fix"]
+instances = ["lib/iomem_copy_rs.rs (fixed, GPL-2.0-only)", "drivers/tty/serial/8250/8250_helpers_rs.rs (fixed, GPL-2.0+)", "all 33 currently-landed translated files re-verified PASS after the fix", "lib/strncpy_from_user_rs.rs (GPL-2.0, verified against lib/strncpy_from_user.c before landing — PASS, 34/34 translated files, 0 fail)"]
 oracle = "tier1"
 negative = ["a translated file choosing a DIFFERENT (even if compatible-seeming) SPDX identifier than its C original — e.g. GPL-2.0 vs GPL-2.0-only — is always a FAIL, never a judgement call"]
 human_review = false

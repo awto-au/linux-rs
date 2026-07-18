@@ -1,0 +1,531 @@
+From 01e5a4868e8d39117c22fe13660978723613ba94 Mon Sep 17 00:00:00 2001
+From: Dan on Selwyn <dan@awto.au>
+Date: Sat, 18 Jul 2026 13:09:15 +1000
+Subject: [PATCH] lib: translate strncpy_from_user to Rust (linux-rs TU 35)
+
+do_strncpy_from_user()/strncpy_from_user(): word-at-a-time copy of a
+NUL-terminated string from a userspace pointer into a kernel buffer,
+with a byte-at-a-time fallback for unaligned src/dst or a mid-word
+page fault. Sibling of strnlen_user_rs.rs (TU 34, same file family:
+asm/uaccess.h, asm/word-at-a-time.h) but with a genuinely different
+control-flow shape: TWO unsafe_get_user() sites with DIFFERENT fault
+targets, not one shared efault label.
+
+Reuses every uaccess shim strnlen_user_rs.rs established in
+rust/helpers/uaccess.c (rule 0014): rust_helper_strnlen_user_task_size_max,
+untagged_addr_ul, access_ok, user_read_access_begin/_end,
+unsafe_get_user_ul. Adds exactly one new shim,
+rust_helper_unsafe_get_user_u8 -- a byte-sized sibling of
+unsafe_get_user_ul needed for the byte_at_a_time fallback loop
+(unsafe_get_user(c, src+res, efault) where c is char, not
+unsigned long). Same fault contract as its word-sized sibling,
+verified the same way: a real page fault traps into the kernel,
+consults the EX_TYPE_UACCESS_ERR_ZERO extable entry, resumes at the
+compiled-in fixup -- the Rust caller's None is driven by real
+hardware fault delivery.
+
+The two unsafe_get_user() sites do NOT share a fault target (rule
+0020 shared-label/distinct-value, extended): the word-at-a-time
+loop's unsafe_get_user(c, ..., byte_at_a_time) falls back into the
+byte-at-a-time loop on a fault -- NOT an immediate -EFAULT, since a
+partial word may be unreadable while its trailing bytes are still
+reachable one at a time -- while the byte-at-a-time loop's own
+unsafe_get_user(c, ..., efault) returns -EFAULT directly. Translated
+as a `break` out of the word loop (carrying res/max forward) vs a
+direct `return -EFAULT`, never collapsed into one match arm despite
+both being the None case of a fault-safe read.
+
+has_zero/create_zero_mask/find_zero/fls64/zero_bytemask reuse the
+exact reimplementation already established in lib/string_rs.rs and
+lib/strnlen_user_rs.rs (rule 0016, third instance of the same
+header-inline family: arch/riscv/include/asm/word-at-a-time.h +
+include/asm-generic/bitops/fls64.h). zero_bytemask(mask) is riscv's
+literal `(mask)` #define identity (arch/riscv/include/asm/
+word-at-a-time.h:48) -- reused verbatim as `let mask = data;`, not
+reimplemented as a computation, matching string_rs.rs's own
+established pattern.
+
+IS_UNALIGNED(src, dst): CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS is
+unset in this build's .config (same finding string_rs.rs's module doc
+already documents for sized_strscpy), so the live macro arm is the
+real alignment test, not the 0 stub -- translated as a genuine check,
+exercising the byte-at-a-time fallback for real on unaligned
+src/dst, not skipped as dead code.
+
+can_do_masked_user_access() is, as in strnlen_user, a compile-time 0
+on this arch (riscv never #defines masked_user_access_begin) -- not
+translated, same spirit as rule 0026. Four additional pre-checks
+(might_fault, should_fail_usercopy, kasan_check_write,
+check_object_size) were individually verified against their real
+header definitions to be compile-time no-ops for this exact
+.config (CONFIG_PROVE_LOCKING/DEBUG_ATOMIC_SLEEP/
+FAULT_INJECTION_USERCOPY/HARDENED_USERCOPY all unset, no KASAN
+config enabled) -- genuine no-ops for this build, not a judgement
+call generalised across configs, same bar the sibling TU set for
+can_do_masked_user_access().
+
+strncpy_from_user is a plain (non-_GPL) EXPORT_SYMBOL in the C
+original; #[export] always emits EXPORT_SYMBOL_GPL -- tracked,
+license-inert deviation per rule 0001 (CONFIG_MODULES unset).
+
+Verification:
+
+1. Build: `dev.py build` -> BUILD OK; RUSTC compiled
+   lib/strncpy_from_user_rs.o fresh (confirmed via .cmd file and
+   object timestamp, real clippy/missing_docs-strict rustc
+   invocation, zero warnings). nm vmlinux confirms
+   strncpy_from_user (T, global text); 5 real undefined-symbol
+   callers found across the tree (fs/namei.o, fs/xattr.o,
+   kernel/sys.o, kernel/reboot.o, mm/maccess.o) -- genuinely linked
+   and called, not dead code.
+
+2. Oracle (tier 2.5, bench/diff_strncpy_from_user.{c,rs}): the real
+   unsafe_get_user() fault path can't be exercised from a portable
+   host program (no way to trigger a real page fault at a chosen
+   address and resume via extable outside the kernel) -- isolates the
+   fault-free word-at-a-time scanning/copying arithmetic instead,
+   covering: count<=0/negative-count edge cases, alignment (0..7 x
+   0..7 src/dst offsets, exercising IS_UNALIGNED's real branch),
+   NUL-position sweep, and count-boundary sweep (below/at/above
+   strlen+1). Additionally identified and exercised for real (not
+   just inspection-verified) a SECOND -EFAULT trigger this function
+   has that strnlen_user doesn't: the pure-arithmetic "hit max, but
+   max < count" post-loop branch, which needs no real fault at all --
+   just max < count, driven by the address-space-limit truncation the
+   caller does before calling in. `scripts/diff_oracle.py
+   strncpy_from_user` -> ORACLE 2.5 PASS, 2500 cases / 5000 output
+   lines byte-identical; re-run manually at 50000 cases with a
+   different seed, also byte-identical, with the arithmetic -EFAULT
+   path genuinely hit 7272/50000 times and matching on every case.
+   The genuine unsafe_get_user() hardware-fault path itself remains
+   inspection-verified + boot-verified only, same constraint
+   strnlen_user's landing documented.
+
+3. `dev.py check` (build + boot + report): 16/16 KUnit suites,
+   ORACLE PASS, INIT REACHED. SPDX provenance check: "PASS
+   lib/strncpy_from_user_rs.rs == lib/strncpy_from_user.c
+   (GPL-2.0)", 34/34 translated files pass, 0 fail.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+---
+ lib/Makefile                |   9 +-
+ lib/strncpy_from_user_rs.rs | 355 ++++++++++++++++++++++++++++++++++++
+ rust/helpers/uaccess.c      |  19 ++
+ 3 files changed, 382 insertions(+), 1 deletion(-)
+ create mode 100644 lib/strncpy_from_user_rs.rs
+
+diff --git a/lib/Makefile b/lib/Makefile
+index ce45312abbe6..1979e3e6a11b 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -252,7 +252,7 @@ obj-$(CONFIG_SIGNATURE) += digsig.o
+ 
+ lib-$(CONFIG_CLZ_TAB) += clz_tab.o
+ 
+-obj-$(CONFIG_GENERIC_STRNCPY_FROM_USER) += strncpy_from_user.o
++obj-$(CONFIG_GENERIC_STRNCPY_FROM_USER) +=
+ obj-$(CONFIG_GENERIC_STRNLEN_USER) +=
+ 
+ obj-$(CONFIG_GENERIC_NET_UTILS) += net_utils.o
+@@ -483,3 +483,10 @@ obj-$(CONFIG_GENERIC_STRNLEN_USER) += strnlen_user_rs.o
+ else
+ obj-$(CONFIG_GENERIC_STRNLEN_USER) += strnlen_user.o
+ endif
++
++# linux-rs: translated TU — Rust when Rust is available.
++ifdef CONFIG_RUST
++obj-$(CONFIG_GENERIC_STRNCPY_FROM_USER) += strncpy_from_user_rs.o
++else
++obj-$(CONFIG_GENERIC_STRNCPY_FROM_USER) += strncpy_from_user.o
++endif
+diff --git a/lib/strncpy_from_user_rs.rs b/lib/strncpy_from_user_rs.rs
+new file mode 100644
+index 000000000000..3332cad7bd79
+--- /dev/null
++++ b/lib/strncpy_from_user_rs.rs
+@@ -0,0 +1,355 @@
++// SPDX-License-Identifier: GPL-2.0
++//! Word-at-a-time `strncpy_from_user()` — Rust translation of
++//! `lib/strncpy_from_user.c`.
++//!
++//! Copies a NUL-terminated string from a userspace pointer into a
++//! kernel buffer, using the same word-at-a-time scan as
++//! `strnlen_user()` (`lib/strnlen_user_rs.rs`) and `sized_strscpy`
++//! (`lib/string_rs.rs`), but through the fault-safe
++//! `unsafe_get_user()`/goto machinery since the source is a raw
++//! `__user` pointer that may fault. Reuses the exact
++//! `access_ok`/`untagged_addr`/`TASK_SIZE_MAX`/`user_read_access_begin`/
++//! `unsafe_get_user_ul` shims `strnlen_user_rs.rs` established in
++//! `rust/helpers/uaccess.c` (rule 0014/0028) — same arch-specific,
++//! security-relevant primitives, not re-derived here. One NEW shim is
++//! added for this TU: `rust_helper_unsafe_get_user_u8`, a byte-sized
++//! sibling of `unsafe_get_user_ul` needed for the C's `byte_at_a_time`
++//! fallback loop (`unsafe_get_user(c, src+res, efault)` where `c` is
++//! `char`) — the existing helper is word-sized only.
++//!
++//! Unlike `strnlen_user`, this C original has TWO distinct
++//! `unsafe_get_user` fault targets, not one:
++//!   - the word-at-a-time loop's `unsafe_get_user(c, ..., byte_at_a_time)`
++//!     falls back to the byte-at-a-time loop on a fault (NOT an
++//!     immediate -EFAULT) — a partial word may already be unreadable
++//!     while trailing bytes of it are still reachable one at a time;
++//!   - the byte-at-a-time loop's `unsafe_get_user(c, ..., efault)`
++//!     returns -EFAULT directly.
++//! Translated as two distinct `match ... { None => ... }` arms with
++//! different consequences (`break` out of the word loop vs `return
++//! -EFAULT`), never collapsed into one shared error path — same
++//! shared-label/distinct-value discipline as rule 0020, applied here
++//! to a fall-through-to-different-loop shape rather than a shared
++//! return value.
++//!
++//! `has_zero`/`create_zero_mask`/`find_zero`/`fls64`/`zero_bytemask`
++//! reuse the exact reimplementation already established in
++//! `lib/string_rs.rs`/`lib/strnlen_user_rs.rs` (rule 0016 —
++//! `arch/riscv/include/asm/word-at-a-time.h` header inlines,
++//! `BITS_PER_LONG==64` arm). `zero_bytemask(mask)` is a plain `(mask)`
++//! identity `#define` on riscv (`arch/riscv/include/asm/
++//! word-at-a-time.h:48`), confirmed the same way `string_rs.rs`
++//! confirmed it (`let bytemask = data; // zero_bytemask(mask) == mask
++//! on riscv`) — reused verbatim, not reimplemented. `prep_zero_mask`
++//! is likewise `return bits;` (no-op) on riscv and is folded away.
++//!
++//! `IS_UNALIGNED(src, dst)`: `CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS`
++//! is unset in this build's `.config` (confirmed absent, same finding
++//! `string_rs.rs`'s module doc already documents for `sized_strscpy`),
++//! so the live macro arm is the real alignment test
++//! `((long)dst | (long)src) & (sizeof(long)-1)`, not the `0` stub —
++//! translated as a real check below, not skipped.
++//!
++//! `can_do_masked_user_access()` is, as in `strnlen_user`, a
++//! compile-time `0` on this arch (riscv never `#define`s
++//! `masked_user_access_begin`) — the `if (can_do_masked_user_access())
++//! { ... }` branch is genuinely unreachable for this build target and
++//! is not translated, in the same spirit as rule 0026.
++//!
++//! Four pre-checks in the C original (`might_fault()`,
++//! `should_fail_usercopy()`, `kasan_check_write()`,
++//! `check_object_size()`) are all compile-time no-ops for this
++//! build's `.config`, verified individually against their header
++//! definitions:
++//!   - `might_fault()`: `include/linux/kernel.h` — live only under
++//!     `CONFIG_MMU && (CONFIG_PROVE_LOCKING || CONFIG_DEBUG_ATOMIC_SLEEP)`;
++//!     both PROVE_LOCKING and DEBUG_ATOMIC_SLEEP are unset here, so it
++//!     expands to `static inline void might_fault(void) { }`.
++//!   - `should_fail_usercopy()`: `include/linux/fault-inject-usercopy.h`
++//!     — live only under `CONFIG_FAULT_INJECTION_USERCOPY`, unset here,
++//!     so it's `static inline bool should_fail_usercopy(void) { return
++//!     false; }`.
++//!   - `kasan_check_write()`: `include/linux/kasan-checks.h` — live
++//!     only under `__SANITIZE_ADDRESS__` (KASAN instrumentation on this
++//!     TU); this build has no KASAN config enabled, so it's `static
++//!     inline bool kasan_check_write(...) { return true; }`, called as
++//!     a statement with its result discarded either way.
++//!   - `check_object_size()`: `include/linux/ucopysize.h` — live only
++//!     under `CONFIG_HARDENED_USERCOPY`, unset here, so it's `static
++//!     inline void check_object_size(...) { }`.
++//! Each is a genuine no-op for this exact build, not a judgement call
++//! generalised across configs — same "verify against the real header,
++//! don't assume" bar the sibling TU set for `can_do_masked_user_access()`.
++//! Not translated; their absence changes nothing observable for this
++//! target.
++//!
++//! `strncpy_from_user` is a plain (non-`_GPL`) `EXPORT_SYMBOL` in the C
++//! original; `#[export]` always emits `EXPORT_SYMBOL_GPL` — an
++//! accepted, tracked deviation (rule 0001).
++
++use kernel::bindings;
++use kernel::ffi::{c_char, c_long, c_ulong};
++use kernel::prelude::*;
++
++/// `has_zero`/`create_zero_mask`/`find_zero`/`fls64` — identical
++/// reimplementation to `lib/string_rs.rs`/`lib/strnlen_user_rs.rs`'s
++/// (rule 0016, same header origin: `arch/riscv/include/asm/
++/// word-at-a-time.h` + `include/asm-generic/bitops/fls64.h`).
++#[inline]
++fn has_zero(val: usize, one_bits: usize, high_bits: usize) -> usize {
++    ((val.wrapping_sub(one_bits)) & !val) & high_bits
++}
++#[inline]
++fn create_zero_mask(bits: usize) -> usize {
++    let bits = bits.wrapping_sub(1) & !bits;
++    bits >> 7
++}
++#[inline]
++fn fls64(x: u64) -> i32 {
++    if x == 0 {
++        0
++    } else {
++        (63 - x.leading_zeros() as i32) + 1
++    }
++}
++#[inline]
++fn find_zero(mask: usize) -> usize {
++    (fls64(mask as u64) >> 3) as usize
++}
++
++const ONE_BITS: usize = usize::MAX / 0xff;
++const HIGH_BITS: usize = ONE_BITS * 0x80;
++
++/// Read one `unsigned long` word from userspace, fault-safe.
++///
++/// Wraps `rust_helper_unsafe_get_user_ul` (already established by
++/// `strnlen_user_rs.rs`) — see that file's module doc for the fault
++/// contract. `None` is the "goto <fault-label>" outcome; this TU
++/// dispatches it to two DIFFERENT consequences depending on call site
++/// (see `do_strncpy_from_user` below), unlike `strnlen_user` where
++/// both `unsafe_get_user` sites shared the same `efault` target.
++///
++/// # Safety
++/// Must be called with a real user-memory-access region active, i.e.
++/// between a successful `user_read_access_begin()` and its matching
++/// `user_read_access_end()`, and `ptr` must lie within the range that
++/// call validated.
++#[inline]
++unsafe fn unsafe_get_user_ul(ptr: *const c_ulong) -> Option<usize> {
++    let mut val: c_ulong = 0;
++    // SAFETY: per function contract.
++    let ok = unsafe { bindings::unsafe_get_user_ul(&mut val, ptr) };
++    ok.then_some(val as usize)
++}
++
++/// Read one byte from userspace, fault-safe — the byte-sized sibling
++/// of `unsafe_get_user_ul`, needed for the C's `byte_at_a_time`
++/// fallback loop. New shim: `rust_helper_unsafe_get_user_u8`
++/// (`rust/helpers/uaccess.c`), same shape and contract as
++/// `rust_helper_unsafe_get_user_ul` but wrapping `unsafe_get_user()`
++/// for a `char` instead of an `unsigned long`.
++///
++/// # Safety
++/// Same as `unsafe_get_user_ul`.
++#[inline]
++unsafe fn unsafe_get_user_u8(ptr: *const c_char) -> Option<u8> {
++    let mut val: u8 = 0;
++    // SAFETY: per function contract.
++    let ok = unsafe { bindings::unsafe_get_user_u8(&mut val, ptr) };
++    ok.then_some(val)
++}
++
++/// `IS_UNALIGNED(src, dst)` (`lib/strncpy_from_user.c`, this file's
++/// own `#define`): `CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS` is unset
++/// in this build (see module doc), so the live definition is the real
++/// alignment test, not the `0` stub.
++#[inline]
++fn is_unaligned(src: *const c_char, dst: *const c_char) -> bool {
++    ((dst as isize) | (src as isize)) & (size_of::<usize>() as isize - 1) != 0
++}
++
++/// `do_strncpy_from_user()` (`__always_inline` in the C) — the
++/// word-at-a-time core with byte-at-a-time fallback.
++///
++/// Returns the copied length (excluding the terminating NUL) on
++/// success, `count` if `count` bytes were copied without finding a
++/// NUL (the caller-supplied limit was reached — not an error), or
++/// `-EFAULT` if the address-space limit (`max`) was hit before either
++/// a NUL or `count` bytes — some data may already have been copied,
++/// matching the C's own documented contract in `strncpy_from_user`'s
++/// doc comment.
++///
++/// # Safety
++/// `dst` has room for at least `max` bytes (mirrors the C: only bytes
++/// actually written by the loops below, up to `max`, are touched).
++/// Must run inside an active `user_read_access_begin()` region
++/// covering `src` for at least `max` bytes.
++#[inline]
++unsafe fn do_strncpy_from_user(
++    dst: *mut c_char,
++    src: *const c_char,
++    count: usize,
++    max: usize,
++) -> c_long {
++    let mut res: usize = 0;
++    let mut max = max;
++
++    if !is_unaligned(src, dst) {
++        'word_loop: while max >= size_of::<usize>() {
++            // SAFETY: per function contract; `res` bytes into `src`,
++            // still within the `max`-bytes region validated by the
++            // caller (loop condition guarantees a full word is in
++            // bounds).
++            let c = match unsafe { unsafe_get_user_ul(src.byte_add(res).cast()) } {
++                Some(c) => c,
++                // Fall back to byte-at-a-time if we get a page fault
++                // -- NOT an immediate -EFAULT: a partial word may
++                // already be unreadable while trailing bytes of it
++                // are still reachable one at a time. This is the
++                // FIRST of the two distinct unsafe_get_user fault
++                // targets in the C original (see module doc) --
++                // breaks out of this loop into the byte_at_a_time
++                // loop below, sharing `res`/`max` state, exactly as
++                // the C's `goto byte_at_a_time` does.
++                None => break 'word_loop,
++            };
++
++            // Note that we mask out the bytes following the NUL. This
++            // is important to do because string oblivious code may
++            // read past the NUL. For those routines, we don't want to
++            // give them potentially random bytes after the NUL in
++            // `src`. One example of such code is BPF map keys.
++            let data = has_zero(c, ONE_BITS, HIGH_BITS);
++            if data != 0 {
++                let data = create_zero_mask(data);
++                let mask = data; // zero_bytemask(mask) == mask on riscv
++                // SAFETY: per function contract; `dst` has room for
++                // `max` bytes and `res + size_of::<usize>() <= max`
++                // here (loop condition).
++                unsafe {
++                    (dst.byte_add(res) as *mut usize).write_unaligned(c & mask);
++                }
++                return (res + find_zero(data)) as c_long;
++            }
++
++            // SAFETY: per function contract, same bounds as the
++            // masked write above.
++            unsafe {
++                (dst.byte_add(res) as *mut usize).write_unaligned(c);
++            }
++
++            res += size_of::<usize>();
++            max -= size_of::<usize>();
++        }
++    }
++
++    // byte_at_a_time:
++    while max != 0 {
++        // SAFETY: per function contract; `res` bytes into `src`,
++        // still within the `max`-bytes region validated by the caller
++        // (loop condition: `max != 0` means at least one more byte is
++        // in bounds).
++        let c = match unsafe { unsafe_get_user_u8(src.byte_add(res)) } {
++            Some(c) => c,
++            // SECOND distinct unsafe_get_user fault target: returns
++            // -EFAULT directly, reached only from this loop, never
++            // from the word-loop's fault break above (module doc).
++            None => return -(bindings::EFAULT as c_long),
++        };
++        // SAFETY: per function contract; `dst` has room for `max`
++        // bytes and `res < max` here (loop condition).
++        unsafe {
++            *dst.byte_add(res) = c as c_char;
++        }
++        if c == 0 {
++            return res as c_long;
++        }
++        res += 1;
++        max -= 1;
++    }
++
++    // Uhhuh. We hit 'max'. But was that the user-specified maximum
++    // too? If so, that's ok - we got as much as the user asked for.
++    if res >= count {
++        return res as c_long;
++    }
++
++    // Nope: we hit the address space limit, and we still had more
++    // characters the caller would have wanted. That's an EFAULT.
++    -(bindings::EFAULT as c_long)
++}
++
++/// strncpy_from_user: - Copy a NUL terminated string from userspace.
++///
++/// `dst`:   Destination address, in kernel space. This buffer must be
++///          at least `count` bytes long.
++/// `src`:   Source address, in user space.
++/// `count`: Maximum number of bytes to copy, including the trailing
++///          NUL.
++///
++/// Copies a NUL-terminated string from userspace to kernel space.
++///
++/// On success, returns the length of the string (not including the
++/// trailing NUL).
++///
++/// If access to userspace fails, returns `-EFAULT` (some data may
++/// have been copied).
++///
++/// If `count` is smaller than the length of the string, copies
++/// `count` bytes and returns `count`.
++#[export]
++pub unsafe extern "C" fn strncpy_from_user(
++    dst: *mut c_char,
++    src: *const c_char,
++    count: c_long,
++) -> c_long {
++    // might_fault()/should_fail_usercopy()/kasan_check_write()/
++    // check_object_size() are all compile-time no-ops for this
++    // build's .config (verified individually against their header
++    // definitions -- see module doc) and are not translated.
++
++    if count <= 0 {
++        return 0;
++    }
++    let count = count as usize;
++
++    // can_do_masked_user_access() is a compile-time `0` on riscv (see
++    // module doc) -- the masked-access fast path is unreachable for
++    // this build target and is not translated; the reachable arm
++    // below is the C's `else`-equivalent continuation.
++
++    // SAFETY: TASK_SIZE_MAX is a plain read of arch/task state, no
++    // preconditions.
++    let max_addr = unsafe { bindings::strnlen_user_task_size_max() } as usize;
++    // SAFETY: matches the C's `untagged_addr(src)` -- a pure address
++    // transform (pointer-tag stripping), no dereference.
++    let src_addr = unsafe { bindings::untagged_addr_ul(src as usize) } as usize;
++
++    if src_addr < max_addr {
++        let mut max = max_addr - src_addr;
++        // Truncate 'max' to the user-specified limit, so that we only
++        // have one limit we need to check in the loop.
++        if max > count {
++            max = count;
++        }
++
++        // SAFETY: `src`/`max` are passed to access_ok() by
++        // user_read_access_begin() itself; only proceeds into the
++        // fault-safe read region if that check (and SUM-enable) both
++        // succeed, matching the C's `if (user_read_access_begin(...))`.
++        let begun = unsafe { bindings::user_read_access_begin(src.cast(), max as c_ulong) };
++        if begun {
++            // SAFETY: user_read_access_begin() above succeeded and
++            // remains active until user_read_access_end() below,
++            // satisfying do_strncpy_from_user's precondition; `dst`
++            // has room for `count >= max` bytes per this function's
++            // own contract (mirrors the C doc: "This buffer must be
++            // at least @count bytes long").
++            let retval = unsafe { do_strncpy_from_user(dst, src, count, max) };
++            // SAFETY: matches the just-begun access region.
++            unsafe { bindings::user_read_access_end() };
++            return retval;
++        }
++    }
++    -(bindings::EFAULT as c_long)
++}
+diff --git a/rust/helpers/uaccess.c b/rust/helpers/uaccess.c
+index f65ef0767d09..71d3cf9599fb 100644
+--- a/rust/helpers/uaccess.c
++++ b/rust/helpers/uaccess.c
+@@ -88,3 +88,22 @@ __rust_helper bool rust_helper_unsafe_get_user_ul(unsigned long *val,
+ efault:
+ 	return false;
+ }
++
++/*
++ * lib/strncpy_from_user.c support: byte-sized sibling of
++ * rust_helper_unsafe_get_user_ul above, same contract and fault
++ * semantics, needed for do_strncpy_from_user()'s byte-at-a-time
++ * fallback loop (unsafe_get_user(c, src+res, efault) where c is
++ * `char`, not `unsigned long`).
++ */
++__rust_helper bool rust_helper_unsafe_get_user_u8(unsigned char *val,
++						   const char __user *ptr)
++{
++	unsigned char tmp;
++
++	unsafe_get_user(tmp, ptr, efault);
++	*val = tmp;
++	return true;
++efault:
++	return false;
++}
+-- 
+2.55.0
+
