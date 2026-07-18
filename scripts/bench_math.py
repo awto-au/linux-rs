@@ -24,6 +24,22 @@ def run(cmd):
                           capture_output=True).stdout
 
 
+def checksum_mismatches(funcs, accs):
+    """Return [(func, sorted_values)] for any function whose implementations
+    disagree on the accumulated checksum.
+
+    The benchmark's performance table is only meaningful after semantic
+    agreement is established: a faster implementation with a different
+    checksum is a correctness regression, not an optimisation candidate.
+    """
+    bad = []
+    for func in funcs:
+        vals = {accs[(func, impl)] for impl in funcs[func]}
+        if len(vals) != 1:
+            bad.append((func, sorted(vals)))
+    return bad
+
+
 def main() -> int:
     TMP.mkdir(exist_ok=True)
     logging.basicConfig(
@@ -53,10 +69,17 @@ def main() -> int:
 
     # Cross-implementation checksum agreement (same LCG stream => the
     # accumulated results must be identical for the same func).
+    mismatches = checksum_mismatches(funcs, accs)
     for func in funcs:
         vals = {accs[(func, impl)] for impl in funcs[func]}
         status = "AGREE" if len(vals) == 1 else f"MISMATCH {vals}"
         logging.info("checksum %-10s %s", func, status)
+    if mismatches:
+        logging.error(
+            "CHECKSUM ORACLE FAIL: %d function(s) disagreed: %s",
+            len(mismatches),
+            ", ".join(f"{func}={vals}" for func, vals in mismatches),
+        )
 
     logging.info("%-10s %10s %14s %10s %8s %8s", "func", "C ns/op",
                  "faithful ns/op", "opt ns/op", "faith/C", "opt/C")
@@ -70,7 +93,7 @@ def main() -> int:
                      f"{o:.2f}" if o is not None else "—",
                      f"{f / c:.2f}x" if c and f else "—",
                      f"{o / c:.2f}x" if c and o else "—")
-    return 0
+    return 1 if mismatches else 0
 
 
 if __name__ == "__main__":
