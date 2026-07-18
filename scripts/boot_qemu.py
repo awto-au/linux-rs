@@ -25,21 +25,61 @@ tmp/qemu-boot.log and are not parallel-safe on their own yet, a caller
 wanting parallel runs must pass distinct --run-id values itself, e.g.
 one per kernel image variant being boot-compared).
 
+Every run is also archived to tmp/boot-history/<ISO-timestamp>-<run-id
+or "default">.log (untouched raw copy, gitignored scratch same as
+everything else under tmp/) and gets one row appended to the tracked
+docs/status/boot-history.csv — the same "keep every run, not just the
+latest" pattern docs/status/history.csv already uses for dev.py check's
+KUnit summary, applied to raw boot logs specifically. tmp/qemu-boot.log
+itself still gets truncated per run (nothing that reads that stable
+path changes); the archive is additive, not a replacement.
+
 Usage: boot_qemu.py [--tree linux-riscv] [--append "extra args"] [--run-id NAME]
 """
 import argparse
+import csv
+import datetime
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 INITRD = REPO / "tmp" / "initramfs" / "initramfs.cpio.gz"
+BOOT_HISTORY_DIR = REPO / "tmp" / "boot-history"
+BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
 
 # Printed by configs/initramfs-init.sh once /init actually runs as PID 1 —
 # the milestone that real userspace (not just KUnit-in-kernel-space) was
 # reached. Kept distinct from the "ok N ..." KUnit line shape so the two
 # detectors can never collide.
 INIT_REACHED = "linux-rs: initramfs init reached, PID 1 alive"
+
+
+def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
+                  init_reached: bool, rc: int) -> Path:
+    """Copy this run's raw log to tmp/boot-history/ (never overwritten,
+    unlike tmp/qemu-boot.log itself) and append one row to the tracked
+    docs/status/boot-history.csv, mirroring history.csv's existing
+    per-run-append pattern."""
+    BOOT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
+    archived = BOOT_HISTORY_DIR / f"{stamp}-{run_id or 'default'}.log"
+    shutil.copyfile(log_path, archived)
+
+    BOOT_HISTORY_CSV.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not BOOT_HISTORY_CSV.exists()
+    with open(BOOT_HISTORY_CSV, "a", newline="") as f:
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(["timestamp", "run_id", "ok", "not_ok",
+                              "init_reached", "returncode", "log_file"])
+        writer.writerow([
+            datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+            run_id or "default", n_ok, n_notok, int(init_reached), rc,
+            str(archived.relative_to(REPO)),
+        ])
+    return archived
 
 
 def ensure_initramfs() -> Path:
@@ -96,15 +136,25 @@ def main() -> int:
     # that gate). The init-reached line is additional, supplementary
     # confirmation that userspace was reached, printed alongside it.
     text = LOG.read_text(errors="replace")
+    n_ok = n_notok = 0
     for line in text.splitlines():
+        if line.startswith("ok "):
+            n_ok += 1
+        elif line.startswith("not ok "):
+            n_notok += 1
         if line.startswith(("ok ", "not ok ")) or "# Totals:" in line \
                 or "Kernel panic" in line:
             print(line)
-    if INIT_REACHED in text:
+    init_reached = INIT_REACHED in text
+    if init_reached:
         print(INIT_REACHED)
     else:
         print("WARNING: init-reached milestone not seen in boot log "
               "(userspace/initramfs coverage did not run this boot)")
+
+    archived = archive_boot(LOG, args.run_id, n_ok, n_notok, init_reached, rc)
+    print(f"archived: {archived.relative_to(REPO)}")
+
     return rc
 
 
