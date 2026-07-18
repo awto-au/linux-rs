@@ -109,12 +109,12 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-18T14:19:00+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-18T14:25:38+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. See <a href="STATUS.md">docs/STATUS.md</a> for the full
   hand-translation KUnit boot report; both tracks' progress-over-time charts, the two-track work
   queue, and the awtoau/c2rust transpiler-fork issue timeline all live on this one page.</p>
 
-<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>2 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-ac88bd1ecdc9cc9f1</code> — <span class="muted">0m running</span></li><li><code>worktree-agent-aed6f9d5d56c628ac</code> — <span class="muted">1m running</span></li></ul></div>
+<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>1 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-aed6f9d5d56c628ac</code> — <span class="muted">8m running</span></li></ul></div>
 
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">0</div><div class="label">P0 items open</div></div>
@@ -305,7 +305,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.0882097182291666">1.1</td>
+        <td data-sort-value="1.0928167332986112">1.1</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -314,7 +314,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.9624111071180556">1.0</td>
+        <td data-sort-value="0.9670181221875">1.0</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -323,7 +323,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.9206634219328703">0.9</td>
+        <td data-sort-value="0.9252704370023149">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -332,7 +332,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.685304625636574">0.7</td>
+        <td data-sort-value="0.6899116407060185">0.7</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -431,11 +431,11 @@
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
   2026-07-17T12:26:20 to 2026-07-18T04:01:11 UTC
-  (21 runs). 61 script-invocation logs in tmp/, spanning 2 days, 5:09:56.318749 from 2026-07-16T09:09+10:00 to 2026-07-18T14:19+10:00
+  (21 runs). 62 script-invocation logs in tmp/, spanning 2 days, 5:16:34.461874 from 2026-07-16T09:09+10:00 to 2026-07-18T14:25+10:00
   <div class="proxy-list">
-    diff_oracle.log &mdash; 2026-07-18T13:14+10:00<br>qemu-boot-post-migration-test.log &mdash; 2026-07-18T13:39+10:00<br>linux_riscv_worktree.log &mdash; 2026-07-18T13:52+10:00<br>build_db.log &mdash; 2026-07-18T13:58+10:00<br>run_c2rust_baseline_fg.log &mdash; 2026-07-18T14:01+10:00<br>qemu-boot-verify-diff-a.log &mdash; 2026-07-18T14:04+10:00<br>render_boot_log.log &mdash; 2026-07-18T14:04+10:00<br>run_c2rust_baseline_full_fg.log &mdash; 2026-07-18T14:05+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T14:05+10:00<br>dev-build.log &mdash; 2026-07-18T14:16+10:00<br>build_initramfs.log &mdash; 2026-07-18T14:16+10:00<br>qemu-boot.log &mdash; 2026-07-18T14:16+10:00<br>dev-boot.log &mdash; 2026-07-18T14:16+10:00<br>check_spdx_provenance.log &mdash; 2026-07-18T14:16+10:00<br>readiness.log &mdash; 2026-07-18T14:16+10:00<br>report.log &mdash; 2026-07-18T14:16+10:00<br>dev.log &mdash; 2026-07-18T14:16+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T14:18+10:00<br>sync_work_items.log &mdash; 2026-07-18T14:18+10:00<br>generate_dashboard.log &mdash; 2026-07-18T14:19+10:00
+    linux_riscv_worktree.log &mdash; 2026-07-18T13:52+10:00<br>build_db.log &mdash; 2026-07-18T13:58+10:00<br>run_c2rust_baseline_fg.log &mdash; 2026-07-18T14:01+10:00<br>qemu-boot-verify-diff-a.log &mdash; 2026-07-18T14:04+10:00<br>render_boot_log.log &mdash; 2026-07-18T14:04+10:00<br>run_c2rust_baseline_full_fg.log &mdash; 2026-07-18T14:05+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T14:05+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T14:18+10:00<br>ollama_queue_watch.log &mdash; 2026-07-18T14:21+10:00<br>investigate_c2rust_failure.log &mdash; 2026-07-18T14:22+10:00<br>dev-build.log &mdash; 2026-07-18T14:24+10:00<br>build_initramfs.log &mdash; 2026-07-18T14:24+10:00<br>qemu-boot.log &mdash; 2026-07-18T14:24+10:00<br>dev-boot.log &mdash; 2026-07-18T14:24+10:00<br>check_spdx_provenance.log &mdash; 2026-07-18T14:24+10:00<br>sync_work_items.log &mdash; 2026-07-18T14:25+10:00<br>readiness.log &mdash; 2026-07-18T14:25+10:00<br>report.log &mdash; 2026-07-18T14:25+10:00<br>dev.log &mdash; 2026-07-18T14:25+10:00<br>generate_dashboard.log &mdash; 2026-07-18T14:25+10:00
   </div>
-  <em>(most-recent 20 of 61 log files shown; commit/time-based proxy only, not actual token usage)</em>
+  <em>(most-recent 20 of 62 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>
 
 <h2>progress_snapshots (time-series, if &gt;1 row)</h2>
