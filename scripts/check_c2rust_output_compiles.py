@@ -34,8 +34,19 @@ REPORT = REPO / "tmp" / "c2rust-output-compile-report.md"
 
 TARGET = "riscv64imac-unknown-none-elf"
 PER_FILE_TIMEOUT_S = 60
-C2RUST_REV = "1a06f7af6"
 C2RUST_SRC = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
+
+
+def current_c2rust_rev() -> str:
+    """HEAD of the real awtoau/c2rust checkout — a hardcoded rev here
+    would silently go stale every time the fork advances, checking old
+    DB rows without anyone noticing."""
+    out = subprocess.run(["git", "rev-parse", "--short=9", "HEAD"],
+                         cwd=C2RUST_SRC, capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+C2RUST_REV = current_c2rust_rev()
 
 HOST_DIR = SUPPORT_DIR / "host"
 TARGET_DIR = SUPPORT_DIR / "target"
