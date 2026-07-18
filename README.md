@@ -71,6 +71,38 @@ runtime static-key dispatch, though the key looked constant — riscv
 disables it at boot without Zbb, so the "dead" path is the live one on our
 target ([docs/phase2-first-translation.md](docs/phase2-first-translation.md)).
 
+## Two tracks, one leverage point: fixing the transpiler, not just the file
+
+The corpus-scale bet only pays off if translating gets *cheaper over time*,
+not just faster per file. So this project runs two tracks in parallel, and
+deliberately favours the one with compounding return:
+
+- **Hand-translation** (the thesis above) turns one solved function into a
+  general rule, validated against every structurally-equivalent occurrence.
+- **c2rust-breadth**: [`awtoau/c2rust`](https://github.com/awtoau/c2rust)
+  (this project's fork of the transpiler) is run against the *entire* kernel
+  corpus, not hand-picked files, specifically to surface real translation
+  gaps at scale — a root-cause fix to the AST exporter or code generator
+  benefits every future file that hits the same construct, not just the one
+  that happened to trigger the investigation. Two examples: fixing
+  `FileScopeAsmDecl` support (`EXPORT_SYMBOL*`'s asm expansion) flipped 317
+  files from a hard crash to a clean transpile in one merge; fixing GNU
+  `asm goto` handling recovered another 137. Every fix is filed as a real,
+  evidence-based GitHub issue (root cause traced to an exact file/line,
+  reproducer, before/after corpus numbers), the fork stays permanently
+  separate from upstream (never merged back — see `awtoau/c2rust/CLAUDE.md`),
+  and every claimed fix is independently re-verified against a fresh
+  full-corpus baseline before being trusted, not just accepted on report.
+
+The efficiency goal this implies: before fixing an N-th instance of a
+problem by hand, ask whether the *class* of problem is fixable once, either
+as a c2rust-side transpiler fix (if it's a genuine AST/codegen gap) or a
+rulesdb rule (if it's a translation-idiom choice) — and whether an
+already-fixed defect's exact shape (not just its literal C construct)
+might recur elsewhere in the transpiler's own code, not only in kernel
+source. Re-deriving the same investigation from scratch per file is the
+failure mode this structure exists to avoid.
+
 ## Status
 
 **Live dashboard: [docs/STATUS.md](docs/STATUS.md)** — graphs + tables
