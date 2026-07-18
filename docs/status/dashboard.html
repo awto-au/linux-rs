@@ -109,17 +109,17 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-18T12:17:22+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-18T12:18:57+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. See <a href="STATUS.md">docs/STATUS.md</a> for the full
   hand-translation KUnit boot report; both tracks' progress-over-time charts, the two-track work
   queue, and the awtoau/c2rust transpiler-fork issue timeline all live on this one page.</p>
 
-<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>5 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-a0d5aae20d59e7c09</code> — <span class="muted">35m running</span></li><li><code>worktree-agent-a3aabc6cd16f469f8</code> — <span class="muted">0m running</span></li><li><code>worktree-agent-a4486a283f6432630</code> — <span class="muted">8m running</span></li><li><code>worktree-agent-af02743fb8ff6e613</code> — <span class="muted">14m running</span></li><li><code>worktree-agent-afc93123969df3a7d</code> — <span class="muted">0m running</span></li></ul></div>
+<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>2 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-a3aabc6cd16f469f8</code> — <span class="muted">1m running</span></li><li><code>worktree-agent-afc93123969df3a7d</code> — <span class="muted">0m running</span></li></ul></div>
 
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">0</div><div class="label">P0 items open</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">P1 items open</div></div>
-  <div class="stat-tile"><div class="n">7</div><div class="label">work items active (all tracks)</div></div>
+  <div class="stat-tile"><div class="n">6</div><div class="label">work items active (all tracks)</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">confirmed boot-path blocking</div></div>
   <div class="stat-tile"><div class="n">4</div><div class="label">awtoau/c2rust issues open</div></div>
   <div class="stat-tile"><div class="n">8</div><div class="label">awtoau/c2rust issues closed</div></div>
@@ -132,7 +132,7 @@
   then files-affected. Click any column header to sort/re-sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="work-items-table">
-  <caption>7 active work items</caption>
+  <caption>6 active work items</caption>
   <thead>
     <tr>
       <th data-sort-key>Priority<span class="arrow"></span></th>
@@ -146,16 +146,6 @@
     </tr>
   </thead>
   <tbody>
-      <tr>
-        <td data-sort-value="2"><span class="pill pill-P2">P2</span></td>
-        <td>8250/16550 serial driver translation — remaining register-bit helpers (fcr_get_rxtrig_bytes, bytes_to_fcr_rxtrig)</td>
-        <td data-sort-value="kernel">kernel</td>
-        <td data-sort-value="open">open</td>
-        <td data-sort-value="0">no</td>
-        <td data-sort-value="-1"></td>
-        <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awto-au/linux-rs/issues/3">awto-au/linux-rs#3</a></td>
-      </tr>
       <tr>
         <td data-sort-value="3"><span class="pill pill-P3">P3</span></td>
         <td>tmpfs-in-Rust — blocked on missing VFS abstractions, evaluate upstream RFC PR #1037</td>
@@ -256,7 +246,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.0037539442361112">1.0</td>
+        <td data-sort-value="1.0048550461921297">1.0</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -265,7 +255,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.877955333125">0.9</td>
+        <td data-sort-value="0.8790564350810185">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -274,7 +264,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.8362076479398148">0.8</td>
+        <td data-sort-value="0.8373087498958334">0.8</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -283,7 +273,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.6008488516435185">0.6</td>
+        <td data-sort-value="0.6019499535995371">0.6</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -382,11 +372,11 @@
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
   2026-07-17T12:26:20 to 2026-07-18T02:04:09 UTC
-  (19 runs). 54 script-invocation logs in tmp/, spanning 2 days, 3:08:18.794847 from 2026-07-16T09:09+10:00 to 2026-07-18T12:17+10:00
+  (19 runs). 55 script-invocation logs in tmp/, spanning 2 days, 3:09:53.872641 from 2026-07-16T09:09+10:00 to 2026-07-18T12:18+10:00
   <div class="proxy-list">
-    qemu-boot-boot-check.log &mdash; 2026-07-18T11:28+10:00<br>check_c2rust_output_compiles-cfb13280c.log &mdash; 2026-07-18T11:56+10:00<br>c2rust_worktree.log &mdash; 2026-07-18T12:03+10:00<br>diff_oracle.log &mdash; 2026-07-18T12:03+10:00<br>dev-check-baseline-stdout.log &mdash; 2026-07-18T12:05+10:00<br>target_compile_test.log &mdash; 2026-07-18T12:07+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T12:08+10:00<br>check_c2rust_output_compiles-e1541023b.log &mdash; 2026-07-18T12:09+10:00<br>qemu-boot-post-spdx-check.log &mdash; 2026-07-18T12:10+10:00<br>dev-build.log &mdash; 2026-07-18T12:14+10:00<br>build_initramfs.log &mdash; 2026-07-18T12:14+10:00<br>qemu-boot.log &mdash; 2026-07-18T12:14+10:00<br>dev-boot.log &mdash; 2026-07-18T12:14+10:00<br>readiness.log &mdash; 2026-07-18T12:15+10:00<br>report.log &mdash; 2026-07-18T12:15+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T12:15+10:00<br>dev.log &mdash; 2026-07-18T12:16+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T12:17+10:00<br>sync_work_items.log &mdash; 2026-07-18T12:17+10:00<br>generate_dashboard.log &mdash; 2026-07-18T12:17+10:00
+    check_c2rust_output_compiles-cfb13280c.log &mdash; 2026-07-18T11:56+10:00<br>c2rust_worktree.log &mdash; 2026-07-18T12:03+10:00<br>dev-check-baseline-stdout.log &mdash; 2026-07-18T12:05+10:00<br>target_compile_test.log &mdash; 2026-07-18T12:07+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-18T12:08+10:00<br>check_c2rust_output_compiles-e1541023b.log &mdash; 2026-07-18T12:09+10:00<br>qemu-boot-post-spdx-check.log &mdash; 2026-07-18T12:10+10:00<br>dev-build.log &mdash; 2026-07-18T12:14+10:00<br>qemu-boot.log &mdash; 2026-07-18T12:14+10:00<br>dev-boot.log &mdash; 2026-07-18T12:14+10:00<br>readiness.log &mdash; 2026-07-18T12:15+10:00<br>report.log &mdash; 2026-07-18T12:15+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T12:15+10:00<br>diff_oracle.log &mdash; 2026-07-18T12:17+10:00<br>dev.log &mdash; 2026-07-18T12:17+10:00<br>build_initramfs.log &mdash; 2026-07-18T12:18+10:00<br>qemu-boot-post-8250-verify.log &mdash; 2026-07-18T12:18+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T12:18+10:00<br>sync_work_items.log &mdash; 2026-07-18T12:18+10:00<br>generate_dashboard.log &mdash; 2026-07-18T12:18+10:00
   </div>
-  <em>(most-recent 20 of 54 log files shown; commit/time-based proxy only, not actual token usage)</em>
+  <em>(most-recent 20 of 55 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>
 
 <h2>progress_snapshots (time-series, if &gt;1 row)</h2>
