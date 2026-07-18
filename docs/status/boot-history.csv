@@ -66,3 +66,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-18T16:03:53+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T160353+1000-default.log
 2026-07-18T16:23:50+10:00,tierc-irq-c-1,17,0,1,0,docs/status/boot-logs/20260718T162350+1000-tierc-irq-c-1.log
 2026-07-18T16:24:06+10:00,tierc-irq-c-2,17,0,1,0,docs/status/boot-logs/20260718T162406+1000-tierc-irq-c-2.log
+2026-07-18T16:24:21+10:00,tierc-irq-c-3,17,0,1,0,docs/status/boot-logs/20260718T162421+1000-tierc-irq-c-3.log
