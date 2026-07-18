@@ -23,7 +23,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 LOG = REPO / "tmp" / "render_boot_log.log"
 BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
-BOOT_HISTORY_DIR = REPO / "tmp" / "boot-history"
+BOOT_HISTORY_DIR = REPO / "docs" / "status" / "boot-logs"
 BROWSE_DIR = REPO / "tmp" / "boot-log-browse"
 
 OK_RE = re.compile(r"^ok \d+ ")

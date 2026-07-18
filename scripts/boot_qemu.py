@@ -25,9 +25,12 @@ tmp/qemu-boot.log and are not parallel-safe on their own yet, a caller
 wanting parallel runs must pass distinct --run-id values itself, e.g.
 one per kernel image variant being boot-compared).
 
-Every run is also archived to tmp/boot-history/<ISO-timestamp>-<run-id
-or "default">.log (untouched raw copy, gitignored scratch same as
-everything else under tmp/) and gets one row appended to the tracked
+Every run is also archived to docs/status/boot-logs/<ISO-timestamp>-
+<run-id or "default">.log (untouched raw copy, TRACKED in git — see
+2026-07-18 fix: this used to live under tmp/boot-history/, which is
+gitignored, so every row in the tracked boot-history.csv pointed at a
+log file that was never actually committed; a fresh clone had a
+completely dangling history) and gets one row appended to the tracked
 docs/status/boot-history.csv — the same "keep every run, not just the
 latest" pattern docs/status/history.csv already uses for dev.py check's
 KUnit summary, applied to raw boot logs specifically. tmp/qemu-boot.log
@@ -46,7 +49,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 INITRD = REPO / "tmp" / "initramfs" / "initramfs.cpio.gz"
-BOOT_HISTORY_DIR = REPO / "tmp" / "boot-history"
+BOOT_HISTORY_DIR = REPO / "docs" / "status" / "boot-logs"
 BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
 
 # Printed by configs/initramfs-init.sh once /init actually runs as PID 1 —
@@ -58,10 +61,11 @@ INIT_REACHED = "linux-rs: initramfs init reached, PID 1 alive"
 
 def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
                   init_reached: bool, rc: int) -> Path:
-    """Copy this run's raw log to tmp/boot-history/ (never overwritten,
-    unlike tmp/qemu-boot.log itself) and append one row to the tracked
-    docs/status/boot-history.csv, mirroring history.csv's existing
-    per-run-append pattern."""
+    """Copy this run's raw log to docs/status/boot-logs/ (never
+    overwritten, unlike tmp/qemu-boot.log itself) and append one row to
+    the tracked docs/status/boot-history.csv, mirroring history.csv's
+    existing per-run-append pattern. Both the log and the CSV row are
+    real, tracked git content — see commit_and_push_history()."""
     BOOT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
     archived = BOOT_HISTORY_DIR / f"{stamp}-{run_id or 'default'}.log"
@@ -80,21 +84,27 @@ def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
             str(archived.relative_to(REPO)),
         ])
 
-    commit_and_push_history(run_id, n_ok, n_notok, init_reached)
+    commit_and_push_history(archived, run_id, n_ok, n_notok, init_reached)
     return archived
 
 
-def commit_and_push_history(run_id: str | None, n_ok: int, n_notok: int, init_reached: bool):
-    """Every boot commits+pushes docs/status/boot-history.csv immediately
-    (explicit choice: full automation over batching, so the history is
-    never more than one boot stale on the remote). tmp/boot-history/*.log
-    itself is NOT committed (gitignored, regenerable/large) — only the
-    tracked CSV row. Fails LOUD (prints + re-raises) rather than silently
-    swallowing a push failure, since a push touches shared state and a
-    caller relying on this project's rule that shared-state actions are
-    never silent needs to see it fail, not lose it in stdout noise."""
+def commit_and_push_history(archived_log: Path, run_id: str | None, n_ok: int,
+                             n_notok: int, init_reached: bool):
+    """Every boot commits+pushes both docs/status/boot-history.csv AND
+    the archived log file itself immediately (explicit choice: full
+    automation over batching, so the history is never more than one
+    boot stale on the remote, and — since 2026-07-18 — never has a
+    dangling log reference either: the whole point of the diff/history/
+    browse tooling in render_boot_log.py is a real, portable artifact
+    history, not one only usable on the machine that generated it).
+    On failure, prints a loud WARNING to stderr rather than silently
+    swallowing it — but does NOT re-raise: the boot's own pass/fail
+    result (returned/printed separately by the caller) is the primary
+    gate and must not be masked by a transient push failure (e.g.
+    network hiccup)."""
     try:
-        subprocess.run(["git", "add", str(BOOT_HISTORY_CSV.relative_to(REPO))],
+        subprocess.run(["git", "add", str(BOOT_HISTORY_CSV.relative_to(REPO)),
+                        str(archived_log.relative_to(REPO))],
                        cwd=REPO, check=True, capture_output=True, text=True)
         status = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO)
         if status.returncode == 0:
