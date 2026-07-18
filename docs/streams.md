@@ -50,6 +50,18 @@ section; this list is the scannable index.
    unit-test harness exists." Keep the actual short list of genuinely
    untestable things in stream 2's section; don't let "untestable" become
    a reflexive excuse.
+7. **Cross-reference external prior art on every real technical issue,
+   every time it's touched** — not just at filing. Before and during work
+   on a genuine technical issue (a real bug, a design question, a
+   translation-idiom choice), check whether Rust-for-Linux (rust-for-linux/
+   linux kernel tree, its own issue tracker/mailing list threads) has
+   already hit the same problem, whether LKML has prior discussion of the
+   underlying C construct/semantics, and — for anything protocol-adjacent
+   (checksums, wire formats, timing) — whether a relevant IETF RFC exists.
+   Link whatever's found back into our own doc/issue, don't just read it
+   and move on. Re-check on later touches too (a new RfL PR or LKML thread
+   can land after our issue was first filed) — this is a standing habit,
+   not a one-time search per issue.
 
 ## 1. c2rust-breadth
 

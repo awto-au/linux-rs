@@ -22,11 +22,17 @@ TMP = REPO / "tmp"
 LOG = TMP / "diff_oracle.log"
 N = "5000"
 SEED = "424242"
+TIMEOUT_S = 60
 
 
 def sh(cmd):
     logging.info("$ %s", " ".join(map(str, cmd)))
-    return subprocess.run(cmd, check=True, text=True, capture_output=True).stdout
+    try:
+        return subprocess.run(cmd, check=True, text=True, capture_output=True,
+                               timeout=TIMEOUT_S).stdout
+    except subprocess.TimeoutExpired:
+        logging.error("ORACLE 2.5 FAIL: %s timed out after %ds", cmd[0], TIMEOUT_S)
+        sys.exit(1)
 
 
 def main() -> int:

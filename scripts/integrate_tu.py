@@ -64,8 +64,14 @@ def patch_makefile(tree: Path, obj: str):
         logging.error("could not find %s.o in %s — patch by hand", name, mk)
         raise SystemExit(1)
     start = idx
-    while start > 0 and not re.match(r"^(obj|lib)-", lines[start]):
+    while start > 0 and lines[start - 1].rstrip("\n").endswith("\\"):
         start -= 1
+    if not re.match(r"^(obj|lib)-", lines[start]):
+        # e.g. `8250_base-y := 8250_port.o`: the .o is only reachable through
+        # a composite-object rule, not directly gated by an obj-/lib- switch.
+        logging.error("%s.o is inside a composite-object rule (%s) — patch by hand",
+                       name, lines[start].strip())
+        raise SystemExit(1)
     cond = re.split(r"[+:]?=", lines[start])[0].strip()
     lines[idx] = tok.sub("", lines[idx], count=1)
     text = "".join(lines)

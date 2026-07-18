@@ -46,7 +46,11 @@ QEMU_RISCV64 = "qemu-riscv64-static"
 
 def sh(cmd):
     logging.info("$ %s", " ".join(map(str, cmd)))
-    return subprocess.run(cmd, check=True, text=True, capture_output=True).stdout
+    p = subprocess.run(cmd, text=True, capture_output=True)
+    if p.returncode != 0:
+        logging.error("FAILED (%d):\n%s", p.returncode, p.stdout[-4000:] + p.stderr[-4000:])
+        raise SystemExit(1)
+    return p.stdout
 
 
 def diff_lines(c_out: str, rs_out: str):

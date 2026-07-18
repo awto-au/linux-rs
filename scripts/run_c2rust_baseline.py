@@ -32,6 +32,9 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
+from build_c2rust_pch import PER_FILE_PREFIXES as PCH_PER_FILE_PREFIXES
+from build_c2rust_pch import strip_per_file_flags as _strip_per_file_flags
+
 REPO = Path(__file__).resolve().parent.parent
 TREE = REPO / "linux-riscv"
 TMP = REPO / "tmp"
@@ -218,40 +221,6 @@ def safe_name(file_path):
     return file_path.replace("/", "_").lstrip("_")
 
 
-# Per-file identity macros KBUILD injects (module path/name for
-# __FILE__-style diagnostics and MODULE_* macros) — the only flags that
-# differ between TUs that otherwise share every other compile flag, so
-# they're stripped before comparing a TU's flags against the PCH's
-# recorded flag set. Must match build_c2rust_pch.py's PER_FILE_PREFIXES
-# exactly, or membership here could disagree with what the PCH was
-# actually built from.
-PCH_PER_FILE_PREFIXES = (
-    "-DKBUILD_MODFILE=",
-    "-DKBUILD_BASENAME=",
-    "-DKBUILD_MODNAME=",
-    "-D__KBUILD_MODNAME=",
-    "-Wp,-MMD,",
-)
-
-
-def _strip_per_file_flags(tokens):
-    out = []
-    skip_next = False
-    for t in tokens:
-        if skip_next:
-            skip_next = False
-            continue
-        if t == "-o":
-            skip_next = True
-            continue
-        if t == "-c":
-            continue
-        if any(t.startswith(p) for p in PCH_PER_FILE_PREFIXES):
-            continue
-        out.append(t)
-    return tuple(out)
-
-
 def load_pch_flags():
     """The stable flag set build_c2rust_pch.py built the PCH from, or
     None if no PCH has been built yet — callers must treat None as "PCH
@@ -310,24 +279,32 @@ def corpus_rev():
 
 
 def binary_stale_warning():
-    """None if C2RUST's mtime is newer than every tracked source file in
-    C2RUST_FORK (built after the last edit), else a ready-to-print warning
-    string. git_rev(C2RUST_FORK) records the SOURCE tree's HEAD — with
-    nothing checking that the compiled binary was actually built from
-    that commit, an edit-but-forget-to-`cargo build --release` session
-    would silently mislabel every row this run writes with a c2rust_rev
-    the binary doesn't actually reflect (same class of bug as
-    build_db.py's dropped-table silent-mismatch: a real state divergence
-    with no signal until someone notices results don't match the rev they
-    expected). mtime-only, not a content hash — cheap and sufficient: a
-    `cargo build` always touches the output binary's mtime, so any
-    genuine rebuild clears this regardless of whether the diff was a
-    no-op. `git ls-files` scopes the comparison to tracked, compileable
-    inputs only (build artifacts under target/, .git/ internals, etc
-    don't count as "source changed since the binary")."""
-    if not Path(C2RUST).exists():
-        return f"c2rust binary not found at {C2RUST}"
-    bin_mtime = Path(C2RUST).stat().st_mtime
+    """None if every dispatcher-reachable binary's mtime is newer than
+    every tracked source file in C2RUST_FORK (built after the last edit),
+    else a ready-to-print warning string. Checks both c2rust and its
+    sibling c2rust-transpile (see build_c2rust.py's REQUIRED_BINS) —
+    `cargo build --release --bin c2rust` only rebuilds the dispatcher,
+    leaving c2rust-transpile (the binary that actually does AST
+    export/transpilation) untouched, so checking the dispatcher's mtime
+    alone can report "fresh" while the transpile binary is stale.
+    git_rev(C2RUST_FORK) records the SOURCE tree's HEAD — with nothing
+    checking that the compiled binaries were actually built from that
+    commit, an edit-but-forget-to-`cargo build --release` session would
+    silently mislabel every row this run writes with a c2rust_rev the
+    binaries don't actually reflect (same class of bug as build_db.py's
+    dropped-table silent-mismatch: a real state divergence with no signal
+    until someone notices results don't match the rev they expected).
+    mtime-only, not a content hash — cheap and sufficient: a `cargo build`
+    always touches the output binary's mtime, so any genuine rebuild
+    clears this regardless of whether the diff was a no-op. `git ls-files`
+    scopes the comparison to tracked, compileable inputs only (build
+    artifacts under target/, .git/ internals, etc don't count as "source
+    changed since the binary")."""
+    bin_paths = [Path(C2RUST), Path(C2RUST).parent / "c2rust-transpile"]
+    for bin_path in bin_paths:
+        if not bin_path.exists():
+            return f"c2rust binary not found at {bin_path}"
+    bin_mtime = min(bin_path.stat().st_mtime for bin_path in bin_paths)
     try:
         tracked = subprocess.run(
             ["git", "ls-files"], cwd=C2RUST_FORK,
@@ -340,11 +317,12 @@ def binary_stale_warning():
              and (C2RUST_FORK / f).stat().st_mtime > bin_mtime]
     if newer:
         return (
-            f"c2rust binary at {C2RUST} is OLDER than {len(newer)} tracked "
-            f"source file(s) in {C2RUST_FORK} (e.g. {newer[0]}) — results "
-            f"below will be recorded under c2rust_rev={git_rev(C2RUST_FORK)} "
-            f"but were produced by a STALE build. Run `cargo build --release` "
-            f"in {C2RUST_FORK} before trusting this baseline."
+            f"one or more of {', '.join(str(p) for p in bin_paths)} is "
+            f"OLDER than {len(newer)} tracked source file(s) in "
+            f"{C2RUST_FORK} (e.g. {newer[0]}) — results below will be "
+            f"recorded under c2rust_rev={git_rev(C2RUST_FORK)} but were "
+            f"produced by a STALE build. Run `cargo build --release` in "
+            f"{C2RUST_FORK} before trusting this baseline."
         )
     return None
 
@@ -1384,12 +1362,18 @@ def main():
             logging.info("  %6.1fs  %5.0fMB  %s", r.get("duration_s") or 0,
                         (r.get("peak_rss_bytes") or 0) / 1e6, r["file"])
 
-    patterns = conn.execute(
-        "SELECT kind, detail, tus_affected FROM c2rust_failure_patterns LIMIT 15"
-    ).fetchall()
-    logging.info("top failure patterns (fix-priority order):")
-    for kind, detail, count in patterns:
-        logging.info("  [%3d TUs] %-22s %s", count, kind, detail[:100])
+    try:
+        patterns = conn.execute(
+            "SELECT kind, detail, tus_affected FROM c2rust_failure_patterns LIMIT 15"
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        logging.warning("could not query c2rust_failure_patterns (%s) — "
+                         "run scripts/build_db.py to apply rulesdb/schema.sql", e)
+        patterns = None
+    if patterns is not None:
+        logging.info("top failure patterns (fix-priority order):")
+        for kind, detail, count in patterns:
+            logging.info("  [%3d TUs] %-22s %s", count, kind, detail[:100])
 
     conn.close()
     return 0

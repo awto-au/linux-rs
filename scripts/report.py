@@ -15,6 +15,7 @@ Log: tmp/report.log
 import csv
 import datetime
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -28,7 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kunit_oracle import TS_PREFIX_RE  # noqa: E402 — see module doc
 
-TREE = REPO / "linux-riscv"
+TREE = REPO / os.environ.get("LINUXRS_TREE", "linux-riscv")
 OUT = REPO / "docs" / "status"
 LOG = REPO / "tmp" / "report.log"
 
@@ -46,9 +47,10 @@ def sh(cmd):
 
 
 def tu_timeline():
+    branch = sh(["git", "-C", str(TREE), "rev-parse", "--abbrev-ref", "HEAD"]).strip()
     out = sh(["git", "-C", str(TREE), "log", "--reverse", "--diff-filter=A",
               "--date=iso-strict", "--format=C|%ad", "--name-only",
-              "linux-rs/phase2-gcd", "--", "*_rs.rs"])
+              branch, "--", "*_rs.rs"])
     times, cum, count = [], [], 0
     when = None
     for line in out.splitlines():

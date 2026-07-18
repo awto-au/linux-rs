@@ -165,7 +165,7 @@ def load_translated_tus(conn):
         logging.warning("no linux-riscv/ worktree — skipping translation status")
         return 0
     n = 0
-    for rs in sorted(TREE.glob("lib/**/*_rs.rs")):
+    for rs in sorted(TREE.rglob("*_rs.rs")):
         c_rel = str(rs.relative_to(TREE)).replace("_rs.rs", ".c")
         rs_rel = str(rs.relative_to(TREE))
         landed_at, patch_num = None, None

@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kunit_oracle import TS_PREFIX_RE  # noqa: E402 — see module doc
+from kunit_oracle import INIT_REACHED, TS_PREFIX_RE  # noqa: E402 — see module doc
 
 LOG = REPO / "tmp" / "render_boot_log.log"
 BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
@@ -32,7 +32,7 @@ BROWSE_DIR = REPO / "tmp" / "boot-log-browse"
 OK_RE = re.compile(rf"^{TS_PREFIX_RE}ok \d+ ")
 NOTOK_RE = re.compile(rf"^{TS_PREFIX_RE}\s*not ok ")
 TOTALS_RE = re.compile(rf"^{TS_PREFIX_RE}# Totals:")
-MILESTONE = "linux-rs: initramfs init reached, PID 1 alive"
+MILESTONE = INIT_REACHED
 PANIC_RE = re.compile(r"Kernel panic")
 
 # Split a rendered line into its (elapsed-time prefix, rest) for display —

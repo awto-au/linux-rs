@@ -95,7 +95,7 @@ def fingerprint(cursor):
         "fp_shape": h(shape),
         "nodes": len(shape),
         "ncalls": ncalls,
-        "callees": sorted(callees)[:50],
+        "callees": sorted(callees),
         "features": sorted(feats),
     }
 

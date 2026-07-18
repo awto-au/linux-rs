@@ -54,7 +54,7 @@ Usage: boot_qemu.py [--tree linux-riscv] [--append "extra args"] [--run-id NAME]
 import argparse
 import csv
 import datetime
-import re
+import fcntl
 import shutil
 import subprocess
 import sys
@@ -62,25 +62,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kunit_oracle import TS_PREFIX_RE  # noqa: E402 — see module doc
+from kunit_oracle import INIT_REACHED, NOT_OK_RE, OK_RE  # noqa: E402 — see module doc
 
 REPO = Path(__file__).resolve().parent.parent
 INITRD = REPO / "tmp" / "initramfs" / "initramfs.cpio.gz"
 BOOT_HISTORY_DIR = REPO / "docs" / "status" / "boot-logs"
 BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
-
-# Printed by configs/initramfs-init.sh once /init actually runs as PID 1 —
-# the milestone that real userspace (not just KUnit-in-kernel-space) was
-# reached. Kept distinct from the "ok N ..." KUnit line shape so the two
-# detectors can never collide.
-INIT_REACHED = "linux-rs: initramfs init reached, PID 1 alive"
-
-# Matches "ok "/"not ok " at the start of a line's actual content, whether
-# or not a "NNNNN.NNN " elapsed-time prefix (written by main(), below) is
-# present first — see kunit_oracle.TS_PREFIX_RE's module doc for why this
-# fragment is shared rather than redefined per file.
-OK_LINE_RE = re.compile(rf"^{TS_PREFIX_RE}ok ")
-NOT_OK_LINE_RE = re.compile(rf"^{TS_PREFIX_RE}not ok ")
+BOOT_HISTORY_LOCK = REPO / "tmp" / ".boot-history.lock"
 
 
 def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
@@ -125,21 +113,28 @@ def commit_and_push_history(archived_log: Path, run_id: str | None, n_ok: int,
     swallowing it — but does NOT re-raise: the boot's own pass/fail
     result (returned/printed separately by the caller) is the primary
     gate and must not be masked by a transient push failure (e.g.
-    network hiccup)."""
+    network hiccup). The whole git add/commit/push sequence is
+    serialized across concurrent boot_qemu.py runs (--run-id) via an
+    flock on tmp/.boot-history.lock — without it, two runs finishing
+    around the same time race on .git/index.lock and the loser's row
+    is silently never committed, not just delayed."""
+    BOOT_HISTORY_LOCK.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(["git", "add", str(BOOT_HISTORY_CSV.relative_to(REPO)),
-                        str(archived_log.relative_to(REPO))],
-                       cwd=REPO, check=True, capture_output=True, text=True)
-        status = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO)
-        if status.returncode == 0:
-            return  # nothing staged (e.g. re-running with an identical row somehow) — no-op
-        msg = (f"boot-history: {run_id or 'default'} — {n_ok} ok / {n_notok} not ok"
-               f"{', INIT REACHED' if init_reached else ''}\n\n"
-               f"Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
-        subprocess.run(["git", "commit", "-m", msg], cwd=REPO, check=True,
-                       capture_output=True, text=True)
-        subprocess.run(["git", "push"], cwd=REPO, check=True, capture_output=True, text=True)
-        print("boot-history: committed + pushed")
+        with open(BOOT_HISTORY_LOCK, "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            subprocess.run(["git", "add", str(BOOT_HISTORY_CSV.relative_to(REPO)),
+                            str(archived_log.relative_to(REPO))],
+                           cwd=REPO, check=True, capture_output=True, text=True)
+            status = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO)
+            if status.returncode == 0:
+                return  # nothing staged (e.g. re-running with an identical row somehow) — no-op
+            msg = (f"boot-history: {run_id or 'default'} — {n_ok} ok / {n_notok} not ok"
+                   f"{', INIT REACHED' if init_reached else ''}\n\n"
+                   f"Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
+            subprocess.run(["git", "commit", "-m", msg], cwd=REPO, check=True,
+                           capture_output=True, text=True)
+            subprocess.run(["git", "push"], cwd=REPO, check=True, capture_output=True, text=True)
+            print("boot-history: committed + pushed")
     except subprocess.CalledProcessError as e:
         print(f"WARNING: boot-history auto-commit/push failed: {e}\n{e.stderr}",
               file=sys.stderr)
@@ -219,8 +214,8 @@ def main() -> int:
     text = LOG.read_text(errors="replace")
     n_ok = n_notok = 0
     for line in text.splitlines():
-        is_ok = bool(OK_LINE_RE.match(line))
-        is_notok = bool(NOT_OK_LINE_RE.match(line))
+        is_ok = bool(OK_RE.match(line))
+        is_notok = bool(NOT_OK_RE.match(line))
         if is_ok:
             n_ok += 1
         elif is_notok:

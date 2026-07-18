@@ -18,6 +18,7 @@ Log: tmp/check_c2rust_output_compiles.log
 """
 import argparse
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -34,7 +35,13 @@ REPORT = REPO / "tmp" / "c2rust-output-compile-report.md"
 
 TARGET = "riscv64imac-unknown-none-elf"
 PER_FILE_TIMEOUT_S = 60
-C2RUST_SRC = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
+# C2RUST_FORK_DIR override lets this target an isolated
+# scripts/c2rust_worktree.py-created worktree instead of the shared
+# checkout, matching run_c2rust_baseline.py's convention — otherwise the
+# default --c2rust-rev below resolves to the shared checkout's HEAD even
+# when the baseline data being checked was produced by a different one.
+C2RUST_SRC = Path(os.environ.get(
+    "C2RUST_FORK_DIR", "/mnt/2tb/git/github.com/awtoau/c2rust"))
 
 
 def current_c2rust_rev() -> str:
@@ -72,9 +79,19 @@ ASM_CASTS_RLIB = TARGET_DIR / "libc2rust_asm_casts.rlib"
 def build_support_crates():
     """Build c2rust-bitfields (+ its derive proc-macro) and c2rust-asm-casts
     for TARGET, linked against the kernel's own libcore.rmeta. Idempotent —
-    skips crates that already exist. Returns True on success."""
+    skips crates that already exist and are newer than libcore.rmeta.
+    Returns True on success."""
     HOST_DIR.mkdir(parents=True, exist_ok=True)
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
+
+    # BITFIELDS_RLIB/ASM_CASTS_RLIB are --extern-linked against
+    # libcore.rmeta (BITFIELDS_DERIVE_SO is a host proc-macro and isn't),
+    # so a rebuilt kernel tree that regenerates libcore.rmeta with a new
+    # SVH must force these two to rebuild too, or rustc_check() links
+    # every candidate file against a stale rlib and reports a whole-corpus
+    # "found possibly newer version of crate `core`" mismatch as if it
+    # were a per-file compile error.
+    libcore_mtime = (RUST_DIR / "libcore.rmeta").stat().st_mtime
 
     if not BITFIELDS_DERIVE_SO.exists():
         cmd = [
@@ -97,7 +114,7 @@ def build_support_crates():
             return False
         logging.info("built %s", BITFIELDS_DERIVE_SO)
 
-    if not BITFIELDS_RLIB.exists():
+    if not BITFIELDS_RLIB.exists() or BITFIELDS_RLIB.stat().st_mtime < libcore_mtime:
         cmd = [
             "rustc", "+nightly",
             "--edition=2021",
@@ -121,7 +138,7 @@ def build_support_crates():
             return False
         logging.info("built %s", BITFIELDS_RLIB)
 
-    if not ASM_CASTS_RLIB.exists():
+    if not ASM_CASTS_RLIB.exists() or ASM_CASTS_RLIB.stat().st_mtime < libcore_mtime:
         cmd = [
             "rustc", "+nightly",
             "--edition=2021",
@@ -286,6 +303,17 @@ def main():
         return 1
 
     files = find_clean_outputs(c2rust_rev)
+    if not files:
+        # Loud, not just logged at INFO — main() has no other guard on an
+        # empty file list, so a c2rust_rev mismatch (e.g. C2RUST_FORK_DIR
+        # pointed at a worktree whose rev the baseline wasn't run against)
+        # would otherwise silently produce a "Checked: 0 files" report and
+        # exit 0 as if it were a complete, successful run.
+        print(f"WARNING: no clean c2rust_attempts rows found for c2rust_rev={c2rust_rev} "
+              f"in {DB} — the report will show 'Checked: 0 files'. Pass --c2rust-rev "
+              f"to match the revision the baseline was actually run against.")
+        logging.warning("no clean outputs found for c2rust_rev=%s — proceeding anyway "
+                        "with an empty file list", c2rust_rev)
     if args.limit:
         files = files[: args.limit]
     logging.info("checking %d c2rust output files against real riscv64 target", len(files))

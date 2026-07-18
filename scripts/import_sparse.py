@@ -179,6 +179,8 @@ def main() -> int:
             try:
                 diags = fut.result()
             except subprocess.TimeoutExpired:
+                entry = futures[fut]
+                logging.warning("sparse timeout: %s", entry["file"])
                 n_failed += 1
                 continue
             for file_, line_, col, sev, msg in diags:

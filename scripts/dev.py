@@ -34,7 +34,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kunit_oracle import verify_kunit_ok  # noqa: E402 — see module doc
+from kunit_oracle import INIT_REACHED, verify_kunit_ok  # noqa: E402 — see module doc
 
 
 def print(*args, **kw):  # noqa: A001 — awto rule: all output also to tmp/dev.log
@@ -70,7 +70,7 @@ def kmake(*targets):
        log="dev-build.log")
 
 
-INIT_REACHED_MARKER = "linux-rs: initramfs init reached, PID 1 alive"
+INIT_REACHED_MARKER = INIT_REACHED
 
 # The real, explicit list of what `dev.py check` runs after a successful
 # boot — a check-registry, not a hand-wired sequence. Existed as a growing

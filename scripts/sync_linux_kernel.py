@@ -76,6 +76,8 @@ def main():
 
     old_head = sh(["git", "rev-parse", "HEAD"]).stdout.strip()
     ours = sh(["git", "rev-list", "--count", "@{upstream}..HEAD"], check=False)
+    if ours.returncode == 0:
+        print(f"{ours.stdout.strip()} local commits not yet rebased")
 
     try:
         sh(["git", "rebase", "upstream/master"])

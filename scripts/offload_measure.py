@@ -6,17 +6,15 @@ truth) and measure real token cost — not estimated.
 For each C file that already has a landed _rs.rs translation in the
 riscv worktree: run offload_translate.py + offload_review.py, record
 Ollama's own prompt_eval_count/eval_count (real token counts, from the
-API response, not guessed), and diff the draft's SHAPE against the
-landed translation (not byte-equal — different variable names are fine —
-but same functions, same rule-required transforms) to see where it
-actually diverges from known-correct output.
+API response, not guessed), and compare the draft's line count against
+the landed translation's line count.
 
 This is a MEASUREMENT tool. It does not replace or modify any landed
 translation.
 
 Usage: offload_measure.py [--limit N]
 Output: tmp/offload_measure_report.md (token counts, pass/fail per TU,
-divergence notes) + the per-TU artifacts in tmp/offload/
+line-count comparison) + the per-TU artifacts in tmp/offload/
 Log: tmp/offload_measure.log
 """
 import argparse
@@ -114,7 +112,11 @@ def main() -> int:
             continue
 
         r2 = run_stage("offload_review.py", c_file)
-        review_text = (OUT / f"{name}.review.txt").read_text() if r2.returncode == 0 else ""
+        if r2.returncode != 0:
+            logging.error("%s: review stage crashed:\n%s", name, r2.stderr[-2000:])
+            rows.append(dict(name=name, status="REVIEW_FAIL"))
+            continue
+        review_text = (OUT / f"{name}.review.txt").read_text()
         verdict = ("FAIL" if "OVERALL: FAIL" in review_text else
                   "PASS" if "OVERALL: PASS" in review_text else "UNCLEAR")
 

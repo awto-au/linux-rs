@@ -17,6 +17,7 @@ Output: table on stdout, log tmp/readiness.log
 import argparse
 import fnmatch
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def translated_tus(tree: Path):
     """Derive the translated set from <name>_rs.rs files in the worktree."""
     return sorted(
         str(f.relative_to(tree)).replace("_rs.rs", ".c")
-        for f in tree.glob("lib/**/*_rs.rs")
+        for f in tree.glob("**/*_rs.rs")
     )
 
 
@@ -40,7 +41,7 @@ def toks(fp):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tree", default="linux-riscv")
+    ap.add_argument("--tree", default=os.environ.get("LINUXRS_TREE", "linux-riscv"))
     ap.add_argument("--glob", default="lib/*.c")
     args = ap.parse_args()
 

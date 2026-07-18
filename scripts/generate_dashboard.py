@@ -118,7 +118,7 @@ def fetch_progress_series(conn):
     points = {}
     for rev, run_at, outcome, n in rows:
         points.setdefault(run_at, {"rev": rev, "clean": 0, "crash": 0,
-                                    "dropped_decls": 0, "no_output": 0})
+                                    "dropped_decls": 0, "no_output": 0, "oom": 0})
         points[run_at][outcome] = n
     return sorted(points.items())
 
@@ -400,7 +400,7 @@ def main() -> int:
     latest_summary = ""
     if latest_run:
         run_at, vals = latest_run
-        total = vals["clean"] + vals["crash"] + vals["dropped_decls"] + vals["no_output"]
+        total = vals["clean"] + vals["crash"] + vals["dropped_decls"] + vals["no_output"] + vals["oom"]
         latest_summary = (f"latest run (rev {esc(vals['rev'])}, {esc(run_at[:19])}): "
                            f"{vals['clean']} clean / {vals['crash']} crash / "
                            f"{vals['dropped_decls']} dropped_decls out of {total} files")

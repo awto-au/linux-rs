@@ -30,6 +30,7 @@ Log: tmp/ollama_queue_watch.log
 """
 import json
 import logging
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -37,9 +38,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 LOG = REPO / "tmp" / "ollama_queue_watch.log"
 
+# GitHub's own auto-link keyword syntax (closes/fixes/resolves #N) — matches
+# what GitHub itself treats as a claim, not any bare #<digits> token (which
+# also matches unrelated numbers like upstream commit/bugzilla references).
+CLAIM_RE = re.compile(r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.IGNORECASE)
+
 
 def gh_json(args: list[str]):
-    out = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+    out = subprocess.run(["gh", *args], capture_output=True, text=True, check=True,
+                          timeout=60)
     return json.loads(out.stdout)
 
 
@@ -50,17 +57,20 @@ def main() -> int:
         handlers=[logging.FileHandler(LOG, mode="a"), logging.StreamHandler(sys.stdout)],
     )
 
-    issues = gh_json(["issue", "list", "-R", "awtoau/c2rust", "--state", "open",
-                       "--json", "number,title,labels"])
-    open_prs = gh_json(["pr", "list", "-R", "awtoau/c2rust", "--state", "open",
-                        "--json", "number,title,body"])
+    try:
+        issues = gh_json(["issue", "list", "-R", "awtoau/c2rust", "--state", "open",
+                           "--json", "number,title,labels"])
+        open_prs = gh_json(["pr", "list", "-R", "awtoau/c2rust", "--state", "open",
+                            "--json", "number,title,body"])
+    except subprocess.TimeoutExpired as e:
+        logging.error("gh command timed out after %ss: %s", e.timeout, e.cmd)
+        return 1
 
     claimed_numbers = set()
     for pr in open_prs:
         text = f"{pr.get('title', '')} {pr.get('body', '')}"
-        for tok in text.replace("#", " #").split():
-            if tok.startswith("#") and tok[1:].isdigit():
-                claimed_numbers.add(int(tok[1:]))
+        for m in CLAIM_RE.finditer(text):
+            claimed_numbers.add(int(m.group(1)))
 
     candidates = []
     for issue in issues:

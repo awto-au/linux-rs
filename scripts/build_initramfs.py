@@ -46,6 +46,7 @@ Log: tmp/build_initramfs.log
 """
 import argparse
 import gzip
+import hashlib
 import logging
 import shutil
 import subprocess
@@ -71,6 +72,7 @@ BUSYBOX_URL = f"https://busybox.net/downloads/busybox-{BUSYBOX_VERSION}.tar.bz2"
 BUSYBOX_TARBALL = WORK / f"busybox-{BUSYBOX_VERSION}.tar.bz2"
 BUSYBOX_SRC = WORK / f"busybox-{BUSYBOX_VERSION}"
 BUSYBOX_BIN = WORK / "busybox"
+BUSYBOX_OPTS_HASH = WORK / "busybox.opts-hash"
 
 # Applets /init actually calls (see configs/initramfs-init.sh) plus the
 # shell that execs it. Everything else stays off — see module docstring
@@ -110,8 +112,16 @@ def ensure_toolchain(rebuild: bool) -> Path:
     return TOOLCHAIN_DIR
 
 
+def opts_hash() -> str:
+    return hashlib.sha1(
+        (BUSYBOX_VERSION + "\x00" + "\x00".join(BUSYBOX_OPTS)).encode()
+    ).hexdigest()
+
+
 def ensure_busybox(toolchain_dir: Path, rebuild: bool) -> Path:
-    if BUSYBOX_BIN.exists() and not rebuild:
+    if (BUSYBOX_BIN.exists() and not rebuild
+            and BUSYBOX_OPTS_HASH.exists()
+            and BUSYBOX_OPTS_HASH.read_text().strip() == opts_hash()):
         logging.info("reusing existing busybox at %s (pass --rebuild-busybox to refresh)", BUSYBOX_BIN)
         return BUSYBOX_BIN
 
@@ -171,6 +181,7 @@ def ensure_busybox(toolchain_dir: Path, rebuild: bool) -> Path:
     built = BUSYBOX_SRC / "busybox"
     shutil.copy2(built, BUSYBOX_BIN)
     BUSYBOX_BIN.chmod(0o755)
+    BUSYBOX_OPTS_HASH.write_text(opts_hash())
     logging.info("built %s", BUSYBOX_BIN)
     return BUSYBOX_BIN
 

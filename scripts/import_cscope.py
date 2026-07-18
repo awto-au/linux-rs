@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Build tmp/cscope.out over the pinned corpus, then query it per function
 name (driven by our own census's function list — clean, libclang-verified,
-no macro-name false positives) and import call/definition/assignment refs
-into rulesdb/patterns.db's cscope_symbols table.
+no macro-name false positives) and import call/definition refs into
+rulesdb/patterns.db's cscope_symbols table.
 
 Closes the documented gap in schema.sql's `callees`/`call_edges`: an AST
 fingerprinter has no whole-program symbol resolution, so it can't tell
@@ -69,10 +69,15 @@ def normalize_path(p):
 
 
 def query(name, mode_flag):
-    r = subprocess.run(
-        ["cscope", "-d", "-f", str(CSCOPE_OUT), "-L", mode_flag, name],
-        capture_output=True, text=True, timeout=30,
-    )
+    try:
+        r = subprocess.run(
+            ["cscope", "-d", "-f", str(CSCOPE_OUT), "-L", mode_flag, name],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        logging.warning("cscope query timed out for %r (mode %s) — skipping",
+                        name, mode_flag)
+        return []
     out = []
     for line in r.stdout.splitlines():
         m = LINE_RE.match(line)
@@ -107,6 +112,17 @@ def main() -> int:
     if not functions_path.exists():
         logging.error("no %s — run scripts/fingerprint.py first", functions_path)
         return 1
+    cc_path = REPO / "linux" / "compile_commands.json"
+    if cc_path.exists() and functions_path.stat().st_mtime < cc_path.stat().st_mtime:
+        # Loud, not just logged — same principle as run_c2rust_baseline.py's
+        # binary-stale warning: a census older than the pinned corpus
+        # silently re-seeds cscope_symbols from function/callee data that
+        # no longer matches the current tree, with nothing short of a
+        # manual date comparison to notice.
+        stale_msg = (f"{functions_path} is OLDER than {cc_path} — re-run "
+                     f"scripts/fingerprint.py before trusting this import")
+        print(f"WARNING: {stale_msg}")
+        logging.warning(stale_msg)
 
     # Scope to `static` functions only (definitions + their callers): that
     # is exactly the class call_edges cannot resolve — non-static names

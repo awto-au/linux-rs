@@ -18,10 +18,14 @@ LOG = TMP / "bench_math.log"
 N = "10000000"
 
 
-def run(cmd):
+def run(cmd, timeout=600):
     logging.info("$ %s", " ".join(map(str, cmd)))
-    return subprocess.run(cmd, check=True, text=True,
-                          capture_output=True).stdout
+    try:
+        return subprocess.run(cmd, check=True, text=True, capture_output=True,
+                              timeout=timeout).stdout
+    except subprocess.TimeoutExpired:
+        logging.error("TIMEOUT after %ss: %s", timeout, " ".join(map(str, cmd)))
+        raise SystemExit(1)
 
 
 def main() -> int:

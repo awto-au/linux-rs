@@ -53,6 +53,14 @@ TS_PREFIX_RE = r"(?:\d{5}\.\d{3} )?"
 OK_RE = re.compile(rf"^{TS_PREFIX_RE}ok \d+ .*$", re.M)
 NOT_OK_RE = re.compile(rf"^{TS_PREFIX_RE}\s*not ok .*$", re.M)
 
+# Printed by configs/initramfs-init.sh once /init actually runs as PID 1 —
+# the milestone that real userspace (not just KUnit-in-kernel-space) was
+# reached. boot_qemu.py, render_boot_log.py, and dev.py all need to agree
+# on this exact text; import INIT_REACHED from here rather than
+# redefining it — it must change in exactly one place if the message
+# configs/initramfs-init.sh prints ever does.
+INIT_REACHED = "linux-rs: initramfs init reached, PID 1 alive"
+
 
 def verify_kunit_ok(log_text: str) -> tuple[bool, list[str], list[str]]:
     """Scan a QEMU boot log's text for KUnit result lines and return the

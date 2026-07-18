@@ -77,49 +77,37 @@ BODY_HASH = hash8("BODY")
 
 
 def subtree_hashes(stmt):
-    """Iterative postorder Merkle hashes: [(hash, parent_idx)] per node.
+    """Iterative postorder Merkle hashes: list of per-node hashes.
     Control bodies and compounds pruned to a BODY leaf (as in stmt_fp)."""
-    nodes = []  # (hash, parent)
-    # phase stack: (cursor, parent_out_idx_slot, pruned)
+    nodes = []
     # two-pass: expand children first via explicit stack of frames
-    frames = [[stmt, -1, False, None, None]]  # cursor, parent, pruned, kids, hashes
+    frames = [[stmt, False, None, None]]  # cursor, pruned, kids, hashes
     while frames:
         fr = frames[-1]
-        c, parent, pruned = fr[0], fr[1], fr[2]
+        c, pruned = fr[0], fr[1]
         if pruned or c.kind == K.COMPOUND_STMT:
-            nodes.append((BODY_HASH, parent))
+            nodes.append(BODY_HASH)
             frames.pop()
-            if frames and frames[-1][4] is not None:
-                frames[-1][4].append(BODY_HASH)
+            if frames and frames[-1][3] is not None:
+                frames[-1][3].append(BODY_HASH)
             continue
-        if fr[3] is None:
-            fr[3] = list(c.get_children())
-            fr[4] = []
+        if fr[2] is None:
+            fr[2] = list(c.get_children())
+            fr[3] = []
             bodies = {b.hash for b in body_children(c)}
             fr.append(bodies)
             fr.append(0)
-        kids, hashes, bodies, i = fr[3], fr[4], fr[5], fr[6]
+        kids, hashes, bodies, i = fr[2], fr[3], fr[4], fr[5]
         if i < len(kids):
-            fr[6] += 1
-            frames.append([kids[i], None, kids[i].hash in bodies, None, None])
-            # parent index unknown until self is appended; patch later via slot:
-            frames[-1][1] = ("pending", len(frames) - 2)
+            fr[5] += 1
+            frames.append([kids[i], kids[i].hash in bodies, None, None])
             continue
         h = hash8(tok(c) + "(" + ",".join(map(str, hashes)) + ")")
-        nodes.append((h, parent))
-        my_idx = len(nodes) - 1
-        # patch children whose parent was this frame: they recorded pending refs
+        nodes.append(h)
         frames.pop()
-        if frames and frames[-1][4] is not None:
-            frames[-1][4].append(h)
-        # fix pending parents: children appended before self point to frame idx
-        # simpler: second pass below resolves nothing — parents recorded as
-        # ("pending", frame_idx) need mapping; instead record parent after.
-    # Second pass: parent indices were recorded as ("pending", frame_idx) —
-    # rebuild parents structurally instead (cheap): recompute via sizes is
-    # complex; for the glue analysis only the per-node hash matters, parents
-    # are unused. Return hashes with parent=-1.
-    return [(h, -1) for h, _ in nodes]
+        if frames and frames[-1][3] is not None:
+            frames[-1][3].append(h)
+    return nodes
 
 
 def iter_statements(entry):
@@ -166,7 +154,7 @@ def iter_statements(entry):
 def pass1(entry):
     c = Counter()
     for st, _ in iter_statements(entry):
-        for h, _ in subtree_hashes(st):
+        for h in subtree_hashes(st):
             c[h] += 1
     return c
 
@@ -175,7 +163,7 @@ def pass2(entry):
     out = []
     for st, src_lines in iter_statements(entry):
         if stmt_fp(st, src_lines) in SINGLETONS:
-            hs = [h for h, _ in subtree_hashes(st)]
+            hs = subtree_hashes(st)
             out.append((hs[-1] if hs else 0, hs))  # root is last in postorder
     return out
 

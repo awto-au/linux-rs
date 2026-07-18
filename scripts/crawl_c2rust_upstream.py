@@ -32,7 +32,9 @@ def gh_api_paginated(path, extra_fields=""):
     cmd = ["gh", "api", "--paginate", path]
     if extra_fields:
         cmd += extra_fields.split()
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    # Generous timeout: --paginate can span hundreds of pages, but a stalled
+    # connection or an interactive gh auth prompt must not hang forever.
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=300)
     # --paginate concatenates JSON arrays back-to-back; split conservatively.
     text = proc.stdout.strip()
     if not text:
@@ -56,20 +58,23 @@ def crawl_forks(conn, limit=None):
     logging.info("crawling forks of %s", UPSTREAM)
     now = datetime.now(timezone.utc).isoformat()
     n = 0
-    for fork in gh_api_paginated(f"repos/{UPSTREAM}/forks?per_page=100&sort=newest"):
-        conn.execute(
-            "INSERT OR REPLACE INTO c2rust_forks "
-            "(id, full_name, html_url, pushed_at, ahead_by, stargazers_count, "
-            " default_branch, crawled_at) VALUES (?,?,?,?,?,?,?,?)",
-            (
-                fork["id"], fork["full_name"], fork["html_url"], fork.get("pushed_at"),
-                None,  # populated separately by fill_ahead_by(); one compare call per fork
-                fork.get("stargazers_count"), fork.get("default_branch"), now,
-            ),
-        )
-        n += 1
-        if limit and n >= limit:
-            break
+    try:
+        for fork in gh_api_paginated(f"repos/{UPSTREAM}/forks?per_page=100&sort=newest"):
+            conn.execute(
+                "INSERT OR REPLACE INTO c2rust_forks "
+                "(id, full_name, html_url, pushed_at, ahead_by, stargazers_count, "
+                " default_branch, crawled_at) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    fork["id"], fork["full_name"], fork["html_url"], fork.get("pushed_at"),
+                    None,  # populated separately by fill_ahead_by(); one compare call per fork
+                    fork.get("stargazers_count"), fork.get("default_branch"), now,
+                ),
+            )
+            n += 1
+            if limit and n >= limit:
+                break
+    except subprocess.TimeoutExpired:
+        logging.warning("forks: gh api --paginate timed out after %d rows", n)
     conn.commit()
     logging.info("forks: %d rows", n)
     return n
@@ -118,27 +123,30 @@ def crawl_issues(conn, repo, limit=None):
     logging.info("crawling issues+PRs of %s (state=all)", repo)
     now = datetime.now(timezone.utc).isoformat()
     n = 0
-    for item in gh_api_paginated(f"repos/{repo}/issues?state=all&per_page=100"):
-        is_pr = 1 if "pull_request" in item else 0
-        merged = None
-        if is_pr:
-            pr = item.get("pull_request", {})
-            merged = 1 if pr.get("merged_at") else (0 if item["state"] == "closed" else None)
-        labels = ",".join(l["name"] for l in item.get("labels", []))
-        conn.execute(
-            "INSERT OR REPLACE INTO c2rust_issues "
-            "(id, repo, number, title, state, is_pr, labels, html_url, body, "
-            " created_at, updated_at, closed_at, merged, crawled_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                item["id"], repo, item["number"], item["title"], item["state"], is_pr,
-                labels, item["html_url"], item.get("body"), item.get("created_at"),
-                item.get("updated_at"), item.get("closed_at"), merged, now,
-            ),
-        )
-        n += 1
-        if limit and n >= limit:
-            break
+    try:
+        for item in gh_api_paginated(f"repos/{repo}/issues?state=all&per_page=100"):
+            is_pr = 1 if "pull_request" in item else 0
+            merged = None
+            if is_pr:
+                pr = item.get("pull_request", {})
+                merged = 1 if pr.get("merged_at") else (0 if item["state"] == "closed" else None)
+            labels = ",".join(l["name"] for l in item.get("labels", []))
+            conn.execute(
+                "INSERT OR REPLACE INTO c2rust_issues "
+                "(id, repo, number, title, state, is_pr, labels, html_url, body, "
+                " created_at, updated_at, closed_at, merged, crawled_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    item["id"], repo, item["number"], item["title"], item["state"], is_pr,
+                    labels, item["html_url"], item.get("body"), item.get("created_at"),
+                    item.get("updated_at"), item.get("closed_at"), merged, now,
+                ),
+            )
+            n += 1
+            if limit and n >= limit:
+                break
+    except subprocess.TimeoutExpired:
+        logging.warning("%s: gh api --paginate timed out after %d rows", repo, n)
     conn.commit()
     logging.info("%s: %d issue/PR rows", repo, n)
     return n

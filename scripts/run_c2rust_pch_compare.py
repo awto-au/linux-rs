@@ -23,6 +23,7 @@ Log: tmp/run_c2rust_pch_compare.log
 import argparse
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -34,8 +35,13 @@ TREE = REPO / "linux-riscv"
 TMP = REPO / "tmp"
 OUT_DIR = TMP / "c2rust-pch-compare"
 LOG = TMP / "run_c2rust_pch_compare.log"
-C2RUST_FORK = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
-C2RUST = str(C2RUST_FORK / "target" / "release" / "c2rust")
+# C2RUST_FORK_DIR/C2RUST_BIN env overrides let this comparison target an
+# isolated `scripts/c2rust_worktree.py`-created worktree instead of the
+# shared checkout, same convention as run_c2rust_baseline.py. Unset, both
+# default to the shared checkout as before.
+C2RUST_FORK = Path(os.environ.get(
+    "C2RUST_FORK_DIR", "/mnt/2tb/git/github.com/awtoau/c2rust"))
+C2RUST = os.environ.get("C2RUST_BIN", str(C2RUST_FORK / "target" / "release" / "c2rust"))
 PCH_FILE = TMP / "c2rust-pch" / "preamble.pch"
 FLAGS_FILE = TMP / "c2rust-pch" / "dominant_flags.json"
 

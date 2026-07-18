@@ -167,6 +167,12 @@ def sync_from_issues(conn, repo, track):
                 "datetime('now'), datetime('now'))",
                 (track, title, repo, number, priority, status),
             )
+            if status == "done":
+                logging.warning(
+                    "%s#%s (%s) was already closed the first time work_items saw it — "
+                    "its closure may be missing from HISTORY.md if work_items was reset",
+                    repo, number, title,
+                )
         n += 1
     return n, newly_closed
 
@@ -215,6 +221,14 @@ def main():
     n_kernel = sync_kernel_items(conn) + n_kernel_issues
     conn.commit()
 
+    for repo in ("awtoau/c2rust", "awto-au/linux-rs"):
+        total = conn.execute(
+            "SELECT COUNT(*) FROM c2rust_issues WHERE repo=?", (repo,)
+        ).fetchone()[0]
+        if total == 0:
+            logging.warning("c2rust_issues has 0 rows for repo=%s — run "
+                             "crawl_c2rust_upstream.py --repo %s first", repo, repo)
+
     active = conn.execute(
         "SELECT track, priority, title FROM work_items_active LIMIT 10"
     ).fetchall()
@@ -225,15 +239,21 @@ def main():
     for track, priority, title in active:
         logging.info("  [%s/%s] %s", track, priority, title[:80])
 
+    logged = 0
     for title, repo, number, closed_at in closed_c2rust + closed_kernel:
         date = (closed_at or "")[:10] or "unknown-date"
         milestone = f"Closed {repo}#{number}: {title}"
-        subprocess.run([sys.executable, str(REPO / "scripts" / "append_history.py"),
-                         date, milestone], check=False)
+        result = subprocess.run([sys.executable, str(REPO / "scripts" / "append_history.py"),
+                                  date, milestone], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            logging.error("history: failed to append closure of %s#%s: %s",
+                           repo, number, result.stderr.strip())
+            continue
         logging.info("history: appended closure of %s#%s", repo, number)
+        logged += 1
 
     print(f"SYNC OK: {n_c2rust} c2rust + {n_kernel} kernel work items, "
-          f"{len(closed_c2rust) + len(closed_kernel)} newly-closed issues logged to HISTORY.md")
+          f"{logged} newly-closed issues logged to HISTORY.md")
     return 0
 
 

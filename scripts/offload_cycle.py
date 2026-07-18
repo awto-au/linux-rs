@@ -16,8 +16,10 @@ On gate failure: the diagnostic text is fed back into a NEW Ollama call
 fresh-context retry, deliberately: the model needs the error in context
 to fix it, this is debugging not re-drafting. Retries up to --max-rounds.
 
-Only a draft that clears every free gate is passed to offload_review.py
-for the paid independent-review stage. If no draft ever clears the
+Only a draft that clears every free gate should be passed on to
+offload_review.py for the paid independent-review stage — the caller
+is responsible for invoking it; this script does not chain into it.
+If no draft ever clears the
 gates, the cycle reports FAILED — this is the intended terminal state
 until the underlying model/prompting is improved ("if not good we still
 review, but we do the whole cycle again until we work out how to get
@@ -31,14 +33,12 @@ Log: tmp/offload_cycle.log
 import argparse
 import json
 import logging
-import re
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-RULES_DIR = REPO / "rulesdb" / "rules"
 OUT = REPO / "tmp" / "offload"
 LOG = REPO / "tmp" / "offload_cycle.log"
 OLLAMA = "http://localhost:11434/api/generate"
@@ -66,7 +66,7 @@ def clippy_check(rust_source: str):
              "-o", str(out), str(src)],
             capture_output=True, text=True, timeout=60,
         )
-        has_errors = "error[" in r.stderr or "error:" in r.stderr
+        has_errors = "error[" in r.stderr or "error:" in r.stderr or "warning:" in r.stderr
         return (r.returncode == 0 and not has_errors), r.stderr
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -150,6 +150,9 @@ def main() -> int:
     c_path = Path(args.c_file)
     if not c_path.is_absolute():
         c_path = REPO / c_path
+    if not c_path.exists():
+        logging.error("not found: %s", c_path)
+        return 1
     c_source = c_path.read_text()
     name = c_path.stem
 
