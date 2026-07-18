@@ -137,3 +137,12 @@ nightly-only `#![feature(...)]` attributes (`raw_ref_op`, `extern_types`,
 instead of a disposable scratch-dir core build. Re-verified boot-clean
 (`dev.py check`: 15/15 KUnit suites, `INIT REACHED`) immediately after
 the switch — not a speculative change.
+
+`linux-riscv/` is itself a git worktree of `linux/` (see
+`scripts/linux_riscv_worktree.py` for isolated worktrees per parallel
+task), on branch `linux-rs/phase2-gcd`. That branch is now pushed to a
+real fork — **[awtoau/linux](https://github.com/awtoau/linux)** — the
+same durable-fork pattern used for [awtoau/c2rust](https://github.com/awtoau/c2rust)
+(a public fork of `immunant/c2rust`); every landed TU is real, boot-verified
+history there, not local-only. Never push to `torvalds/linux` itself —
+same standing rule as the c2rust fork.
