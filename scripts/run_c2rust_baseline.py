@@ -41,8 +41,17 @@ DB = REPO / "rulesdb" / "patterns.db"
 # awtoau/c2rust fork, built with the RVV-builtin-type fix (see
 # AstExporter.cpp's isRVVSizelessBuiltinType() change, 2026-07-17,
 # awtoau/c2rust#1) — NOT the stock ~/.cargo/bin/c2rust upstream build.
-C2RUST_FORK = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
-C2RUST = str(C2RUST_FORK / "target" / "release" / "c2rust")
+#
+# C2RUST_FORK_DIR/C2RUST_BIN env overrides let a baseline run target an
+# isolated `scripts/c2rust_worktree.py`-created worktree instead of the
+# shared checkout, so verifying a fix in progress there doesn't collide
+# with another agent's concurrent work in the shared checkout (see
+# c2rust_worktree.py's module doc for the collision this was built to
+# avoid). Same override convention as investigate_c2rust_failure.py's
+# C2RUST_BIN. Unset, both default to the shared checkout as before.
+C2RUST_FORK = Path(os.environ.get(
+    "C2RUST_FORK_DIR", "/mnt/2tb/git/github.com/awtoau/c2rust"))
+C2RUST = os.environ.get("C2RUST_BIN", str(C2RUST_FORK / "target" / "release" / "c2rust"))
 # awtoau/c2rust's kernel-idiom rewrites (WARN_ON -> kernel::warn_on!,
 # fls-family -> leading_zeros()/trailing_zeros() arithmetic) are opt-in so
 # that stock `c2rust transpile` with no flags stays byte-for-byte identical

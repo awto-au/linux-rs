@@ -14,6 +14,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py readiness [glob]       # rank untranslated TUs
   dev.py bench                  # host benchmark (pinned methodology)
   dev.py diff <target>          # tier-2.5 differential oracle (needs bench/diff_<target>.{c,rs})
+  dev.py c2rust-build [--fork-dir DIR]   # full workspace build + verify every binary the dispatcher needs is fresh
   dev.py c2rust-baseline [--limit N]     # full-corpus c2rust triage -> patterns.db directly
   dev.py c2rust-regress BEFORE AFTER [--file-issue]  # per-decl regression diff between 2 baselined revs
   dev.py db                     # rebuild rulesdb/patterns.db (ephemeral, rebuild-not-migrate)
@@ -170,6 +171,13 @@ def main() -> int:
         sh(["python3", str(S / "bench_math.py")], quiet_ok=False)
     elif cmd == "diff":
         sh(["python3", str(S / "diff_oracle.py"), *rest], quiet_ok=False)
+    elif cmd == "c2rust-build":
+        # `cargo build --release --bin c2rust` alone only builds the
+        # dispatcher, not the sibling c2rust-transpile binary it shells
+        # out to for `c2rust transpile` — see build_c2rust.py's module
+        # doc for the real regression this caused. Always go through
+        # this subcommand, never a hand-typed cargo invocation.
+        sh(["python3", str(S / "build_c2rust.py"), *rest], quiet_ok=False)
     elif cmd == "c2rust-baseline":
         # Full-corpus c2rust triage loop: run, writing straight into
         # patterns.db's c2rust_attempts/c2rust_decl_outcomes (persisted
