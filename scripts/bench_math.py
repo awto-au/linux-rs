@@ -53,10 +53,18 @@ def main() -> int:
 
     # Cross-implementation checksum agreement (same LCG stream => the
     # accumulated results must be identical for the same func).
+    # Rule 0011 cites checksum agreement as mandatory methodology — a
+    # MISMATCH means the implementations are not computing the same
+    # function over the same input stream, so the timing numbers are
+    # not comparable.  Fail the run rather than silently log and return 0.
+    checksum_mismatches = []
     for func in funcs:
         vals = {accs[(func, impl)] for impl in funcs[func]}
-        status = "AGREE" if len(vals) == 1 else f"MISMATCH {vals}"
-        logging.info("checksum %-10s %s", func, status)
+        if len(vals) == 1:
+            logging.info("checksum %-10s AGREE", func)
+        else:
+            logging.error("checksum %-10s MISMATCH %s", func, vals)
+            checksum_mismatches.append(func)
 
     logging.info("%-10s %10s %14s %10s %8s %8s", "func", "C ns/op",
                  "faithful ns/op", "opt ns/op", "faith/C", "opt/C")
@@ -70,6 +78,10 @@ def main() -> int:
                      f"{o:.2f}" if o is not None else "—",
                      f"{f / c:.2f}x" if c and f else "—",
                      f"{o / c:.2f}x" if c and o else "—")
+    if checksum_mismatches:
+        logging.error("FAIL: checksum mismatch for %d function(s): %s",
+                      len(checksum_mismatches), checksum_mismatches)
+        return 1
     return 0
 
 

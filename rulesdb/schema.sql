@@ -240,6 +240,21 @@ WHERE run_at = (SELECT MAX(run_at) FROM c2rust_attempts)
 GROUP BY outcome
 ORDER BY n DESC;
 
+-- Per-file rustc compile-check outcomes for each c2rust_rev — populated
+-- by scripts/check_c2rust_output_compiles.py after every compile-check run.
+-- c2rust_regression_check.py diffs these rev-over-rev exactly as it diffs
+-- c2rust_decl_outcomes for transpile-level regressions (a4 from the
+-- pipeline-audit, awto-au/linux-rs#15).
+CREATE TABLE c2rust_compile_outcomes (
+    id INTEGER PRIMARY KEY,
+    c2rust_rev TEXT NOT NULL,    -- awtoau/c2rust git rev compile-checked
+    run_at TEXT NOT NULL,        -- ISO 8601, when this compile-check run happened
+    rs_file TEXT NOT NULL,       -- path of .rs file (relative to REPO root)
+    outcome TEXT NOT NULL        -- 'ok' | 'error' | 'timeout'
+);
+CREATE INDEX idx_c2rust_compile_outcomes_rev ON c2rust_compile_outcomes(c2rust_rev);
+CREATE INDEX idx_c2rust_compile_outcomes_run_at ON c2rust_compile_outcomes(run_at);
+
 -- Upstream immunant/c2rust intel: forks, issues, PRs — so before writing
 -- our own fix we can check "has someone already solved this" in one
 -- query instead of manually re-searching GitHub every time. 2026-07-17,

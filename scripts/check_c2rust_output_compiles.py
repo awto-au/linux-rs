@@ -392,6 +392,31 @@ def main():
 
     REPORT.write_text("\n".join(lines))
     logging.info("wrote %s", REPORT)
+
+    # Persist per-file outcomes to patterns.db so c2rust_regression_check.py
+    # can compare compile-pass-rates rev-over-rev (a4, awto-au/linux-rs#15).
+    if DB.exists():
+        import sqlite3
+        from datetime import datetime, timezone
+        run_at = datetime.now(timezone.utc).isoformat()
+        db_conn = sqlite3.connect(str(DB))
+        db_conn.execute(
+            "CREATE TABLE IF NOT EXISTS c2rust_compile_outcomes ("
+            "id INTEGER PRIMARY KEY, c2rust_rev TEXT NOT NULL, run_at TEXT NOT NULL, "
+            "rs_file TEXT NOT NULL, outcome TEXT NOT NULL)"
+        )
+        db_conn.executemany(
+            "INSERT INTO c2rust_compile_outcomes (c2rust_rev, run_at, rs_file, outcome) "
+            "VALUES (?,?,?,?)",
+            [(c2rust_rev, run_at, rel, outcome) for rel, outcome in results.items()],
+        )
+        db_conn.commit()
+        db_conn.close()
+        logging.info("persisted %d compile outcomes to %s (rev=%s)", len(results), DB, c2rust_rev)
+    else:
+        logging.warning("patterns.db not found at %s — compile outcomes not persisted "
+                        "(run scripts/build_db.py first)", DB)
+
     print(f"CHECK OK: {dict(counts)} -> {REPORT}")
     return 0
 
