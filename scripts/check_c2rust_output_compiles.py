@@ -34,7 +34,7 @@ REPORT = REPO / "tmp" / "c2rust-output-compile-report.md"
 
 TARGET = "riscv64imac-unknown-none-elf"
 PER_FILE_TIMEOUT_S = 60
-C2RUST_REV = "cdc8febf7"
+C2RUST_REV = "a1a7ca901"
 C2RUST_SRC = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
 
 HOST_DIR = SUPPORT_DIR / "host"
