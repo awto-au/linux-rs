@@ -216,8 +216,9 @@ parallel-QEMU-boot support, two repo-hygiene passes.
 **Goal:** open-ended investigation that doesn't map to a single fix — is the
 c2rust/Clang foundation sound, should `KernelIdiomRule` be redesigned, what
 test harnesses exist and are worth adopting, is a Rust filesystem realistic
-yet, etc. Feeds the other 4 streams with new, evidence-backed candidates
-rather than producing commits itself.
+yet, where can `linux-rs` contribute back to Rust-for-Linux upstream, etc.
+Feeds the other 4 streams with new, evidence-backed candidates rather than
+producing commits itself.
 
 **Where the work lives:** `docs/<topic>-<date>.md`, one doc per question.
 **Verification gate:** none in the usual sense — the bar is "real evidence
@@ -226,7 +227,17 @@ research), and an honest verdict even when it's "not tractable yet, here's
 why."
 **Current output:** `docs/research-pipeline-improvements-2026-07-18.md`,
 `docs/kernel-test-harness-research-2026-07-18.md`,
-`docs/tmpfs-rust-scoping-2026-07-18.md`.
+`docs/tmpfs-rust-scoping-2026-07-18.md`,
+`docs/rust-for-linux-contribution-2026-07-18.md`.
+
+**Continuous Rust-for-Linux upstream-contribution substream
+(awto-au/linux-rs#12):** resurvey current Rust-for-Linux docs/issues at
+least monthly, or immediately after a Rust-for-Linux rebase/release, and
+write a new `docs/rust-for-linux-contribution-YYYY-MM-DD.md`. Track three
+queues: (1) upstream docs/good-first issues suitable for learning the kernel
+patch flow, (2) recurring `linux-rs` translation shims/API gaps that could
+become upstream abstractions/tests, and (3) VFS/driver-abstraction work that
+could unblock future translated targets.
 
 ## Administration
 

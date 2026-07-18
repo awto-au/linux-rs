@@ -14,19 +14,22 @@ recorded as kind="not_mechanically_checkable" with a reason, not forced.
 
 Usage: check_c2rust_rule_conformance.py
 Inputs:
-  rulesdb/rules/*.toml                         — rule definitions
-  tmp/c2rust-baseline/*/output/src/*.rs         — c2rust output corpus
-  linux-riscv/lib/**/*.c, arch/riscv/lib/**/*.c — C originals (cross-reference)
+  rulesdb/rules/*.toml                 — rule definitions
+  tmp/c2rust-baseline/*/output/src/*.rs — c2rust output corpus
+  linux-riscv/compile_commands.json     — preferred C-original cross-reference
+  linux-riscv/**/*.c                    — fallback C-original cross-reference
 Outputs:
   tmp/c2rust-rule-conformance-report.md         — human-readable report
   rulesdb/patterns.db: c2rust_rule_conformance table
 Log: tmp/check_c2rust_rule_conformance.log
 """
 import datetime
+import json
 import logging
 import re
 import sqlite3
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 try:
@@ -53,13 +56,33 @@ STATUS_NOT_CHECKABLE = "not_checkable"
 # Corpus helpers
 # ---------------------------------------------------------------------------
 
+def rel_path_to_safe_name(rel_path: str | Path) -> str:
+    """Mirror run_c2rust_baseline.py's safe_name(): a relative C path like
+    drivers/base/core.c becomes drivers_base_core.c.
+
+    The inverse operation is ambiguous in general because '_' is legal in
+    both directory and file names, so find_c_original() resolves safe names
+    by matching against the actual C corpus instead of splitting underscores
+    heuristically.
+    """
+    return str(rel_path).replace("/", "_").lstrip("_")
+
+
+def safe_name_candidates(safe_name: str, rel_paths) -> list[str]:
+    """All relative C paths whose baseline safe-name matches safe_name."""
+    return sorted(
+        str(rel)
+        for rel in rel_paths
+        if rel_path_to_safe_name(rel) == safe_name
+    )
+
+
 def safe_name_to_c_path(safe_name: str) -> str | None:
     """arch_riscv_lib_csum.c -> arch/riscv/lib/csum.c ; lib_math_gcd.c ->
-    lib/math/gcd.c. Best-effort: try the arch_riscv_ prefix first (longest
-    match), then plain lib_ -> lib/, converting remaining '_' between path
-    components is NOT attempted (filenames themselves can contain '_', e.g.
-    lib_crc_crc32-main.c -> lib/crc/crc32-main.c) — we only split on the
-    known directory-prefix tokens, not blindly replace every underscore.
+    lib/math/gcd.c. Legacy fallback for historical lib/arch-riscv corpus
+    names. Prefer find_c_original() for new code: it resolves against the
+    actual compile_commands/rglob corpus and therefore covers new directory
+    families without adding prefix cases here.
     """
     name = safe_name
     if not name.endswith(".c"):
@@ -85,12 +108,67 @@ def safe_name_to_c_path(safe_name: str) -> str | None:
     return None
 
 
-def find_c_original(safe_name: str) -> Path | None:
-    rel = safe_name_to_c_path(safe_name)
-    if rel is None:
+def _entry_relpath(file_name: str) -> str | None:
+    p = Path(file_name)
+    if not p.is_absolute():
+        p = TREE / p
+    try:
+        return str(p.relative_to(TREE))
+    except ValueError:
         return None
-    p = TREE / rel
-    return p if p.exists() else None
+
+
+@lru_cache(maxsize=1)
+def iter_c_original_relpaths() -> tuple[str, ...]:
+    """Relative .c paths in the current kernel corpus.
+
+    compile_commands.json is preferred because it matches the exact compiled
+    TU corpus run_c2rust_baseline.py uses. If it is absent, fall back to a
+    source-tree walk so the checker still works in partially-built trees.
+    """
+    cc = TREE / "compile_commands.json"
+    rels = []
+    if cc.exists():
+        try:
+            rows = json.loads(cc.read_text())
+            rels = [
+                rel
+                for e in rows
+                if (rel := _entry_relpath(e.get("file", ""))) is not None
+                and rel.endswith(".c")
+                and (TREE / rel).exists()
+            ]
+        except Exception as exc:
+            logging.warning("could not read %s for C-original mapping: %s", cc, exc)
+    if not rels:
+        rels = [
+            str(p.relative_to(TREE))
+            for p in TREE.rglob("*.c")
+            if "/scripts/" not in f"/{p.relative_to(TREE)}"
+        ]
+    return tuple(sorted(set(rels)))
+
+
+def find_c_original(safe_name: str) -> Path | None:
+    rels = iter_c_original_relpaths()
+    matches = safe_name_candidates(safe_name, rels)
+    if len(matches) == 1:
+        return TREE / matches[0]
+    if len(matches) > 1:
+        # Exact collisions are possible because '_' is legal in both
+        # directory and file names. Prefer a legacy prefix resolution only
+        # if it disambiguates to one of the actual corpus candidates;
+        # otherwise return None rather than cross-referencing the wrong C.
+        fallback = safe_name_to_c_path(safe_name)
+        if fallback in matches:
+            return TREE / fallback
+        logging.warning("ambiguous C-original mapping for %s: %s", safe_name, matches)
+        return None
+    fallback = safe_name_to_c_path(safe_name)
+    if fallback:
+        p = TREE / fallback
+        return p if p.exists() else None
+    return None
 
 
 def iter_corpus():
