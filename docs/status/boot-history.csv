@@ -46,3 +46,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-18T14:01:54+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T140154+1000-default.log
 2026-07-18T14:04:17+10:00,verify-diff-a,17,0,1,0,docs/status/boot-logs/20260718T140417+1000-verify-diff-a.log
 2026-07-18T14:06:48+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T140648+1000-default.log
+2026-07-18T14:07:14+10:00,default,17,0,1,0,docs/status/boot-logs/20260718T140714+1000-default.log
