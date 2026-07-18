@@ -42,6 +42,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from report import boot_path_wiring_status  # noqa: E402 — reuse report.py's live detector
+# so the two dashboards' "wired into live boot path" numbers can never drift apart.
+
 REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "rulesdb" / "patterns.db"
 OUT = REPO / "docs" / "status"
@@ -361,6 +365,7 @@ def main() -> int:
     snapshots = fetch_progress_snapshots(conn)
     conn.close()
     tu_rows, tu_total = fetch_tu_growth()
+    wiring = boot_path_wiring_status()
 
     logging.info("work_items_active: %d rows", len(items))
     logging.info("awtoau/c2rust issues: %d (open=%d closed=%d)",
@@ -369,6 +374,8 @@ def main() -> int:
     logging.info("c2rust_attempts distinct runs: %d", len(series))
     logging.info("progress_snapshots rows: %d", len(snapshots))
     logging.info("TU growth (from git): %d total landed", tu_total)
+    logging.info("boot-path wiring (from linux-riscv/ *.c scan): %d functions "
+                 "across %d file(s) wired in-place", wiring["wired_fns"], wiring["wired_files"])
 
     render_progress_chart(series, OUT / "dashboard_progress.png")
     logging.info("wrote %s", OUT / "dashboard_progress.png")
@@ -556,7 +563,16 @@ def main() -> int:
   <div class="stat-tile"><div class="n">{len(open_issues)}</div><div class="label">awtoau/c2rust issues open</div></div>
   <div class="stat-tile"><div class="n">{len(closed_issues)}</div><div class="label">awtoau/c2rust issues closed</div></div>
   <div class="stat-tile"><div class="n">{tu_total}</div><div class="label">TUs hand-translated (live from git)</div></div>
+  <div class="stat-tile"><div class="n">{wiring['wired_fns']}</div><div class="label">functions wired into live boot path ({wiring['wired_files']} file{'s' if wiring['wired_files'] != 1 else ''})</div></div>
 </div>
+
+<p class="subtitle">"Wired into live boot path" (stream 2, <code>c2rust-boot-blocker</code> in
+  <a href="../streams.md">docs/streams.md</a>) is a stricter bar than "TU landed": it counts only
+  <code>linux-riscv/**/*.c</code> functions inside a real <code>#ifdef CONFIG_RUST</code> block whose
+  body calls a <code>*_rs</code>-suffixed Rust function at a pre-existing, live C call site &mdash;
+  not a standalone <code>lib/</code> whole-file swap. Live regex scan of the current
+  <code>linux-riscv/</code> tree, same detector <a href="STATUS.md">STATUS.md</a> uses
+  (<code>scripts/report.py:boot_path_wiring_status()</code>), re-run on every dashboard generation.</p>
 
 <h2>Work-in-flight queue (both tracks)</h2>
 <p class="subtitle">Live from the <code>work_items_active</code> view — open/in_progress/blocked items across the
