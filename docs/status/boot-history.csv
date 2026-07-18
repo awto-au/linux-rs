@@ -22,3 +22,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-18T12:28:44+10:00,default,16,0,1,0,tmp/boot-history/20260718T122844+1000-default.log
 2026-07-18T12:31:14+10:00,default,16,0,1,0,tmp/boot-history/20260718T123114+1000-default.log
 2026-07-18T12:42:58+10:00,default,16,0,1,0,tmp/boot-history/20260718T124258+1000-default.log
+2026-07-18T12:49:10+10:00,default,16,0,1,0,tmp/boot-history/20260718T124910+1000-default.log
