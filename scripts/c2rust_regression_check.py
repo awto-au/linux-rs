@@ -46,6 +46,28 @@ def decl_set(conn, rev):
     return {(f, d): bool(t) for f, d, t in rows}
 
 
+def compile_rate(conn, rev):
+    """{rs_file: outcome} for the LATEST compile-check run at this rev, or None.
+
+    None means no compile-check data exists for this rev — the caller should
+    warn rather than error, since decl-level regressions can still be checked
+    without compile-check data.
+    """
+    try:
+        latest_run_at = conn.execute(
+            "SELECT MAX(run_at) FROM c2rust_compile_outcomes WHERE c2rust_rev = ?", (rev,)
+        ).fetchone()[0]
+    except Exception:
+        return None  # table doesn't exist yet (old DB)
+    if latest_run_at is None:
+        return None
+    rows = conn.execute(
+        "SELECT rs_file, outcome FROM c2rust_compile_outcomes "
+        "WHERE c2rust_rev = ? AND run_at = ?", (rev, latest_run_at),
+    ).fetchall()
+    return {f: o for f, o in rows}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("before_rev")
@@ -116,7 +138,45 @@ def main():
         if len(fixed) > 30:
             logging.info("  ... and %d more", len(fixed) - 30)
 
-    verdict = "REGRESSION" if regressed else "OK"
+    # ---- compile-pass-rate regression check (a4, awto-au/linux-rs#15) ----
+    # Compares rustc --emit=metadata pass rates between the two revs using
+    # c2rust_compile_outcomes rows written by check_c2rust_output_compiles.py.
+    # Missing data is a warning, not a hard error: decl-level regressions can
+    # still be caught even when compile-check data isn't available yet.
+    compile_regressed = False
+    before_compile = compile_rate(conn, args.before_rev)
+    after_compile = compile_rate(conn, args.after_rev)
+
+    logging.info("=== c2rust compile-pass-rate check: %s -> %s ===", args.before_rev, args.after_rev)
+    if before_compile is None:
+        logging.warning("compile-pass-rate: no data for %s — run check_c2rust_output_compiles.py first",
+                        args.before_rev)
+    elif after_compile is None:
+        logging.warning("compile-pass-rate: no data for %s — run check_c2rust_output_compiles.py first",
+                        args.after_rev)
+    else:
+        before_ok = sum(1 for o in before_compile.values() if o == "ok")
+        after_ok = sum(1 for o in after_compile.values() if o == "ok")
+        before_total = len(before_compile)
+        after_total = len(after_compile)
+        before_rate = before_ok / before_total if before_total else 0.0
+        after_rate = after_ok / after_total if after_total else 0.0
+        logging.info("before: %d/%d ok (%.1f%%)", before_ok, before_total, before_rate * 100)
+        logging.info("after:  %d/%d ok (%.1f%%)", after_ok, after_total, after_rate * 100)
+        if after_rate < before_rate:
+            drop_pp = (before_rate - after_rate) * 100
+            logging.warning(
+                "compile-pass-rate REGRESSION: %.2f pp drop (%.1f%% -> %.1f%%) "
+                "between %s and %s",
+                drop_pp, before_rate * 100, after_rate * 100,
+                args.before_rev, args.after_rev,
+            )
+            compile_regressed = True
+        else:
+            logging.info("compile-pass-rate: no regression (%.1f%% -> %.1f%%)",
+                         before_rate * 100, after_rate * 100)
+
+    verdict = "REGRESSION" if (regressed or compile_regressed) else "OK"
     logging.info("VERDICT: %s", verdict)
 
     if regressed and args.file_issue:
@@ -164,7 +224,7 @@ def main():
             Path(body_path).unlink(missing_ok=True)
 
     conn.close()
-    return 1 if regressed else 0
+    return 1 if (regressed or compile_regressed) else 0
 
 
 if __name__ == "__main__":
