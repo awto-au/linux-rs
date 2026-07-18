@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "this-ip-ret-ip"
+version = 1
+tier = 2
+category = "api"
+
+[match]
+c = "_THIS_IP_ ({ __label__ __here; __here: (unsigned long)&&__here; }) and _RET_IP_ ((unsigned long)__builtin_return_address(0)) -- GNU address-of-label / builtin used to get a raw instruction-pointer value for debug/lockdep/tracing bookkeeping"
+constraints = [
+  "the largest single uncovered c2rust failure-signature pattern in this corpus (~47k of ~47.4k rows, essentially the whole table, all 'Cannot translate GNU address of label expression' — verified 2026-07-18 via rulesdb/patterns.db's c2rust_failure_signatures)",
+  "72 _RET_IP_ sites, 39 _THIS_IP_ sites in linux/include/linux/*.h alone (grep count, 2026-07-18)",
+  "the raw address is genuinely needed downstream, not just a debug label: stored as u64/unsigned long (e.g. closure.h's cl->ip), passed across the C ABI to functions like lockdep_hardirqs_on(unsigned long ip), and fed to kernel symbolization (%pS/sprint_symbol) for /proc and trace output -- core::panic::Location::caller() (this project's existing #[track_caller] convention, see rust/kernel/task.rs) is NOT a drop-in replacement: it gives file/line/column, not a raw address comparable/printable through the existing C debug pipeline",
+]
+
+[emit]
+kind = "function"
+rust = "_RET_IP_ (the common case, 72/111 sites): use core::intrinsics::caller_location() is wrong (gives Location, not an address) -- the correct primitive is a raw-pointer return-address builtin. rustc's core does not currently expose a stable equivalent to __builtin_return_address(0) without inline asm or an unstable intrinsic; the practical translation is a thin #[inline(always)] Rust wrapper around a single-line `global_asm!`/`asm!`-based helper (architecture-specific: riscv64 frame-pointer walk, or an extern \"C\" call into the existing C _RET_IP_ macro via a tiny cbindgen-free shim) -- NOT yet settled to one canonical form, see [status] below.\n_THIS_IP_ (39/111 sites, GNU label-address specifically): has no C-ABI-compatible core-only Rust equivalent at all (no stable way to take 'the address of here' without inline asm) -- likely needs the same asm-based helper as _RET_IP_ with an additional local label, or accepting _RET_IP_'s slightly different (caller-return-address, not current-address) semantics where the call site can tolerate the difference (needs per-callsite judgement, not a blanket substitution)."
+deviations = [
+  "not yet a finished rule -- the mechanical translation shape is documented above but the actual asm/intrinsic helper implementation is undecided; do not apply this rule to translate a real function until [status] below is resolved",
+]
+
+[provenance]
+derivation = "found via failure-signature frequency analysis of c2rust_failure_signatures, 2026-07-18 -- the single largest uncovered pattern in the corpus by a wide margin"
+evidence = ["linux/include/linux/instruction_pointer.h (both macro definitions)", "linux/include/linux/closure.h:225,232 (raw address stored in a struct field)", "linux/include/linux/cpuidle.h:135,143 (lockdep_hardirqs_on/off(_RET_IP_))", "linux/include/linux/bottom_half.h:20,33", "linux/include/linux/device.h:1168,1205"]
+
+[validation]
+instances = []
+oracle = "not yet applied to any real translation"
+negative = [
+  "checked Rust-for-Linux (rust-for-linux/linux) for prior art via gh search code/prs, 2026-07-18: no hits for _THIS_IP_, _RET_IP_, 'return_address', or 'lockdep' in their Rust code -- this appears to be genuinely unexplored ground there too, not something to blindly copy from an existing RfL translation",
+  "do NOT substitute core::panic::Location::caller() as a quick fix -- it compiles and looks plausible but changes the actual value type and breaks any C-ABI caller expecting a raw address (same failure shape as the fls-family rule's 'compiles, looks plausible, wrong by construction' warning)",
+]
+human_review = true
+
+[status]
+state = "needs-design-decision"
+note = "Filed as awto-au/linux-rs#27 (2026-07-18): what's the actual Rust-side mechanism for a raw, C-ABI-compatible instruction-pointer/return-address value with no inline-asm-free core primitive available? Candidates: (a) a small per-arch asm! helper, (b) an extern \"C\" shim calling back into the existing C macro at the call site, (c) accepting Location::caller()'s different semantics for call sites that don't actually need address-comparable output (pure debug logging, not lockdep bookkeeping) -- needs a decision before this rule can gate a real translation, not something to guess into rulesdb without review given ~47k signature rows depend on getting this right."
