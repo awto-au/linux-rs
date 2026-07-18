@@ -67,6 +67,25 @@ emits a stray `as c_int` cast against a `bool`-typed macro parameter, P3,
 1/228 files but recurs at every call site in the affected file). Both are
 the right shape: one clearly-stated root cause, no cross-cutting ambiguity.
 
+**Workspace isolation, mandatory (2026-07-18):** `awtoau/c2rust` lives
+outside this repo (`/mnt/2tb/git/github.com/awtoau/c2rust`) — the Agent
+tool's `isolation: "worktree"` option only isolates linux-rs itself, so
+an agent told to `cd` into the c2rust checkout gets NO isolation there.
+Found the hard way: two agents fixing #11 and #12 concurrently both
+worked directly in the one shared checkout and collided (a branch switch
+left the other agent's staged-but-uncommitted changes stranded on the
+wrong branch; one agent improvised its own ad-hoc clone mid-task trying
+to self-recover, which happened to contain a real, correct fix but was
+unmanaged and nearly got lost). Every future c2rust-track agent MUST be
+given its own worktree via `scripts/c2rust_worktree.py create <name>`
+(creates `awtoau/c2rust-worktrees/<name>/` on branch `agent-<name>`,
+sibling to the main checkout, never mixed into `awtoau/`'s other
+unrelated repos) — never `cd` an agent straight into the shared
+`awtoau/c2rust` checkout, and never let an agent improvise its own
+clone/worktree by hand. `c2rust_worktree.py list` shows every worktree
+and flags anything not under the managed dir as stray; `remove <name>
+[--delete-branch]` cleans up after a fix lands.
+
 ## 2. c2rust-boot-blocker
 
 **Goal:** get real Rust code (hand-translated or c2rust-transpiled) actually
