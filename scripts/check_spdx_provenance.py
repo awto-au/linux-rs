@@ -157,6 +157,9 @@ def check_export_gpl_upgrades(rs_path: Path, c_path: Path) -> list[tuple[str, st
 # translation. Path keys are relative to the kernel tree root.
 EXCEPTIONS = {
     "drivers/tty/serial/8250/8250_helpers_rs.rs": "drivers/tty/serial/8250/8250_port.c",
+    # Tier B (mem_serial_in/mem_serial_out) — same source file as the Tier A
+    # helpers above, see docs/8250-tier-b-scoping-2026-07-18.md.
+    "drivers/tty/serial/8250/8250_io_rs.rs": "drivers/tty/serial/8250/8250_port.c",
 }
 
 
