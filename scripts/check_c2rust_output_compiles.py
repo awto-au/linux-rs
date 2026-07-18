@@ -11,7 +11,7 @@ it says nothing about whether the emitted Rust is valid Rust. This is the
 next real signal: rustc --emit=metadata (type-check only, no codegen)
 against the kernel's own libcore.rmeta, riscv64 target and cfg flags.
 
-Usage: check_c2rust_output_compiles.py [--limit N]
+Usage: check_c2rust_output_compiles.py [--limit N] [--c2rust-rev REV]
 Inputs: tmp/c2rust-baseline/*/output/src/*.rs, linux-riscv/rust/libcore.rmeta
 Output: tmp/c2rust-output-compile-report.md
 Log: tmp/check_c2rust_output_compiles.log
@@ -34,7 +34,6 @@ REPORT = REPO / "tmp" / "c2rust-output-compile-report.md"
 
 TARGET = "riscv64imac-unknown-none-elf"
 PER_FILE_TIMEOUT_S = 60
-C2RUST_REV = "1a06f7af6"
 C2RUST_SRC = Path("/mnt/2tb/git/github.com/awtoau/c2rust")
 
 HOST_DIR = SUPPORT_DIR / "host"
@@ -149,9 +148,20 @@ def build_support_crates():
 # record other tooling (rulesdb) treats as authoritative.
 
 
-def find_clean_outputs():
+def git_rev(repo_dir):
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_dir, capture_output=True, text=True, check=True,
+            timeout=30,
+        ).stdout.strip()
+    except Exception:
+        return None
+
+
+def find_clean_outputs(c2rust_rev):
     """Authoritative list: c2rust_attempts WHERE outcome='clean' AND
-    c2rust_rev=C2RUST_REV. Globbing output/ dirs directly would also
+    c2rust_rev=c2rust_rev. Globbing output/ dirs directly would also
     pick up leftover output/ dirs from earlier failed/non-clean attempts."""
     import sqlite3
 
@@ -165,7 +175,7 @@ def find_clean_outputs():
     conn = sqlite3.connect(str(DB))
     rows = conn.execute(
         "SELECT DISTINCT c_file FROM c2rust_attempts WHERE outcome='clean' AND c2rust_rev=?",
-        (C2RUST_REV,),
+        (c2rust_rev,),
     ).fetchall()
     conn.close()
 
@@ -235,6 +245,12 @@ def rustc_check(rs_path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument(
+        "--c2rust-rev",
+        default=None,
+        help="c2rust revision to compile-check (default: current HEAD of "
+             f"{C2RUST_SRC}; use this to inspect an older baseline snapshot)",
+    )
     args = ap.parse_args()
 
     (REPO / "tmp").mkdir(exist_ok=True)
@@ -247,11 +263,17 @@ def main():
         logging.error("libcore.rmeta not found at %s — run a real kernel build first", RUST_DIR)
         return 1
 
+    c2rust_rev = args.c2rust_rev or git_rev(C2RUST_SRC)
+    if not c2rust_rev:
+        logging.error("could not determine c2rust revision from %s; pass --c2rust-rev", C2RUST_SRC)
+        return 1
+    logging.info("compile-checking c2rust_rev=%s", c2rust_rev)
+
     if not build_support_crates():
         logging.error("failed to build c2rust support crates (bitfields/asm-casts)")
         return 1
 
-    files = find_clean_outputs()
+    files = find_clean_outputs(c2rust_rev)
     if args.limit:
         files = files[: args.limit]
     logging.info("checking %d c2rust output files against real riscv64 target", len(files))
