@@ -11,6 +11,40 @@ Stream management (deciding what's next in each stream, dispatching agents,
 verifying and closing out their work, keeping this doc and the DB in sync)
 is an ongoing responsibility, not a one-off task — see "Administration" below.
 
+## Standing orders
+
+The durable, continuous-by-default policies for this project — this is the
+actual answer to "what are the standing orders," kept here so it survives
+past any one conversation. Each is elaborated further in its own stream
+section; this list is the scannable index.
+
+1. **Keep Ollama fed off c2rust-breadth continuously** (stream 1, full
+   detail below). Never let it sit idle when the `awtoau/c2rust` open-issue
+   queue has a real fixable bug (small, single-root-cause, mechanical
+   shape) — dispatch through the compiler-retry-then-independent-review
+   gate as soon as a candidate exists, not just once per session.
+2. **Standing worker on stream-2 boot-path integration** (issue-anchored,
+   currently awto-au/linux-rs#25 for 8250 Tier C) — continuously wiring
+   landed/oracle-verified translated code into the live C boot path, not a
+   one-shot task. When the current anchor issue's slice lands, the next
+   slice becomes the new work, same issue (kept open) or a follow-up.
+3. **c2rust baseline stays current, event-driven** (`scripts/
+   c2rust_baseline_watch.py`) — re-run whenever `awtoau/c2rust`'s HEAD
+   moves, not on a fixed clock or only when someone remembers. Not yet
+   wired to a real cron entry (Dan wants to hold off) — the script itself
+   is real and tested; wiring it is a standing TODO, not abandoned.
+4. **Every real fixable c2rust failure gets triaged and filed**, not left
+   as an unexamined `dropped_decls` row in `patterns.db`. When a fresh
+   baseline finds new failures, dispatch real investigation (using
+   `investigate_c2rust_failure.py`/`check_c2rust_rule_conformance.py`, not
+   guessing) and file issues per confirmed pattern as they're found — don't
+   batch to the end of a triage pass.
+5. **Verify independently before trusting any agent/Copilot/Codex report**
+   — re-run the real check (`dev.py check`, `c2rust-regress`, diff-oracle,
+   `nm`) yourself. This project has caught real problems this way (stale
+   binaries, mislabeled DB revisions, agents stalling before close-out,
+   PRs branched too early and gone stale/conflicting).
+
 ## 1. c2rust-breadth
 
 **Goal:** fix real bugs in the `awtoau/c2rust` transpiler fork, prioritized by
