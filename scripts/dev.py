@@ -120,6 +120,14 @@ def main() -> int:
     elif cmd == "check":
         kmake()
         boot()
+        # Hard gate, not a warning: a translated file's SPDX identifier
+        # silently drifting from its C original (e.g. GPL-2.0 vs
+        # GPL-2.0-only vs GPL-2.0+) is a real licensing defect, not a
+        # style nit — see check_spdx_provenance.py's module doc for the
+        # two real mismatches this caught in review before this gate
+        # existed. sh() already sys.exit()s on nonzero rc, same as
+        # kmake()/boot() above.
+        sh(["python3", str(S / "check_spdx_provenance.py")], quiet_ok=False)
         sh(["python3", str(S / "report.py")], quiet_ok=False)
     elif cmd == "report":
         sh(["python3", str(S / "report.py")], quiet_ok=False)
