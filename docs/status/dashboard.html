@@ -109,17 +109,17 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-18T13:51:40+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-18T13:59:07+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. See <a href="STATUS.md">docs/STATUS.md</a> for the full
   hand-translation KUnit boot report; both tracks' progress-over-time charts, the two-track work
   queue, and the awtoau/c2rust transpiler-fork issue timeline all live on this one page.</p>
 
-<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>2 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-af11cc98f14ad76b2</code> — <span class="muted">16m running</span></li><li><code>(detached)</code> — <span class="muted">1m running</span></li></ul></div>
+<div class="callout" style="border-left:3px solid var(--status-warning);padding:0.6rem 1rem;margin-bottom:1rem;background:var(--surface-1);"><strong>2 background worker(s) currently active</strong> (live <code>git worktree list</code> at page-generation time — a real, point-in-time fact, not a persisted status that can go stale):<ul style="margin:0.4rem 0 0 1.2rem;"><li><code>worktree-agent-a47078fce5224e771</code> — <span class="muted">2m running</span></li><li><code>worktree-agent-afeb0f55d2b250925</code> — <span class="muted">8m running</span></li></ul></div>
 
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">0</div><div class="label">P0 items open</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">P1 items open</div></div>
-  <div class="stat-tile"><div class="n">12</div><div class="label">work items active (all tracks)</div></div>
+  <div class="stat-tile"><div class="n">11</div><div class="label">work items active (all tracks)</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">confirmed boot-path blocking</div></div>
   <div class="stat-tile"><div class="n">4</div><div class="label">awtoau/c2rust issues open</div></div>
   <div class="stat-tile"><div class="n">8</div><div class="label">awtoau/c2rust issues closed</div></div>
@@ -141,7 +141,7 @@
   then files-affected. Click any column header to sort/re-sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="work-items-table">
-  <caption>12 active work items</caption>
+  <caption>11 active work items</caption>
   <thead>
     <tr>
       <th data-sort-key>Priority<span class="arrow"></span></th>
@@ -237,16 +237,6 @@
       </tr>
       <tr>
         <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
-        <td>Consider making missing initramfs reachability a hard gate once it is required</td>
-        <td data-sort-value="kernel">kernel</td>
-        <td data-sort-value="open">open</td>
-        <td data-sort-value="0">no</td>
-        <td data-sort-value="-1"></td>
-        <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awto-au/linux-rs/issues/7">awto-au/linux-rs#7</a></td>
-      </tr>
-      <tr>
-        <td data-sort-value="4"><span class="pill pill-P4">P4</span></td>
         <td>Ollama hand-translation drafting parked with negative result — conditional revisit (raise context window) never tracked</td>
         <td data-sort-value="kernel">kernel</td>
         <td data-sort-value="open">open</td>
@@ -315,7 +305,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.0692187722800925">1.1</td>
+        <td data-sort-value="1.0744020751736112">1.1</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -324,7 +314,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.9434201611689815">0.9</td>
+        <td data-sort-value="0.9486034640625">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -333,7 +323,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.9016724759837963">0.9</td>
+        <td data-sort-value="0.9068557788773148">0.9</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -342,7 +332,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.6663136796875">0.7</td>
+        <td data-sort-value="0.6714969825810185">0.7</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -441,9 +431,9 @@
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
   2026-07-17T12:26:20 to 2026-07-18T02:04:09 UTC
-  (19 runs). 58 script-invocation logs in tmp/, spanning 2 days, 4:42:36.213847 from 2026-07-16T09:09+10:00 to 2026-07-18T13:51+10:00
+  (19 runs). 58 script-invocation logs in tmp/, spanning 2 days, 4:50:03.208441 from 2026-07-16T09:09+10:00 to 2026-07-18T13:59+10:00
   <div class="proxy-list">
-    check_c2rust_output_compiles-e1541023b.log &mdash; 2026-07-18T12:09+10:00<br>qemu-boot-post-spdx-check.log &mdash; 2026-07-18T12:10+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T12:15+10:00<br>qemu-boot-post-8250-verify.log &mdash; 2026-07-18T12:18+10:00<br>diff_oracle.log &mdash; 2026-07-18T13:14+10:00<br>qemu-boot-post-migration-test.log &mdash; 2026-07-18T13:39+10:00<br>render_boot_log.log &mdash; 2026-07-18T13:39+10:00<br>linux_riscv_worktree.log &mdash; 2026-07-18T13:48+10:00<br>build_db.log &mdash; 2026-07-18T13:50+10:00<br>dev-build.log &mdash; 2026-07-18T13:50+10:00<br>build_initramfs.log &mdash; 2026-07-18T13:50+10:00<br>qemu-boot.log &mdash; 2026-07-18T13:50+10:00<br>dev-boot.log &mdash; 2026-07-18T13:50+10:00<br>check_spdx_provenance.log &mdash; 2026-07-18T13:50+10:00<br>readiness.log &mdash; 2026-07-18T13:50+10:00<br>report.log &mdash; 2026-07-18T13:50+10:00<br>dev.log &mdash; 2026-07-18T13:50+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T13:51+10:00<br>sync_work_items.log &mdash; 2026-07-18T13:51+10:00<br>generate_dashboard.log &mdash; 2026-07-18T13:51+10:00
+    check_c2rust_output_compiles-e1541023b.log &mdash; 2026-07-18T12:09+10:00<br>qemu-boot-post-spdx-check.log &mdash; 2026-07-18T12:10+10:00<br>c2rust_regression_check.log &mdash; 2026-07-18T12:15+10:00<br>qemu-boot-post-8250-verify.log &mdash; 2026-07-18T12:18+10:00<br>diff_oracle.log &mdash; 2026-07-18T13:14+10:00<br>qemu-boot-post-migration-test.log &mdash; 2026-07-18T13:39+10:00<br>render_boot_log.log &mdash; 2026-07-18T13:39+10:00<br>linux_riscv_worktree.log &mdash; 2026-07-18T13:52+10:00<br>dev-build.log &mdash; 2026-07-18T13:57+10:00<br>build_initramfs.log &mdash; 2026-07-18T13:57+10:00<br>qemu-boot.log &mdash; 2026-07-18T13:57+10:00<br>dev-boot.log &mdash; 2026-07-18T13:57+10:00<br>check_spdx_provenance.log &mdash; 2026-07-18T13:57+10:00<br>readiness.log &mdash; 2026-07-18T13:57+10:00<br>report.log &mdash; 2026-07-18T13:57+10:00<br>dev.log &mdash; 2026-07-18T13:57+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-18T13:58+10:00<br>sync_work_items.log &mdash; 2026-07-18T13:58+10:00<br>build_db.log &mdash; 2026-07-18T13:58+10:00<br>generate_dashboard.log &mdash; 2026-07-18T13:59+10:00
   </div>
   <em>(most-recent 20 of 58 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>
