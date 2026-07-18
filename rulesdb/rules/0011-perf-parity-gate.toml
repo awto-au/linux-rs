@@ -18,6 +18,12 @@ Measurement methodology (mandatory — naive runs produced 2x phantom
 swings): pinned core (taskset), min-of-N (N>=5), interleaved binaries,
 fixed input stream, cross-implementation checksum agreement. QEMU numbers
 are relative-only; absolute numbers from real hardware.
+
+Checksum agreement is a hard precondition, not a reporting nicety:
+bench_math.py must exit nonzero if any implementation's accumulated value
+differs for the same function/input stream. A mismatch invalidates the
+performance table because the implementation is no longer proven to be
+computing the same result.
 """
 deviations = []
 

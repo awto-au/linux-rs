@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Diff two c2rust_decl_outcomes snapshots (by c2rust_rev) at
-per-declaration granularity, so a change to awtoau/c2rust can be judged
-on "did any function that used to translate stop translating" rather
-than the much noisier whole-file outcome (a file can flip from "clean"
-to "dropped_decls" while every one of its own functions still
-translates fine — see lib/bcd.c).
+"""Diff two c2rust snapshots (by c2rust_rev) at per-declaration and,
+when available, rustc compile-check granularity.
+
+The declaration check judges "did any function that used to translate stop
+translating" rather than the much noisier whole-file outcome (a file can
+flip from "clean" to "dropped_decls" while every one of its own functions
+still translates fine — see lib/bcd.c).
+
+The compile check compares `scripts/check_c2rust_output_compiles.py` rows:
+did any raw c2rust output that used to pass `rustc --emit=metadata` stop
+passing for the newer c2rust rev? This gates compile-pass-rate regressions
+without pretending they are rulesdb per-file idiom findings.
 
 --file-issue posts a summary to awtoau/c2rust's issue tracker instead of
 just printing, without blocking anything by itself (the caller decides
@@ -15,8 +21,8 @@ Usage:
   c2rust_regression_check.py <before-rev> <after-rev> [--file-issue]
 
 Requires two prior `run_c2rust_baseline.py` runs already in patterns.db
-(one per rev being compared) — this script only diffs, it doesn't run
-c2rust itself.
+(one per rev being compared). The compile-check diff is enabled only when
+both revs also have `check_c2rust_output_compiles.py` rows.
 Log: tmp/c2rust_regression_check.log
 """
 import argparse
@@ -44,6 +50,50 @@ def decl_set(conn, rev):
         "WHERE c2rust_rev = ? AND run_at = ?", (rev, latest_run_at),
     ).fetchall()
     return {(f, d): bool(t) for f, d, t in rows}
+
+
+def table_exists(conn, table):
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone() is not None
+
+
+def compile_set(conn, rev):
+    """{(c_file, rust_file): outcome} for the LATEST compile-check run at rev."""
+    if not table_exists(conn, "c2rust_compile_outcomes"):
+        return None
+    latest_run_at = conn.execute(
+        "SELECT MAX(run_at) FROM c2rust_compile_outcomes WHERE c2rust_rev = ?", (rev,)
+    ).fetchone()[0]
+    if latest_run_at is None:
+        return None
+    rows = conn.execute(
+        "SELECT c_file, rust_file, outcome FROM c2rust_compile_outcomes "
+        "WHERE c2rust_rev = ? AND run_at = ?",
+        (rev, latest_run_at),
+    ).fetchall()
+    return {(c_file, rust_file): outcome for c_file, rust_file, outcome in rows}
+
+
+def compile_outcome_diff(before, after):
+    """Return (regressed, fixed, unchanged_ok, unchanged_bad, new, removed)."""
+    regressed, fixed, unchanged_ok, unchanged_bad, new_output, removed_output = [], [], 0, 0, [], []
+    for key in sorted(set(before) | set(after)):
+        b = before.get(key)
+        a = after.get(key)
+        if b is None:
+            new_output.append(key)
+        elif a is None:
+            removed_output.append(key)
+        elif b == "ok" and a != "ok":
+            regressed.append((key, b, a))
+        elif b != "ok" and a == "ok":
+            fixed.append((key, b, a))
+        elif b == "ok" and a == "ok":
+            unchanged_ok += 1
+        else:
+            unchanged_bad += 1
+    return regressed, fixed, unchanged_ok, unchanged_bad, new_output, removed_output
 
 
 def main():
@@ -116,7 +166,47 @@ def main():
         if len(fixed) > 30:
             logging.info("  ... and %d more", len(fixed) - 30)
 
-    verdict = "REGRESSION" if regressed else "OK"
+    compile_regressed = []
+    compile_fixed = []
+    compile_before = compile_set(conn, args.before_rev)
+    compile_after = compile_set(conn, args.after_rev)
+    if compile_before is None or compile_after is None:
+        missing_compile_revs = []
+        if compile_before is None:
+            missing_compile_revs.append(args.before_rev)
+        if compile_after is None:
+            missing_compile_revs.append(args.after_rev)
+        logging.info(
+            "compile-check regression diff skipped: missing c2rust_compile_outcomes "
+            "rows for %s",
+            ", ".join(missing_compile_revs),
+        )
+    else:
+        compile_regressed, compile_fixed, compile_ok, compile_bad, compile_new, compile_removed = \
+            compile_outcome_diff(compile_before, compile_after)
+        logging.info("=== c2rust rustc compile-check regression: %s -> %s ===",
+                     args.before_rev, args.after_rev)
+        logging.info("before: %d outputs, after: %d outputs", len(compile_before), len(compile_after))
+        logging.info("regressed (was rustc-ok, now isn't): %d", len(compile_regressed))
+        logging.info("fixed (was not rustc-ok, now is): %d", len(compile_fixed))
+        logging.info("unchanged, still rustc-ok: %d", compile_ok)
+        logging.info("unchanged, still not rustc-ok: %d", compile_bad)
+        logging.info("new output (not in before-rev compile set): %d", len(compile_new))
+        logging.info("removed output (not in after-rev compile set): %d", len(compile_removed))
+        if compile_regressed:
+            logging.warning("REGRESSED COMPILE OUTPUTS:")
+            for (c_file, rust_file), before_outcome, after_outcome in compile_regressed:
+                logging.warning("  %s :: %s  %s -> %s",
+                                c_file, rust_file, before_outcome, after_outcome)
+        if compile_fixed:
+            logging.info("FIXED COMPILE OUTPUTS:")
+            for (c_file, rust_file), before_outcome, after_outcome in compile_fixed[:30]:
+                logging.info("  %s :: %s  %s -> %s",
+                             c_file, rust_file, before_outcome, after_outcome)
+            if len(compile_fixed) > 30:
+                logging.info("  ... and %d more", len(compile_fixed) - 30)
+
+    verdict = "REGRESSION" if regressed or compile_regressed else "OK"
     logging.info("VERDICT: %s", verdict)
 
     if regressed and args.file_issue:
@@ -164,7 +254,7 @@ def main():
             Path(body_path).unlink(missing_ok=True)
 
     conn.close()
-    return 1 if regressed else 0
+    return 1 if regressed or compile_regressed else 0
 
 
 if __name__ == "__main__":
