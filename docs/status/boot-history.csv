@@ -68,3 +68,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-18T16:24:06+10:00,tierc-irq-c-2,17,0,1,0,docs/status/boot-logs/20260718T162406+1000-tierc-irq-c-2.log
 2026-07-18T16:24:21+10:00,tierc-irq-c-3,17,0,1,0,docs/status/boot-logs/20260718T162421+1000-tierc-irq-c-3.log
 2026-07-18T16:24:37+10:00,tierc-irq-c-4,17,0,1,0,docs/status/boot-logs/20260718T162437+1000-tierc-irq-c-4.log
+2026-07-18T16:24:59+10:00,tierc-irq-rust-1,17,0,1,0,docs/status/boot-logs/20260718T162459+1000-tierc-irq-rust-1.log
