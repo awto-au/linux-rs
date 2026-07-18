@@ -474,3 +474,162 @@ one a straightforward c2rust addressing-syntax bug, the other a
 legitimate structural hole in this kernel's Rust-for-Linux RISC-V arch
 wiring (Zacas/Zabha target-feature support) that has nothing to do
 with c2rust and would block hand-written Rust just as much.
+
+## Third candidate: `lib/is_single_threaded.c`
+
+Third real combined-image boot, in its own isolated worktree
+(`combined-c2rust-boot-3`, branch `agent-combined-c2rust-boot-3`), so it
+could run concurrently with the other files' worktrees without
+disturbing them. Target: `current_is_single_threaded()` — a single,
+small (54-line), self-contained function with no `EXPORT_SYMBOL` (it's
+a plain internal kernel-wide symbol, declared `extern` in
+`include/linux/sched/signal.h` and called from other core files, not
+exported to modules). Chosen deliberately as the smallest/simplest
+candidate so far, to see whether a much shorter, straight-line function
+still hits the same gap classes or needs a lighter touch.
+
+### What was set up
+
+Same pattern as the first two files: new `CONFIG_RUST_C2RUST_BOOT_TEST`
+in `lib/Kconfig` (independent Kconfig symbol from every other
+worktree's — different tree/branch, no collision), `lib/Makefile`
+swapped `is_single_threaded.o` for `is_single_threaded_rs.o` (had to be
+pulled out of a bundled multi-object `lib-y` line, same shape as
+`rcuref.c`'s fix — shared a line with `plist.o`, `kobject_uevent.o`,
+etc.), raw c2rust output copied from
+`tmp/c2rust-baseline/lib_is_single_threaded.c/output/src/is_single_threaded.rs`
+into `lib/is_single_threaded_rs.rs` as the starting point (1643 lines
+raw — most of it pulled-in header/struct noise for a 54-line source
+function, the same "small C file, huge single-TU translation" pattern
+seen in every file so far).
+
+### No `.init_array`/`EXPORT_SYMBOL` trick this time — confirms the trick is conditional, not universal
+
+Unlike every prior file, this TU's raw c2rust output has **no**
+`__UNIQUE_ID_addressable_*`, `c2rust_run_static_initializers`,
+`INIT_ARRAY` static, or `global_asm!` `.export_symbol` block at all —
+and none was needed, since `current_is_single_threaded` was never
+`EXPORT_SYMBOL`'d in the C source in the first place (confirmed via
+grep: zero `EXPORT_SYMBOL` in `lib/is_single_threaded.c`). The function
+already carried a plain `#[no_mangle]` directly above its
+`pub unsafe extern "C" fn` definition in the raw c2rust output, with no
+`#[export]`/`::macros::export` involved either. This confirms gap
+classes 3 and 6 from the tally below are specifically tied to
+`EXPORT_SYMBOL`'d C functions — c2rust only emits the constructor trick
+and the `#[export]` attribute when the source function is actually
+exported to modules; a plain internal `extern` function like this one
+gets a much simpler, already-correct linkage shape for free.
+
+### Fix classes confirmed present
+
+Two of the playbook's classes recurred exactly as documented:
+
+1. **Disallowed unstable features.** Same
+   `#![feature(asm, extern_types, raw_ref_op, strict_provenance)]`
+   declaration (no `label_break_value` this time, despite the function
+   using a labeled block (`'_found: { ... } break '_found;`) — that
+   construct is apparently already stable in this compiler, since the
+   build log showed zero label-related errors once the feature line was
+   stripped). Stripped the line; converted the 30-entry
+   `extern "C" { pub type X; ... }` opaque-type block to the stable
+   `opaque_marker!` idiom (declared locally in this file, same as every
+   prior file — still not worth sharing without inventing a real home
+   for it).
+2. **Missing explicit `unsafe {}` blocks.** 73 `E0133` errors once the
+   header/feature issues were fixed, spread across every
+   `unsafe extern "C" fn` in the TU (21 function definitions total: the
+   exported function itself plus a chain of inlined
+   `atomic_read`/`get_current`/bit-test/preempt-count/RCU helpers, the
+   same "small function pulls in a deep KASAN/KCSAN/atomic helper chain"
+   shape `rcuref.c` hit). Fixed with the same brace-counting,
+   string-literal-skipping Python wrapper script `rcuref.c`'s fix
+   introduced (re-derived fresh rather than reused verbatim, since the
+   original was a one-off — worth promoting to a real `scripts/` tool
+   if a fourth file needs it again), one `unsafe { ... }` per function
+   body. Zero errors remained after this pass.
+
+### `BitfieldStruct`-derived structs: genuinely load-bearing this time, not deletable
+
+Three structs carried `#[derive(Copy, Clone, ::c2rust_bitfields::BitfieldStruct)]`:
+`task_struct`, `signal_struct`, `sched_dl_entity`. Unlike every prior
+file, grepping confirmed these are **not** dead-by-value here — this
+function's entire job is walking real `task_struct`/`signal_struct`
+fields by name (`.tasks`, `.flags`, `.group_leader`, `.mm`, `.signal`,
+`.thread_node`, `.thread_head`) through live pointers, and
+`sched_dl_entity` is embedded by value inside `task_struct` purely for
+its layout contribution to the `container_of`-style pointer arithmetic
+c2rust emits (`__mptr.offset(-(1272 as usize as isize))`). Opaquing any
+of the three would have broken real field access or corrupted the
+struct's size/offsets that the pointer arithmetic depends on being
+correct. The actual problem was narrower than "unused struct, delete
+it": only the `::c2rust_bitfields::BitfieldStruct` *derive* is
+unavailable (that proc-macro crate isn't linked into this build) — the
+underlying bitfield-backed storage fields (declared as raw `[u8; N]`
+arrays with `#[bitfield(name = ..., ty = ..., bits = ...)]` attributes
+describing how to interpret them) are never read or written through
+their would-be-generated named accessor methods anywhere in this TU
+(confirmed via grep: zero calls to any bitfield accessor name). Fixed
+by stripping the derive down to plain `#[derive(Copy, Clone)]` and
+deleting all 25 `#[bitfield(...)]` attribute lines (including
+`#[bitfield(padding)]` markers) across the three structs, while leaving
+the underlying `[u8; N]` storage fields themselves untouched — this
+keeps every struct's real `#[repr(C)]` layout and size intact (the
+bytes are still there, just no longer described/accessed field-by-field
+through generated accessors this TU doesn't use), which is what field
+accesses like `.thread_head` at a fixed real offset actually depend on.
+
+General lesson for future files, extending the one `lzo1x_decompress_safe`
+already established: before assuming a `BitfieldStruct` struct is a
+deletable leaf, check not just "is it dead-by-value" but "is it
+load-bearing for real field access" — if the function actually reads
+named fields through it (not just passes it around as an opaque
+pointer), the fix is derive-stripping plus attribute-removal, not
+deletion or opaquing, because the real field layout still needs to be
+correct.
+
+### Outcome: clean boot, third file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/is_single_threaded_rs.o` — clean, zero
+  errors (865 warnings, all pre-existing missing-doc lints from the
+  `#[warn(missing_docs)]` kernel crate attribute, nothing new).
+- `make ARCH=riscv LLVM=1 -j32` — full kernel build succeeds,
+  `arch/riscv/boot/Image` and `Image.xz` produced.
+- `llvm-nm` confirms `current_is_single_threaded` defined (`T`) in both
+  `lib/is_single_threaded_rs.o` and the final `vmlinux`
+  (`ffffffff801a233e T current_is_single_threaded`).
+- `scripts/boot_qemu.py --run-id combined-c2rust-4`: boots clean,
+  **17/17 KUnit suites pass** (`fail:0` in every suite, no `not ok`
+  anywhere), `initramfs init reached, PID 1 alive` confirms INIT
+  REACHED, no panics, oops, BUG, or WARN in the boot log. No dedicated
+  `is_single_threaded`/`current_is_single_threaded` KUnit suite exists
+  in this kernel config (same situation as `lzo1x_decompress_safe`), so
+  this run demonstrates linking and booting cleanly, not a runtime
+  correctness check of the single-threaded-detection logic itself
+  against known inputs.
+
+This is the smallest and simplest file of the three done so far, and it
+needed the *least* manual intervention: no `#[export]`/`warn_on!`
+mismatch, no RISC-V inline-asm rewriting, no `.init_array` trick to
+strip, no `libc::` redirection, no transitive dead-struct-chain tracing
+— just feature-gate stripping, unsafe-block wrapping, and (newly) a
+"derive-strip, don't delete" resolution for load-bearing `BitfieldStruct`
+structs. Confirms the fix classes scale down cleanly to small files, not
+just up to large ones, and that not every gap class fires on every
+file — which file surfaces which subset seems to depend mostly on
+whether the function is `EXPORT_SYMBOL`'d (drives the `.init_array`/
+`#[export]` classes) and whether its `BitfieldStruct`-derived structs
+are actually touched by value/by-field versus merely pulled in as dead
+header noise.
+
+### Updated fix-scope tally
+
+With three files done, tally unchanged in kind from the two-file tally
+above (no genuinely new corpus-wide gap class found in this file) —
+this file's only contribution is the refinement to lesson 4:
+4. (refined) Dead `BitfieldStruct`-derived structs may be
+   transitively dead-by-value (trace the chain, as `lzo1x_decompress_safe`
+   showed) **or** genuinely load-bearing for real field access (as
+   `is_single_threaded.c` showed) — in the load-bearing case, strip the
+   derive and the `#[bitfield(...)]` attributes rather than deleting or
+   opaquing the struct, keeping the underlying storage fields' bytes
+   and layout intact.
