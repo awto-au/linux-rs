@@ -79,7 +79,40 @@ def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
             run_id or "default", n_ok, n_notok, int(init_reached), rc,
             str(archived.relative_to(REPO)),
         ])
+
+    commit_and_push_history(run_id, n_ok, n_notok, init_reached)
     return archived
+
+
+def commit_and_push_history(run_id: str | None, n_ok: int, n_notok: int, init_reached: bool):
+    """Every boot commits+pushes docs/status/boot-history.csv immediately
+    (explicit choice: full automation over batching, so the history is
+    never more than one boot stale on the remote). tmp/boot-history/*.log
+    itself is NOT committed (gitignored, regenerable/large) — only the
+    tracked CSV row. Fails LOUD (prints + re-raises) rather than silently
+    swallowing a push failure, since a push touches shared state and a
+    caller relying on this project's rule that shared-state actions are
+    never silent needs to see it fail, not lose it in stdout noise."""
+    try:
+        subprocess.run(["git", "add", str(BOOT_HISTORY_CSV.relative_to(REPO))],
+                       cwd=REPO, check=True, capture_output=True, text=True)
+        status = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO)
+        if status.returncode == 0:
+            return  # nothing staged (e.g. re-running with an identical row somehow) — no-op
+        msg = (f"boot-history: {run_id or 'default'} — {n_ok} ok / {n_notok} not ok"
+               f"{', INIT REACHED' if init_reached else ''}\n\n"
+               f"Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
+        subprocess.run(["git", "commit", "-m", msg], cwd=REPO, check=True,
+                       capture_output=True, text=True)
+        subprocess.run(["git", "push"], cwd=REPO, check=True, capture_output=True, text=True)
+        print("boot-history: committed + pushed")
+    except subprocess.CalledProcessError as e:
+        print(f"WARNING: boot-history auto-commit/push failed: {e}\n{e.stderr}",
+              file=sys.stderr)
+        # Don't fail the whole boot over a push hiccup (e.g. transient
+        # network) — the boot's own pass/fail result is what matters most
+        # and is already returned/printed by the caller; this is a
+        # best-effort convenience layered on top, not the primary gate.
 
 
 def ensure_initramfs() -> Path:
