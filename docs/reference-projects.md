@@ -1,8 +1,8 @@
 # Reference projects — the target-design corpus
 
 Added 2026-07-16. **Credit:** this corpus and the corpora/rule-provenance
-scheme below come from a ChatGPT deep-research survey Dan ran and brought
-into the project; repos, licences and activity were independently verified
+scheme below come from a ChatGPT deep-research survey brought into the
+project; repos, licences and activity were independently verified
 (`gh`) before inclusion. Pinned list: [references/manifest.toml](../references/manifest.toml).
 
 ## Why these matter

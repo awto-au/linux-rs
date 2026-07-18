@@ -4,7 +4,7 @@ Issue: [awto-au/linux-rs#12](https://github.com/awto-au/linux-rs/issues/12)
 
 ## Purpose
 
-Dan asked for a dedicated, continuing research stream to answer: where can
+This is a dedicated, continuing research stream answering: where can
 `linux-rs` contribute back to Rust-for-Linux upstream?
 
 This is the first concrete survey. It is not a claim that `linux-rs` should

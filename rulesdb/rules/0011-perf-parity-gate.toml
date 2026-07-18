@@ -5,7 +5,7 @@ tier = 1
 category = "process"
 
 [match]
-c = "every translated function with a benchmarkable pure interface (Dan, 2026-07-16)"
+c = "every translated function with a benchmarkable pure interface (2026-07-16)"
 
 [emit]
 kind = "rewrite"

@@ -31,7 +31,7 @@ section; this list is the scannable index.
 3. **c2rust baseline stays current, event-driven** (`scripts/
    c2rust_baseline_watch.py`) — re-run whenever `awtoau/c2rust`'s HEAD
    moves, not on a fixed clock or only when someone remembers. Not yet
-   wired to a real cron entry (Dan wants to hold off) — the script itself
+   wired to a real cron entry (holding off for now) — the script itself
    is real and tested; wiring it is a standing TODO, not abandoned.
 4. **Every real fixable c2rust failure gets triaged and filed**, not left
    as an unexamined `dropped_decls` row in `patterns.db`. When a fresh

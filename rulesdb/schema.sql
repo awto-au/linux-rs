@@ -83,8 +83,7 @@ CREATE INDEX idx_cscope_file ON cscope_symbols(file);
 -- and others); upstream kernel.org sparse HEAD (mirrored locally at
 -- /mnt/2tb/git_mirror/sparse/) has __typeof_unqual__ support and parses
 -- cleanly. The build lives entirely under tmp/ (gitignored, rebuilt on
--- demand) — never a vendored binary in this repo, per Dan's decision
--- 2026-07-16.
+-- demand) — never a vendored binary in this repo (decision, 2026-07-16).
 --
 -- Kernel-native semantic checks (address-space annotations, endianness,
 -- context imbalance) that generic tools have no model for at all —
@@ -198,9 +197,8 @@ CREATE INDEX idx_c2rust_decl_outcomes_rev ON c2rust_decl_outcomes(c2rust_rev);
 -- one row per distinct (kind, detail) occurrence, so recurring failure
 -- classes (e.g. "GNU address-of-label in _THIS_IP_", "panic at
 -- conversion.rs:1024 TagTypeUnknown") surface as queryable patterns
--- across the whole corpus, not just per-file pass/fail counts.
--- 2026-07-17, Dan's request: "extract the issues... so we get patterns
--- of failures".
+-- across the whole corpus, not just per-file pass/fail counts
+-- (2026-07-17: "extract the issues... so we get patterns of failures").
 CREATE TABLE c2rust_failure_signatures (
     id INTEGER PRIMARY KEY,
     attempt_id INTEGER NOT NULL REFERENCES c2rust_attempts(id),
@@ -257,10 +255,10 @@ CREATE INDEX idx_c2rust_compile_outcomes_run_at ON c2rust_compile_outcomes(run_a
 
 -- Upstream immunant/c2rust intel: forks, issues, PRs — so before writing
 -- our own fix we can check "has someone already solved this" in one
--- query instead of manually re-searching GitHub every time. 2026-07-17,
--- Dan's request: "make a database of all known issue and forks issue
--- and pr and patchs so we can quickly check for existing code before we
--- write our own". Populated by scripts/crawl_c2rust_upstream.py, NOT
+-- query instead of manually re-searching GitHub every time (2026-07-17:
+-- "make a database of all known issue and forks issue and pr and
+-- patchs so we can quickly check for existing code before we write our
+-- own"). Populated by scripts/crawl_c2rust_upstream.py, NOT
 -- wired into dev.py db (occasional/manual, like c2rust_attempts) —
 -- preserved across build_db.py rebuilds the same way.
 CREATE TABLE c2rust_forks (

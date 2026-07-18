@@ -71,6 +71,27 @@ def kmake(*targets):
 
 INIT_REACHED_MARKER = "linux-rs: initramfs init reached, PID 1 alive"
 
+# The real, explicit list of what `dev.py check` runs after a successful
+# boot — a check-registry, not a hand-wired sequence. Existed as a growing
+# list of individual sh([...]) calls inside main()'s `elif cmd == "check"`
+# branch instead (each new check = one more manually-added line + a
+# comment explaining why it's there) — exactly the "why does this new
+# check feel bolted-on" pattern check_spdx_provenance.py ran into
+# (2026-07-18) — every future check would hit the same thing.
+#
+# Adding a new post-boot check: append one CHECKS entry (script name,
+# relative to scripts/). sh() already treats any nonzero exit as a hard
+# failure (sys.exit()s) — every check registered here is a gate by
+# construction, same as before this refactor. A genuinely non-gating
+# (warn-only) check would need its own explicit handling when one is
+# actually added; not built speculatively ahead of a real need.
+CHECKS = ["check_spdx_provenance.py", "report.py"]
+
+
+def run_checks():
+    for script in CHECKS:
+        sh(["python3", str(S / script)], quiet_ok=False)
+
 
 def boot():
     # Pass the full relative path (e.g. "linux-riscv-worktrees/8250-tier-b"),
@@ -130,15 +151,7 @@ def main() -> int:
     elif cmd == "check":
         kmake()
         boot()
-        # Hard gate, not a warning: a translated file's SPDX identifier
-        # silently drifting from its C original (e.g. GPL-2.0 vs
-        # GPL-2.0-only vs GPL-2.0+) is a real licensing defect, not a
-        # style nit — see check_spdx_provenance.py's module doc for the
-        # two real mismatches this caught in review before this gate
-        # existed. sh() already sys.exit()s on nonzero rc, same as
-        # kmake()/boot() above.
-        sh(["python3", str(S / "check_spdx_provenance.py")], quiet_ok=False)
-        sh(["python3", str(S / "report.py")], quiet_ok=False)
+        run_checks()
     elif cmd == "report":
         sh(["python3", str(S / "report.py")], quiet_ok=False)
     elif cmd == "config":

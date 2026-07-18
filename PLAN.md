@@ -153,7 +153,7 @@ useful even then.
 
 ### Phase 2 — the minimal riscv64 boot path (exit: Rust translation running in-tree)
 
-(Re-scoped 2026-07-16 per Dan: go straight at the shipping target's code
+(Re-scoped 2026-07-16: go straight at the shipping target's code
 path instead of an x86 `lib/` detour.)
 
 1. **Trim the corpus first.** Start from `ARCH=riscv` tinyconfig (rv64) and
@@ -178,7 +178,7 @@ The old Phase-2 `lib/` targets (sort/CRC, KUnit differential) remain the
 oracle-tier-3 test vehicle — pure functions are still where differential
 testing is cheapest — but the headline target is the rv64 boot path.
 
-### Phase 2.5 — the pure-leaf optimisation lane (Dan, 2026-07-16)
+### Phase 2.5 — the pure-leaf optimisation lane (2026-07-16)
 
 For **pure leaf functions only** — no I/O, no MMIO, no shared-memory access,
 no locks, no allocation; arguments in, value out; exactly the `lib/math`

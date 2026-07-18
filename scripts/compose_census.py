@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Phase 1 v2.1: compositionality of the tail (corrected, matches census v1.1).
 
-Hypothesis (Dan, confirmed in v2.0): a singleton statement family is a novel
+Hypothesis (confirmed in v2.0): a singleton statement family is a novel
 *combination* of common sub-patterns, so tail statements cost only "glue".
 
 Corrections from the 2026-07-16 review:

@@ -19,10 +19,10 @@ to fix it, this is debugging not re-drafting. Retries up to --max-rounds.
 Only a draft that clears every free gate is passed to offload_review.py
 for the paid independent-review stage. If no draft ever clears the
 gates, the cycle reports FAILED — this is the intended terminal state
-until the underlying model/prompting is improved (per Dan: "if not good
-we still review, but we do the whole cycle again until we work out how
-to get ollama to do the work" — the loop is for iterating on the HARNESS,
-not for shipping an unclean draft).
+until the underlying model/prompting is improved ("if not good we still
+review, but we do the whole cycle again until we work out how to get
+ollama to do the work" — the loop is for iterating on the HARNESS, not
+for shipping an unclean draft).
 
 Usage: offload_cycle.py <path/to/file.c> [--max-rounds 3] [--model ...]
 Output: tmp/offload/<name>.cycle.json (full round-by-round record)

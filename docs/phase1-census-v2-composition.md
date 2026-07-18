@@ -1,4 +1,4 @@
-# Phase 1 v2 — compositionality of the tail (hypothesis: Dan, confirmed)
+# Phase 1 v2 — compositionality of the tail (hypothesis confirmed)
 
 > **CORRECTED 2026-07-16 (v2.1):** re-run on the corrected v1.1 census with
 > the root node (glue by construction) reported separately, per

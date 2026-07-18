@@ -17,7 +17,7 @@ so every rule learned on the lab corpus transfers.
 
 ## Chosen variant: `configs/riscv64-slim-serial.defconfig`
 
-Serial is essential (Dan) — but not the 8250/16550 stack:
+Serial is essential — but not the 8250/16550 stack:
 
 - `CONFIG_PRINTK` + **SBI earlycon** (`earlycon=sbi`): boot console via
   OpenSBI firmware calls — zero UART driver code on QEMU.
@@ -51,7 +51,7 @@ printk), mm, VFS core, `drivers/of` (device tree — LiteX boots with DT),
 ## Open items
 
 - rv64 vs rv32: Cynthion's ECP5 realistically runs a VexRiscv-class **rv32**
-  core; rv64 chosen per Dan for now (QEMU virt + possible 64-bit soft core).
+  core; rv64 chosen for now (QEMU virt + possible 64-bit soft core).
   Config is regenerable either way; statement families barely change.
 - EFI stub + kexec/purgatory + PCI remnants in the build are trim candidates
   worth ~30 TUs.

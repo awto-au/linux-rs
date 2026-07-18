@@ -40,10 +40,10 @@ path changes); the archive is additive, not a replacement.
 Every line written to the log is prefixed with elapsed time since this
 QEMU process started ("NNNNN.NNN ", 5-digit zero-padded whole seconds +
 3-digit milliseconds — see TS_PREFIX_RE in kunit_oracle.py, the single
-shared definition every downstream parser embeds). Dan's request: the
-raw serial log is genuinely hard to read without knowing how far apart
-events are in wall-clock time, and this project's whole boot is well
-under 1 second of QEMU time so plain second-granularity wasn't enough —
+shared definition every downstream parser embeds). The raw serial log is
+genuinely hard to read without knowing how far apart events are in
+wall-clock time, and this project's whole boot is well under 1 second of
+QEMU time so plain second-granularity wasn't enough —
 milliseconds make the OpenSBI-banner-vs-KUnit-results gap legible.
 QEMU's stdout is streamed line-by-line via Popen rather than captured
 in one blocking subprocess.run() specifically so each line can be
@@ -199,7 +199,7 @@ def main() -> int:
     # whole boot to one instant. t0 is this process's own start, so
     # "00000.xxx " on the first real output line means "QEMU had been
     # running this long already", which is the elapsed-time-since-launch
-    # semantic Dan asked for ("00000 start is fine").
+    # semantic requested ("00000 start is fine").
     with open(LOG, "w") as log:
         log.write(f"# {' '.join(cmd)}\n")
         log.flush()

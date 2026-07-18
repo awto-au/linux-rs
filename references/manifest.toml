@@ -1,5 +1,5 @@
 # Reference projects — target-design corpus for the rule DB.
-# Survey source: ChatGPT deep-research session provided by Dan (2026-07-16),
+# Survey source: ChatGPT deep-research session (2026-07-16),
 # repos and activity verified via `gh` the same day. See
 # docs/reference-projects.md for roles and usage policy.
 # EVIDENCE ONLY: external code informs rule design (type shapes, safety

@@ -1,10 +1,10 @@
 # patterns.db — the SQLite pattern database
 
 Added 2026-07-16, from the original project proposal ("the database
-becomes the real product") plus Dan's request to actually build it: a
-queryable SQLite index over the rule DB + Phase 1 kernel census +
-current translation status, for quick relational checks that would
-otherwise mean grepping across three different data sources by hand.
+becomes the real product"): a queryable SQLite index over the rule DB +
+Phase 1 kernel census + current translation status, for quick relational
+checks that would otherwise mean grepping across three different data
+sources by hand.
 
 ## It is ephemeral — rebuild, don't migrate
 
@@ -52,8 +52,8 @@ Two data classes, explicitly cross-referenced both directions:
   references (papers, blog posts, upstream docs) cited across this
   project, queryable by topic.
 
-Reverse-checkable views (the actual point, per Dan: "everything should be
-relational and reverse check where it matters"):
+Reverse-checkable views (the actual point — everything should be
+relational and reverse-checkable where it matters):
 
 - `functions_with_status` — every census function, joined to whether its
   own source file has a landed translation.
@@ -128,9 +128,9 @@ Mirrored the canonical repo locally (`/mnt/2tb/git_mirror/sparse/`, from
 cleanly. `scripts/import_sparse.py` (`dev.py db` runs it) clones+builds
 sparse from the LOCAL mirror into `tmp/sparse-build/` every run (a few
 seconds once the mirror is cloned) — **the compiled binary is never
-committed or vendored into this repo** (Dan's explicit call, 2026-07-16):
-only the build recipe is checked in, the binary itself is gitignored
-scratch, same as any other `tmp/` artifact.
+committed or vendored into this repo**: only the build recipe is checked
+in, the binary itself is gitignored scratch, same as any other `tmp/`
+artifact.
 
 Full-corpus run: 2,998 TUs, **214,271 diagnostics, 0 timeouts, ~3.5
 minutes.**

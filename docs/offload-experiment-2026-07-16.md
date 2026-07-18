@@ -83,7 +83,7 @@ number would be a fabrication; the report explicitly declines to guess.
 
 ## Part 2 (same day): the retry cycle (`offload_cycle.py`)
 
-Per Dan: "maybe Ollama for the translation, rustc/clippy as compile
+Approach: "maybe Ollama for the translation, rustc/clippy as compile
 checks, then run the tests, and only then review — if not, we still
 review, but we do the whole cycle again." Built exactly that: draft →
 rustc → clippy → (retry with the diagnostic fed back, NOT fresh context —

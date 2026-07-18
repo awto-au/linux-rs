@@ -7,9 +7,8 @@ diagnostics into rulesdb/patterns.db.
 
 The sparse BUILD lives entirely under tmp/ (gitignored, rebuilt from the
 local mirror at /mnt/2tb/git_mirror/sparse/sparse.git — never committed,
-never vendored into the repo; per Dan's decision 2026-07-16, option 1:
-build locally as part of the dev workflow, don't ship a compiled binary
-in a public repo).
+never vendored into the repo: build locally as part of the dev workflow,
+don't ship a compiled binary in a public repo).
 
 Usage: import_sparse.py [--rebuild] [--limit N]
 Output: tmp/sparse-build/ (build dir), rows in patterns.db's

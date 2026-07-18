@@ -60,7 +60,7 @@ scheduling noise). Pinned + min-of-5 + interleaved:
 | intlog2 | 1.55 | 1.58 | 1.52 | **-2%** | — |
 
 All four faithful translations pass the **±10% perf-parity gate**
-(rule 0011, Dan's proposal): any translated function outside the band
+(rule 0011): any translated function outside the band
 stops the line for cause analysis, and the cause catalogue feeds the
 Phase 2.5 optimisation lane's rule set. Methodology is mandatory in the
 rule — the phantom swings of unpinned runs are exactly what it exists

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Mechanise the TU-integration loop (Dan, 2026-07-16).
+"""Mechanise the TU-integration loop (2026-07-16).
 
 Given a translated <name>_rs.rs already written next to its C original,
 this performs every mechanical step that used to be done by hand:

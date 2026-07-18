@@ -2,9 +2,9 @@
 
 2026-07-18. Scoping pass for a new verification stage: "add a Rust
 compiler and Linux sources access to the riscv machine and get it to
-compile the work we have done" (Dan's framing). Investigates what that
-idea needs to become to be practical, given the constraints already known
-going in (QEMU guest boots with `-m 256M`, no native riscv64 rustc exists
+compile the work we have done." Investigates what that idea needs to
+become to be practical, given the constraints already known going in
+(QEMU guest boots with `-m 256M`, no native riscv64 rustc exists
 anywhere, `riscv64gc-unknown-linux-musl` is installed as a **cross**
 target only). No implementation in this pass — read-only investigation of
 toolchain state plus existing scripts (`scripts/check_c2rust_output_compiles.py`,
