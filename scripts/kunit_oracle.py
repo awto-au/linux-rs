@@ -26,13 +26,32 @@ ever needs to change, update both together):
   - a KUnit test PASS line matches  ^ok \\d+ .*$
   - a KUnit test FAIL line matches  ^\\s*not ok .*$
   - "not ok" lines may be indented (KUnit subtests); "ok" lines are not.
+  - since 2026-07-18, every line in a freshly-generated raw log (see
+    boot_qemu.py) carries a leading elapsed-time prefix of the exact
+    form "NNNNN.NNN " (5-digit zero-padded whole seconds, '.', 3-digit
+    milliseconds, one space) before the original content — e.g.
+    "00003.847 ok 1 rust_kernel_str". TS_PREFIX_RE matches that prefix
+    (optionally — old archived logs under docs/status/boot-logs/ have
+    no prefix at all and must keep parsing identically) and every
+    line-anchored regex below, plus every other module's regex over
+    this same log format (render_boot_log.py, report.py,
+    integrate_tu.py's --suite check), embeds it so a raw QEMU boot log
+    is the single source of truth all five consumers agree on. Import
+    TS_PREFIX_RE from here rather than redefining it — it must change
+    in exactly one place if the timestamp format ever does.
 
 Usage: verify_kunit_ok(log_text) -> (passed, ok_lines, bad_lines)
 """
 import re
 
-OK_RE = re.compile(r"^ok \d+ .*$", re.M)
-NOT_OK_RE = re.compile(r"^\s*not ok .*$", re.M)
+# Optional leading "NNNNN.NNN " elapsed-time prefix — see module doc.
+# Non-capturing so callers that embed this fragment inside their own
+# capturing regex (e.g. integrate_tu.py's per-suite name group) don't
+# have their group numbering shifted by it.
+TS_PREFIX_RE = r"(?:\d{5}\.\d{3} )?"
+
+OK_RE = re.compile(rf"^{TS_PREFIX_RE}ok \d+ .*$", re.M)
+NOT_OK_RE = re.compile(rf"^{TS_PREFIX_RE}\s*not ok .*$", re.M)
 
 
 def verify_kunit_ok(log_text: str) -> tuple[bool, list[str], list[str]]:

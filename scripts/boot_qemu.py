@@ -37,15 +37,32 @@ KUnit summary, applied to raw boot logs specifically. tmp/qemu-boot.log
 itself still gets truncated per run (nothing that reads that stable
 path changes); the archive is additive, not a replacement.
 
+Every line written to the log is prefixed with elapsed time since this
+QEMU process started ("NNNNN.NNN ", 5-digit zero-padded whole seconds +
+3-digit milliseconds — see TS_PREFIX_RE in kunit_oracle.py, the single
+shared definition every downstream parser embeds). Dan's request: the
+raw serial log is genuinely hard to read without knowing how far apart
+events are in wall-clock time, and this project's whole boot is well
+under 1 second of QEMU time so plain second-granularity wasn't enough —
+milliseconds make the OpenSBI-banner-vs-KUnit-results gap legible.
+QEMU's stdout is streamed line-by-line via Popen rather than captured
+in one blocking subprocess.run() specifically so each line can be
+timestamped as it actually arrives, not after the whole process exits.
+
 Usage: boot_qemu.py [--tree linux-riscv] [--append "extra args"] [--run-id NAME]
 """
 import argparse
 import csv
 import datetime
+import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kunit_oracle import TS_PREFIX_RE  # noqa: E402 — see module doc
 
 REPO = Path(__file__).resolve().parent.parent
 INITRD = REPO / "tmp" / "initramfs" / "initramfs.cpio.gz"
@@ -57,6 +74,13 @@ BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
 # reached. Kept distinct from the "ok N ..." KUnit line shape so the two
 # detectors can never collide.
 INIT_REACHED = "linux-rs: initramfs init reached, PID 1 alive"
+
+# Matches "ok "/"not ok " at the start of a line's actual content, whether
+# or not a "NNNNN.NNN " elapsed-time prefix (written by main(), below) is
+# present first — see kunit_oracle.TS_PREFIX_RE's module doc for why this
+# fragment is shared rather than redefined per file.
+OK_LINE_RE = re.compile(rf"^{TS_PREFIX_RE}ok ")
+NOT_OK_LINE_RE = re.compile(rf"^{TS_PREFIX_RE}not ok ")
 
 
 def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
@@ -169,10 +193,24 @@ def main() -> int:
         "-append", cmdline.strip(),
     ]
     print(f"booting {image}\ninitrd: {initrd}\nlog: {LOG}")
+    # Popen + line-by-line streaming (not a single blocking subprocess.run)
+    # so each line can be stamped with real elapsed time as it arrives —
+    # a post-hoc timestamp after the process exits would collapse the
+    # whole boot to one instant. t0 is this process's own start, so
+    # "00000.xxx " on the first real output line means "QEMU had been
+    # running this long already", which is the elapsed-time-since-launch
+    # semantic Dan asked for ("00000 start is fine").
     with open(LOG, "w") as log:
         log.write(f"# {' '.join(cmd)}\n")
         log.flush()
-        rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
+        t0 = time.monotonic()
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in proc.stdout:
+            elapsed = time.monotonic() - t0
+            log.write(f"{elapsed:09.3f} {line}")
+        proc.stdout.close()
+        rc = proc.wait()
     # Summarise the KUnit result lines for the terminal — this remains the
     # primary pass/fail signal (dev.py's boot()/check() parse these same
     # "ok "/"not ok " lines from tmp/qemu-boot.log; nothing here changes
@@ -181,12 +219,13 @@ def main() -> int:
     text = LOG.read_text(errors="replace")
     n_ok = n_notok = 0
     for line in text.splitlines():
-        if line.startswith("ok "):
+        is_ok = bool(OK_LINE_RE.match(line))
+        is_notok = bool(NOT_OK_LINE_RE.match(line))
+        if is_ok:
             n_ok += 1
-        elif line.startswith("not ok "):
+        elif is_notok:
             n_notok += 1
-        if line.startswith(("ok ", "not ok ")) or "# Totals:" in line \
-                or "Kernel panic" in line:
+        if is_ok or is_notok or "# Totals:" in line or "Kernel panic" in line:
             print(line)
     init_reached = INIT_REACHED in text
     if init_reached:

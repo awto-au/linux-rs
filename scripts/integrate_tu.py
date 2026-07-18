@@ -32,7 +32,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kunit_oracle import verify_kunit_ok  # noqa: E402 — see module doc
+from kunit_oracle import TS_PREFIX_RE, verify_kunit_ok  # noqa: E402 — see module doc
 LOG = REPO / "tmp" / "integrate_tu.log"
 
 
@@ -142,7 +142,7 @@ def main() -> int:
     passed, ok, bad = verify_kunit_ok(boot_log)
     bad = list(bad)
     for suite in args.suite:
-        if not re.search(rf"^ok \d+ {re.escape(suite)}$", boot_log, re.M):
+        if not re.search(rf"^{TS_PREFIX_RE}ok \d+ {re.escape(suite)}$", boot_log, re.M):
             bad.append(f"suite missing/failed: {suite}")
     if bad:
         logging.error("ORACLE FAIL:\n%s", "\n".join(bad))

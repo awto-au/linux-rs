@@ -25,6 +25,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kunit_oracle import TS_PREFIX_RE  # noqa: E402 — see module doc
+
 TREE = REPO / "linux-riscv"
 OUT = REPO / "docs" / "status"
 LOG = REPO / "tmp" / "report.log"
@@ -142,9 +145,9 @@ def kunit_results():
     if not log.exists():
         return suites, vectors
     txt = log.read_text(errors="replace")
-    for m in re.finditer(r"^ok \d+ (\S+)$", txt, re.M):
+    for m in re.finditer(rf"^{TS_PREFIX_RE}ok \d+ (\S+)$", txt, re.M):
         suites.append(m.group(1))
-    for m in re.finditer(r"^# Totals: pass:(\d+)", txt, re.M):
+    for m in re.finditer(rf"^{TS_PREFIX_RE}# Totals: pass:(\d+)", txt, re.M):
         vectors += int(m.group(1))
     return suites, vectors
 
@@ -154,10 +157,10 @@ def suite_vectors():
     out = []
     pending = None
     for line in txt.splitlines():
-        m = re.match(r"^# Totals: pass:(\d+)", line)
+        m = re.match(rf"^{TS_PREFIX_RE}# Totals: pass:(\d+)", line)
         if m:
             pending = int(m.group(1))
-        m = re.match(r"^ok \d+ (\S+)$", line)
+        m = re.match(rf"^{TS_PREFIX_RE}ok \d+ (\S+)$", line)
         if m:
             out.append((m.group(1), pending if pending is not None else 1))
             pending = None

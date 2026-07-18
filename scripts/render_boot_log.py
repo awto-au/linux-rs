@@ -21,16 +21,26 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kunit_oracle import TS_PREFIX_RE  # noqa: E402 — see module doc
+
 LOG = REPO / "tmp" / "render_boot_log.log"
 BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
 BOOT_HISTORY_DIR = REPO / "docs" / "status" / "boot-logs"
 BROWSE_DIR = REPO / "tmp" / "boot-log-browse"
 
-OK_RE = re.compile(r"^ok \d+ ")
-NOTOK_RE = re.compile(r"^\s*not ok ")
-TOTALS_RE = re.compile(r"^# Totals:")
+OK_RE = re.compile(rf"^{TS_PREFIX_RE}ok \d+ ")
+NOTOK_RE = re.compile(rf"^{TS_PREFIX_RE}\s*not ok ")
+TOTALS_RE = re.compile(rf"^{TS_PREFIX_RE}# Totals:")
 MILESTONE = "linux-rs: initramfs init reached, PID 1 alive"
 PANIC_RE = re.compile(r"Kernel panic")
+
+# Split a rendered line into its (elapsed-time prefix, rest) for display —
+# distinct from TS_PREFIX_RE's use above (which only needs "is it there")
+# because here the timestamp text itself needs to survive into the HTML
+# as its own styled column. Old archived logs with no prefix at all still
+# render fine: LEADING_TS_RE just doesn't match and ts_part is "".
+LEADING_TS_RE = re.compile(r"^(\d{5}\.\d{3}) (.*)$", re.S)
 
 FONT_STACK = ("ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', "
               "'Liberation Mono', monospace")
@@ -50,6 +60,26 @@ def classify(line: str) -> str:
     return ""
 
 
+def render_row(line_no: int, line: str) -> str:
+    """One <tr> for a single log line, with the elapsed-time prefix (if
+    present — old pre-timestamp archived logs won't have one) split into
+    its own muted-color <td> ahead of the actual content, rather than left
+    as inert text baked into the same cell. classify() still runs against
+    the FULL original line (prefix included) so ok/not-ok/milestone/panic
+    detection is unaffected by this purely-visual split."""
+    cls = classify(line)
+    cls_attr = f' class="{cls}"' if cls else ""
+    m = LEADING_TS_RE.match(line)
+    if m:
+        ts_html = f'<td class="elapsed">{html.escape(m.group(1))}</td>'
+        text_html = html.escape(m.group(2)) or "&nbsp;"
+    else:
+        ts_html = '<td class="elapsed"></td>'
+        text_html = html.escape(line) or "&nbsp;"
+    return (f'<tr{cls_attr}><td class="ln">{line_no}</td>{ts_html}'
+            f'<td class="tx">{text_html}</td></tr>')
+
+
 def render(log_path: Path) -> str:
     text = log_path.read_text(errors="replace")
     lines = text.splitlines()
@@ -59,14 +89,7 @@ def render(log_path: Path) -> str:
     reached_init = MILESTONE in text
     verdict_ok = n_ok > 0 and n_notok == 0
 
-    rows = []
-    for i, line in enumerate(lines, 1):
-        cls = classify(line)
-        cls_attr = f' class="{cls}"' if cls else ""
-        rows.append(
-            f'<tr{cls_attr}><td class="ln">{i}</td>'
-            f'<td class="tx">{html.escape(line) or "&nbsp;"}</td></tr>'
-        )
+    rows = [render_row(i, line) for i, line in enumerate(lines, 1)]
 
     verdict_label = "ORACLE PASS" if verdict_ok else "ORACLE FAIL"
     verdict_cls = "pass" if verdict_ok else "fail"
@@ -127,6 +150,10 @@ td.ln {{
   color: var(--text-dim); text-align: right; user-select: none; width: 3.5rem;
   border-right: 1px solid var(--border); opacity: 0.55;
 }}
+td.elapsed {{
+  color: var(--text-dim); text-align: right; user-select: none; width: 4.6rem;
+  font-variant-numeric: tabular-nums; opacity: 0.7;
+}}
 td.tx {{ border-left: 3px solid transparent; }}
 tr.ok td.tx {{ background: var(--amber-bg); border-left-color: var(--amber); font-weight: 600; }}
 tr.milestone td.tx {{ background: var(--amber-bg); border-left-color: var(--amber); font-weight: 700; }}
@@ -173,14 +200,7 @@ def render_history() -> str:
             continue
         text = log_path.read_text(errors="replace")
         lines = text.splitlines()
-        body_rows = []
-        for ln, line in enumerate(lines, 1):
-            cls = classify(line)
-            cls_attr = f' class="{cls}"' if cls else ""
-            body_rows.append(
-                f'<tr{cls_attr}><td class="ln">{ln}</td>'
-                f'<td class="tx">{html.escape(line) or "&nbsp;"}</td></tr>'
-            )
+        body_rows = [render_row(ln, line) for ln, line in enumerate(lines, 1)]
         ok = int(row["ok"])
         notok = int(row["not_ok"])
         init_ok = row["init_reached"] == "1"
@@ -262,6 +282,10 @@ table {{
 }}
 td {{ padding: 0.06rem 0.9rem; white-space: pre; vertical-align: top; line-height: 1.4; }}
 td.ln {{ color: var(--text-dim); text-align: right; width: 3.2rem; opacity: 0.5; }}
+td.elapsed {{
+  color: var(--text-dim); text-align: right; width: 4.4rem;
+  font-variant-numeric: tabular-nums; opacity: 0.65;
+}}
 td.tx {{ border-left: 3px solid transparent; }}
 tr.ok td.tx {{ background: var(--amber-bg); border-left-color: var(--amber); font-weight: 600; }}
 tr.milestone td.tx {{ background: var(--amber-bg); border-left-color: var(--amber); font-weight: 700; }}
