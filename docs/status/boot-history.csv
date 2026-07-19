@@ -116,3 +116,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T17:36:53+10:00,combined-c2rust-boot-20,17,0,1,0,docs/status/boot-logs/20260719T173653+1000-combined-c2rust-boot-20.log
 2026-07-19T20:29:59+10:00,combined-boot-lz4_decompress,17,0,1,0,docs/status/boot-logs/20260719T202959+1000-combined-boot-lz4_decompress.log
 2026-07-19T20:33:13+10:00,combined-c2rust-boot-22,17,0,1,0,docs/status/boot-logs/20260719T203313+1000-combined-c2rust-boot-22.log
+2026-07-19T20:39:00+10:00,combined-c2rust-boot-21,17,0,1,0,docs/status/boot-logs/20260719T203900+1000-combined-c2rust-boot-21.log
