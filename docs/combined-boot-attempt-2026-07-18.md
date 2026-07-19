@@ -7,6 +7,25 @@ Never attempted before this session — documenting what was actually
 needed, since "clean" and "rule-conformant" turned out not to mean
 "compiles in this kernel."
 
+> **Update (2026-07-19): 3 of the recurring gap classes are now fixed
+> in the transpiler itself**, not just hand-patched per file — commit
+> `8a19ca39c` (merged to `awtoau/c2rust` master as `8bf6855c6`) fixes
+> the `extern_types`-for-opaque-decls pattern, the missing `unsafe {}`
+> wrapping (a CLI default flip: `TranspilerConfig::deny_unsafe_op_in_unsafe_fn`
+> now defaults ON), and the dead `.init_array`/`__ADDRESSABLE` constructor
+> trick, plus a stale `feature(asm)` declaration. Verified against a full
+> 542-file corpus baseline (542/542 clean, 0 regressions) and against all
+> 5 files documented below via `investigate_c2rust_failure.py --rerun`.
+> A 6th file attempted from this point forward should need hand-fixing
+> only for the 2 gap classes NOT covered by this change: `#[export]`
+> needing `#[no_mangle]` instead (file-specific: depends on whether the
+> C original used plain `EXPORT_SYMBOL` vs `EXPORT_SYMBOL_GPL`, a
+> licensing judgement call, not safely automatable — see
+> `rulesdb/rules/0001-export-symbol-gpl.toml`) and `c2rust_bitfields`
+> derive stripping/opaquing for pulled-in-but-partially-used structs
+> (needs per-struct load-bearing-ness verification, per the
+> `is_single_threaded.c`/`lwq.c` sections below).
+
 ## Candidate chosen
 
 `lib/group_cpus.c` → `group_cpus_evenly()`. Single exported function,
