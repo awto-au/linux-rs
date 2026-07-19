@@ -1918,3 +1918,115 @@ independently — the two fixes stack cleanly rather than one subsuming
 the other, confirming both remain distinct, separately-required steps
 going forward for any file exercising this kernel's Zabha-gated
 sub-word atomics.
+
+## Fourteenth candidate: `lib/devmem_is_allowed.c`
+
+Worktree `combined-c2rust-boot-15`, branch `agent-combined-c2rust-boot-15`,
+based on `linux-rs/phase2-gcd`. Target: `devmem_is_allowed()`, the sole
+function, not `EXPORT_SYMBOL`'d (plain internal `extern`, declared in
+`include/linux/io.h`, called only from `drivers/char/mem.c`'s `/dev/mem`
+read/write path), 8 lines of real logic, 28 lines of C total. c2rust
+binary built from local branch `register-var-accessor-fix` (`b1f01a3d2`,
+one commit ahead of master `6065eaf19`, not yet merged — the
+in-progress fix for issue #22/rule 0031's fabricated-register-static
+class). Confirmed this doesn't affect the baseline here: that fix only
+rewrites accessors whose entire body is `return <register-var>;`
+(`get_current()`-shaped), and this TU has no such accessor at all (see
+below), so its output is unchanged regardless of which side of the fix
+the binary was built from — verified via
+`investigate_c2rust_failure.py --rerun`: `outcome=clean`, `returncode=0`,
+byte-identical (`diff -q`) to the pre-existing
+`tmp/c2rust-baseline/lib_devmem_is_allowed.c/` output.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `devmem_is_allowed.o` had its own
+dedicated `obj-$(CONFIG_GENERIC_LIB_DEVMEM_IS_ALLOWED)` line (not
+bundled with others, unlike most prior files), swapped for a conditional
+`devmem_is_allowed_rs.o`/`devmem_is_allowed.o` pair under the new
+config. `CONFIG_GENERIC_LIB_DEVMEM_IS_ALLOWED=y` already set in this
+worktree's `.config` (unconditionally `select`ed by `arch/riscv/Kconfig`),
+confirming the file is genuinely linked into the combined image already.
+
+`python3 scripts/dev.py check-register-statics` run first per the
+mandatory rule 0031 check: `lib_devmem_is_allowed.c` did not appear in
+either the LIVE or dead list. Grep-confirmed directly — no `get_current()`
+accessor is synthesized anywhere in the TU (0 occurrences), so the two
+fabricated statics `riscv_current_is_tp`/`current_stack_pointer` are
+present but definitionally unreachable, matching the
+`bucket_locks.c`/`errseq.c`/`debug_locks.c`/`bust_spinlocks.c` "no
+accessor synthesized at all" branch of rule 0031, not the
+`klist.c`/`is_single_threaded.c` live-via-accessor case. Both deleted
+outright.
+
+Cleanest structural shape of the series, alongside `uuid.c`: no
+`#![feature(...)]` line at all, `unsafe {}` already wrapping the
+function's one body, no `.init_array`/`__UNIQUE_ID_addressable_*`
+constructor trick (no `EXPORT_SYMBOL` in the C source, consistent with
+`is_single_threaded.c`/`bust_spinlocks.c`'s finding), no `#[export]`/
+`::macros::export` (already plain `#[no_mangle]`), no `::libc::` calls,
+no RISC-V inline-asm (`devmem_is_allowed()`'s body is two plain function
+calls and a comparison, nothing atomic or cmpxchg-shaped), no `warn_on!`,
+no `LIST_POISON`, no parameter/type namespace collision.
+
+The one real gap: **5 dead `BitfieldStruct`-derived structs**
+(`task_struct`, `mmap_action`, `percpu_ref_data`, `signal_struct`,
+`sched_dl_entity`) pulled in transitively via headers this TU never
+touches — same struct set `bucket_locks.c` hit. Traced the by-value
+dependency graph (per the `lzo1x_decompress_safe.c`/`glob.c` lesson)
+rather than assuming a flat leaf-node set: `mmap_action` is embedded
+by-value inside `vm_area_desc` (a plain, non-`BitfieldStruct` struct),
+and grep confirmed `vm_area_desc` itself is never used by value anywhere
+in the TU (only ever `*mut vm_area_desc`, a function-pointer parameter
+type) — so `vm_area_desc` joins the opaque set too, real leaf count 6,
+not 5. `task_struct`/`percpu_ref_data`/`signal_struct` are pointer-only
+throughout (13/1/1 occurrences respectively, all `*mut`/`*const`);
+`sched_dl_entity` appears by-value exactly once, embedded inside the
+also-dead `task_struct`. All 6 converted to the standard zero-field
+`opaque_marker!` idiom in one macro invocation (opaquing `mmap_action`
+directly rather than deleting it outright, matching `bust_spinlocks.c`'s
+approach — simpler than tracing which downstream union/const furniture
+would go dangling, since the marker macro just replaces the whole
+definition regardless of derive).
+
+No new gap class found — every fix here is a recurrence of an
+already-documented pattern (rule 0031's dead branch, transitive
+`BitfieldStruct` by-value tracing).
+
+### Outcome: clean boot, fourteenth file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/devmem_is_allowed_rs.o` — clean, 0 errors
+  (1617 warnings, all missing-doc lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` produced. `lib/devmem_is_allowed.o` correctly
+  never built (no `.devmem_is_allowed.o.cmd` present).
+- `llvm-nm`: `devmem_is_allowed` defined (`T`) in both
+  `lib/devmem_is_allowed_rs.o` and `vmlinux`
+  (`ffffffff801863e2 T devmem_is_allowed`); `riscv_current_is_tp`/
+  `current_stack_pointer` absent from both objects entirely (confirmed
+  via `llvm-nm` grep, empty result both places).
+- `dev.py boot --run-id combined-c2rust-boot-15`: boots clean, 17/17
+  KUnit suites pass (`fail:0` every suite, 0 `not ok`), `INIT REACHED
+  (initramfs userspace boot verified)`, no panic/oops/BUG/WARN in the
+  log. Archived at
+  `docs/status/boot-logs/20260719T145529+1000-combined-c2rust-boot-15.log`.
+  Boot-history row committed/pushed automatically by `boot_qemu.py`
+  (`fa50e6a`). No dedicated devmem_is_allowed KUnit suite in this kernel
+  config, and `devmem_is_allowed()` is only ever called from
+  `/dev/mem`'s read/write path, not exercised by this project's minimal
+  boot — this run demonstrates linking and booting cleanly, not a
+  runtime correctness check of the RAM/MMIO exclusivity logic itself.
+
+Fourteenth file to clear the bar. Smallest real-logic body of the
+series (3 statements), tied with `bust_spinlocks.c`/`uuid.c` for the
+minimal-fix-scope tier — one gap class only (`BitfieldStruct` opaquing,
+with the same transitive-tracing nuance `glob.c` and
+`lzo1x_decompress_safe.c` already established), zero feature-line
+strips, zero `#[export]` handling, zero RISC-V inline-asm gaps, zero
+register-variable-liveness surprises. Also the first file boot-tested
+against a c2rust binary built from an unmerged local branch
+(`register-var-accessor-fix`, targeting issue #22) rather than master
+directly — confirmed immaterial to this file's output since the fix
+only touches `get_current()`-shaped accessors and this TU has none, but
+worth flagging the provenance explicitly per the task's freshness-check
+requirement rather than silently treating "some c2rust binary" as
+interchangeable with "master's c2rust binary."
