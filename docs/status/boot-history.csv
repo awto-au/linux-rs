@@ -102,3 +102,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T13:38:29+10:00,block-layer-enable,17,0,1,0,docs/status/boot-logs/20260719T133829+1000-block-layer-enable.log
 2026-07-19T13:39:21+10:00,block-layer-enable-rnull,17,0,1,0,docs/status/boot-logs/20260719T133921+1000-block-layer-enable-rnull.log
 2026-07-19T13:59:29+10:00,virtio-main-tree-verify,17,0,1,0,docs/status/boot-logs/20260719T135929+1000-virtio-main-tree-verify.log
+2026-07-19T14:04:06+10:00,combined-c2rust-boot-14,17,0,1,0,docs/status/boot-logs/20260719T140406+1000-combined-c2rust-boot-14.log
