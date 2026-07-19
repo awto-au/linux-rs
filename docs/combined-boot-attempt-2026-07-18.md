@@ -1694,3 +1694,92 @@ substantially less hand-fixing than one touching atomics, `task_struct`,
 or RISC-V memory-ordering primitives — which gap classes fire seems to
 track directly with what headers/kernel facilities the C source actually
 pulls in, not file size or line count.
+
+## Twelfth candidate: `lib/bust_spinlocks.c`
+
+Worktree `combined-c2rust-boot-13`, branch `agent-combined-c2rust-boot-13`,
+based on `linux-rs/phase2-gcd`. Target: `bust_spinlocks()`, the sole
+function, not `EXPORT_SYMBOL`'d (plain internal `extern`, declared in
+`include/linux/kernel.h`, called from `panic()`/`die()`/oops paths), 26
+lines of C. Baseline transpile at
+`tmp/c2rust-baseline/lib_bust_spinlocks.c/output/src/bust_spinlocks.rs`
+(4566 lines).
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `bust_spinlocks.o` pulled out of a
+bundled `obj-y` line shared with `debug_locks.o`, `random32.o`,
+`scatterlist.o`, etc. (left `debug_locks.o` untouched — a sibling agent
+was concurrently working that file in its own worktree), swapped for
+`bust_spinlocks_rs.o` under the config.
+
+`python3 scripts/dev.py check-register-statics` run first per the
+mandatory rule 0031 check, as flagged given the file's spinlock/
+preemption-adjacent name: `lib_bust_spinlocks.c` did not appear in
+either the LIVE or dead list output. Grep-confirmed directly instead —
+no `get_current()` accessor is even synthesized in this TU (0
+occurrences), so the two fabricated statics `riscv_current_is_tp`/
+`current_stack_pointer` are present but definitionally unreachable (no
+accessor to call them through). `bust_spinlocks()`'s own body only
+touches `oops_in_progress` (a plain `extern` int, unrelated to
+`current`), `console_unblank()`, `wake_up_klogd()` — confirmed via grep
+neither fabricated static is referenced anywhere else in the TU either.
+Matches the `group_cpus.c`/`rcuref.c`/`timerqueue.c` "no accessor
+synthesized at all" branch of rule 0031, the safe-to-delete-outright
+case, not the `klist.c`/`is_single_threaded.c` live-via-accessor case.
+Deleted both statics outright.
+
+Cleanest structural shape of the series: no `#![feature(...)]` line at
+all, `unsafe {}` already wrapping the function's one body, no
+`.init_array`/`__UNIQUE_ID_addressable_*` constructor trick (consistent
+with `is_single_threaded.c`'s finding — no `EXPORT_SYMBOL` in the C
+source, so c2rust never emits the trick), no `#[export]`/
+`::macros::export` (already plain `#[no_mangle]`), no `::libc::` calls,
+no RISC-V inline-asm. The one real gap: **9 dead `BitfieldStruct`-derived
+structs** pulled in transitively via `task_struct` and its
+by-value-embedded/pointer-adjacent neighbors (`mmap_action`, `kobject`,
+`kernfs_open_file`, `percpu_ref_data`, `signal_struct`, `tty_port`,
+`dev_pm_info`, `sched_dl_entity`) — more than any prior file (previous
+max was 6, `lzo1x_decompress_safe.c`). Verified via grep that
+`bust_spinlocks()`'s body touches none of them, directly or by pointer,
+and that every other struct that embeds one of the nine by value
+(`inode`, `vm_area_desc`, `sysfs_ops`, `module_attribute`,
+`proc_dir_entry`, `device`) is itself only ever referenced by pointer
+from elsewhere in the TU, never by value and never from the live
+function — so, unlike `lzo1x_decompress_safe.c`'s partial-chain case,
+the whole 9-struct subgraph collapses to dead-by-construction without
+needing per-container load-bearing checks (nothing pointer-only cares
+about pointee layout). All 9 converted to the standard zero-field
+`opaque_marker!` idiom in one macro invocation.
+
+### Outcome: clean boot, twelfth file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/bust_spinlocks_rs.o` — clean, 0 errors
+  (2327 warnings, all missing-doc lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` produced. `lib/bust_spinlocks.o` correctly
+  never built (only `lib/bust_spinlocks_rs.o` present in `lib.a`).
+- `llvm-nm`: `bust_spinlocks` defined (`T`) in both
+  `lib/bust_spinlocks_rs.o` and `vmlinux`
+  (`ffffffff801606ea T bust_spinlocks`); `riscv_current_is_tp`/
+  `current_stack_pointer` absent from both objects entirely (not just
+  unreferenced — confirmed via `llvm-nm` grep, empty result).
+- `dev.py boot --run-id combined-c2rust-boot-13`: boots clean, 17/17
+  KUnit suites pass (`fail:0` every suite, 0 `not ok`), `initramfs init
+  reached, PID 1 alive` confirms INIT REACHED, no panic/oops/BUG/WARN in
+  the log. Archived at
+  `docs/status/boot-logs/20260719T140624+1000-combined-c2rust-boot-13.log`.
+  Boot-history row committed/pushed automatically by `boot_qemu.py`
+  (`e08dcd9`). No dedicated bust_spinlocks KUnit suite in this kernel
+  config, so this run demonstrates linking and booting cleanly, not a
+  runtime correctness check against known inputs — and since
+  `bust_spinlocks()` is only ever called from real panic/oops paths,
+  this project's minimal boot never exercises it at all regardless.
+
+Twelfth file to clear the bar. Tiny (26-line) source, but pulled in the
+largest `BitfieldStruct` dead-struct set of the series (9, vs. the prior
+max of 6) purely as header noise — reconfirms the `uuid.c`/`errseq.c`
+lesson that gap-class count tracks what headers a TU pulls in, not
+source line count: a 26-line file can still drag in a ~4500-line
+`task_struct`-rooted prelude. Also the first file since `lwq.c` to
+exercise rule 0031's "no accessor synthesized" dead branch explicitly
+flagged for a spinlock-adjacent file and confirmed rather than assumed.
