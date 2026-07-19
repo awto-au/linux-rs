@@ -1202,6 +1202,22 @@ fix and the first hitting a parameter/type namespace collision. Issue
 #29 (bracket addressing + Zacas/Zabha) recurred a fourth time,
 unchanged in shape from `objpool.c`.
 
+### Retroactive fix: refcount.h overflow-detection panic (issue #39)
+
+`__refcount_add_not_zero`/`__refcount_add`/`__refcount_sub_and_test`'s
+`old + i < 0`/`old - i < 0` overflow-detection comparisons (inlined
+via `refcount_dec_and_test`, reached by `klist_add_tail`/`klist_del`)
+translated to plain checked `+`/`-`, panicking on overflow instead of
+running the intended graceful-detection path — `CONFIG_RUST_OVERFLOW_CHECKS=y`
+is set, so this was live, not hypothetical. Fixed in-place: 3 comparison
+sites changed to `old.wrapping_add(i)`/`old.wrapping_sub(i)`
+(the `atomic_try_cmpxchg_relaxed` argument's own `old + i` is untouched —
+that's the real atomic write value, not a local sentinel). Rebuilt,
+reboot confirms 17/17 KUnit suites, INIT REACHED, no regression.
+Root-caused and fixed at the c2rust source too (`awtoau/c2rust#27`,
+merged `5622104e9`) — future re-transpiles of this file won't need
+this hand-fix.
+
 ## Eighth candidate: `lib/bucket_locks.c`
 
 Worktree `combined-c2rust-boot-10`, branch `agent-combined-c2rust-boot-10`,
