@@ -2030,3 +2030,155 @@ only touches `get_current()`-shaped accessors and this TU has none, but
 worth flagging the provenance explicitly per the task's freshness-check
 requirement rather than silently treating "some c2rust binary" as
 interchangeable with "master's c2rust binary."
+
+## Fifteenth candidate: `lib/tests/test_sort.c`
+
+Worktree `combined-c2rust-boot-16`, branch `agent-combined-c2rust-boot-16`,
+based on `linux-rs/phase2-gcd`. c2rust binary at `6065eaf19` (current
+master; supersedes the `raw_ref_op`/`strict_provenance` stale-feature
+fix cited in this doc's 2026-07-19 update). Fresh transpile via
+`c2rust-baseline`, `tmp/c2rust-baseline/lib_tests_test_sort.c/output/src/test_sort.rs`
+(4370 lines raw).
+
+Structurally different from every prior candidate: `test_sort.c` is
+itself a KUnit test suite, not a plain `lib/` utility. Gated by
+`obj-$(CONFIG_TEST_SORT) += test_sort.o` (`config TEST_SORT`, `tristate
+... depends on KUNIT, default KUNIT_ALL_TESTS`, `=y` in this project's
+`.config`), not unconditional `obj-y`. Registers `sort_test_suite`
+(name `"lib_sort"`, one case `test_sort`) via
+`kunit_test_suites(&sort_test_suite)`, which lowers to a
+`#[used] #[link_section = ".kunit_test_suites"]` static pointer array —
+the linker collects these across every KUnit TU into one section, the
+KUnit executor walks it at runtime, and picks up each suite purely by
+array position. No `EXPORT_SYMBOL`, no external caller by name at all;
+`test_sort`/`cmpint` stay internal-linkage. Because of this, c2rust's
+raw output already carries plain Rust-mangled symbol names for both
+functions (no `#[no_mangle]`, no `#[export]`/`::macros::export`) — this
+is *correct* here, not a bug to fix, since nothing outside the TU ever
+resolves them by name. Confirmed via `dev.py boot`'s KUnit summary line
+`ok 16 lib_sort` (with `ok 1 test_sort` inside it) both before and after
+this file's Rust wiring — same suite/case name, same position in the
+KTAP tree, sitting immediately after `list_sort` (suite 15) and before
+`rust_8250_mem_serial_io` (suite 17) in every run.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, `default n`), independent of every other worktree's copy.
+`lib/tests/Makefile`: wrapped the existing
+`obj-$(CONFIG_TEST_SORT) += test_sort.o` line in an `ifdef
+CONFIG_RUST_C2RUST_BOOT_TEST` / `else` swap for `test_sort_rs.o` —
+`CONFIG_TEST_SORT` itself stays the real gate (already `y`), the new
+symbol only selects which object satisfies it, same pattern as every
+prior file's Makefile edit, adapted for a `tristate`-gated `obj-$(...)`
+line rather than a bare `obj-y`. Raw transpile copied to
+`lib/tests/test_sort_rs.rs` verbatim as the starting point.
+
+`python3 scripts/dev.py check-register-statics` run first per rule
+0031: `lib_tests_test_sort.c` in the report's Dead section (274 total,
+11 live), corroborated by grep — 0 `get_current()` calls anywhere in
+the TU, the two fabricated statics (`riscv_current_is_tp`,
+`current_stack_pointer`) present but definitionally unreachable.
+Deleted both outright.
+
+Cleanest structural shape of the series alongside `bust_spinlocks.c`/
+`debug_locks.c`: no `#![feature(...)]` line at all, `unsafe {}` already
+wrapping every function body, no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick (this file's real
+`#[used] #[link_section = ".kunit_test_suites"]` registration array is
+the genuine mechanism, not the dead constructor-trick c2rust emits for
+`EXPORT_SYMBOL`'d functions — nothing to strip here), no `#[export]`,
+no `::libc::` calls, no RISC-V inline-asm. One gap already known: 7
+dead `BitfieldStruct`-derived structs (`task_struct`, `mmap_action`,
+`kobject`, `kernfs_open_file`, `percpu_ref_data`, `signal_struct`,
+`sched_dl_entity`) pulled in transitively via `task_struct`'s header
+chain — grep-confirmed zero references anywhere in the two live
+function bodies (`test_sort`, `cmpint`), and the two by-value embeddings
+(`sched_dl_entity` inside `task_struct`; `mmap_action` inside
+`vm_area_desc`, itself pointer-only) both trace to already-dead
+containers, so the whole 7-struct subgraph collapses cleanly (same
+"whole chain dead, no per-container load-bearing check needed" shape
+`bust_spinlocks.c` hit). All 7 converted to the standard zero-field
+`opaque_marker!` idiom in one macro invocation.
+
+### New gap class: literal C signed-overflow arithmetic panics under Rust's default overflow checks
+
+The `.o` built clean and the full kernel linked, but the first boot
+(`combined-c2rust-boot-16`, pre-fix) stopped dead after suite 15
+(`list_sort`) — `lib_sort` never completed, no `INIT REACHED`, only
+15/17 suites in the KTAP summary. Raw log:
+`rust_kernel: panicked at lib/tests/test_sort_rs.rs:3759:17: attempt to
+multiply with overflow`, followed by a real riscv `Kernel BUG` trap and
+`Kernel panic - not syncing: Fatal exception in interrupt` — this is a
+genuine runtime crash, not a benign warning; the whole boot dies at
+exactly the point `test_sort` itself runs.
+
+Root cause: the C source's test-data generator,
+`r = (r * 725861) % 6599;` (run ~2000 times total across the function's
+two loops), relies on `int` multiplication overflowing and wrapping —
+`r` ranges 0-6598, so `r * 725861` exceeds `INT_MAX` on the very second
+iteration (confirmed: `6598 * 725861 ≈ 4.79e9`, more than double
+`i32::MAX`). This is implementation-defined/UB-on-paper C, but every
+real compiler (including this kernel's) wraps silently in two's
+complement, and the test only needs the wrapped value's statistical
+scatter to build non-trivial sort input — the overflow is load-bearing,
+not accidental. c2rust translated the multiply literally as Rust `*`,
+which is checked-by-default and panics on overflow in a debug-flagged
+build (this kernel's Rust build carries overflow checks on). Fixed by
+replacing both occurrences of `r * 725861 as ::core::ffi::c_int` with
+`r.wrapping_mul(725861 as ::core::ffi::c_int)` — semantically identical
+to C's actual (wrapping) runtime behavior, and avoids `#![feature(...)]`
+or build-flag changes entirely. Scanned the rest of the TU's two live
+function bodies for other unguarded arithmetic that could plausibly
+overflow (index arithmetic, `TEST_LEN`-bounded loop counters,
+`cmpint`'s `a - b` over the same 0-6598 range) — none do; this was the
+only site. First file in the series where a KUnit suite's own **test
+logic**, not just linkage/build plumbing, needed a semantic fix — every
+prior gap class was structural (features, unsafe-wrapping, dead
+structs, symbol linkage); this one is the first correctness bug in
+translated *runtime arithmetic behavior*, worth tracking as its own
+class for future c2rust-translated files with C-idiom pseudo-random or
+hash-like generators that lean on overflow wraparound.
+
+### Outcome: clean boot + matching KUnit pass count, fifteenth file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/tests/test_sort_rs.o` — clean, 0 errors
+  (1994 warnings, all missing-doc lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` produced. `lib/tests/built-in.a` confirmed via
+  `llvm-ar t` to contain `test_sort_rs.o`, not `test_sort.o`.
+- `llvm-nm`: `_RNvCs32tGb0XMFDa_12test_sort_rs9test_sort` (Rust-mangled,
+  correct per the internal-linkage analysis above) and its sibling
+  `cmpint`/`sort_test_suite`/`sort_test_cases` symbols all present in
+  both `lib/tests/test_sort_rs.o` and `vmlinux`; `riscv_current_is_tp`/
+  `current_stack_pointer` absent from both objects entirely (confirmed
+  via `llvm-nm` grep, empty result both places).
+- `dev.py boot --run-id combined-c2rust-boot-16` (post-fix run): boots
+  clean, **17/17 KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 real
+  `not ok` lines), `INIT REACHED (initramfs userspace boot verified)`,
+  no panic/oops/BUG/WARN in the log. Archived at
+  `docs/status/boot-logs/20260719T145820+1000-combined-c2rust-boot-16.log`.
+  Boot-history rows committed/pushed automatically by `boot_qemu.py`
+  for both the failing pre-fix run (`f21f168`, 15 ok/0 not ok, no INIT
+  REACHED) and the passing post-fix run (`414c0de`, 17 ok/0 not ok,
+  INIT REACHED) — kept as-is per this project's rule against
+  hand-editing generated history.
+- **Correctness signal specific to this file**: `lib_sort`'s KTAP output
+  is identical before/after the swap — `# Subtest: lib_sort` / `1..1` /
+  `ok 1 test_sort` / `ok 16 lib_sort`, same suite name, same case name,
+  same position, same pass count as the pre-existing plain-C build.
+  This is a stronger signal than the `nm`-only check every non-test
+  file in this series has relied on: the Rust translation was actually
+  *executed* by the KUnit runner and produced the same pass/fail
+  verdict as the reference C implementation, not just linked and never
+  exercised.
+
+Fifteenth file to clear the bar, and the first with a genuinely
+different linkage shape (internal-linkage KUnit suite registration via
+a linker-collected section array, not `EXPORT_SYMBOL`/`#[no_mangle]`)
+and the first to surface a real runtime-behavior bug (integer-overflow
+panic) rather than a purely structural/build-time one. Confirms the
+established gap classes (rule 0031's dead branch, `BitfieldStruct`
+opaquing) still apply unchanged to KUnit test files, but that test
+files pull in a new risk category plain utility files don't: C idioms
+that intentionally rely on overflow wraparound for pseudo-random test
+data generation, which c2rust's literal-operator translation turns into
+a hard panic under Rust's default overflow checks.
