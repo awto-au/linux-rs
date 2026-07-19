@@ -969,3 +969,171 @@ bare CAS and `lwq.c`'s `xchg`), and for the first time on all 4 width
 arms in a single match rather than just the sub-word ones — strengthens
 issue #29's scope to "any Zacas/Zabha-gated `amo*`/`amocas*`
 instruction c2rust emits a runtime-guarded fast path for, any width."
+
+## Seventh candidate: `lib/klist.c`
+
+Worktree `combined-c2rust-boot-7`, branch `agent-combined-c2rust-boot-7`,
+based on `linux-rs/phase2-gcd`. Target: all 13 `EXPORT_SYMBOL_GPL`
+functions (`klist_init`, `klist_add_head`, `klist_add_tail`,
+`klist_add_behind`, `klist_add_before`, `klist_del`, `klist_remove`,
+`klist_node_attached`, `klist_iter_init_node`, `klist_iter_init`,
+`klist_iter_exit`, `klist_prev`, `klist_next`), 419 lines of C. c2rust
+binary at `6065eaf19` (post the `extern_types`/`asm`/`raw_ref_op`/
+`strict_provenance`/unsafe-wrapping/`.init_array` fix series). Baseline
+transpile at `tmp/c2rust-baseline/lib_klist.c/output/src/klist.rs`
+(2561 lines) used as-is, no re-transpile needed.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `klist.o` pulled out of the bundled
+`lib-y` line, swapped for `klist_rs.o` under the config.
+
+Of the 3 gap classes fixed upstream in the c2rust fix series: confirmed
+absent — no `extern_types`/`asm` in the feature line (only a leftover
+`#![feature(label_break_value)]`, same leftover-feature-line class
+`timerqueue.c`/`objpool.c` hit, stripped the same way), `unsafe {}`
+already wrapping every function body, no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick anywhere in the output.
+
+Fixes from the 2 classes the fix series doesn't cover:
+- `#[export]` -> `#[no_mangle]` on all 13 functions (all 13 source
+  sites are `EXPORT_SYMBOL_GPL`, no mixed-licensing judgement call),
+  `use ::macros::export;` import dropped.
+- `c2rust_bitfields::BitfieldStruct` derive on `task_struct` and
+  `sched_dl_entity`: `sched_dl_entity` is dead-by-value (grep-confirmed,
+  only referenced via the `dl_server_pick_f` function-pointer type,
+  never instantiated) and opaqued via the standard `opaque_marker!`
+  idiom. `task_struct` is **not** dead here — `klist_remove`'s wait
+  loop writes `(*get_current()).__state` directly (the C
+  `__set_current_state()`/`set_current_state()` macro expansion),
+  the only field of this struct genuinely accessed anywhere in the TU.
+  Restored the full field layout instead of opaquing, and instead
+  surgically stripped only the derive plus the two `#[bitfield(...)]`-
+  packed field groups (grep-confirmed neither packed group is read or
+  written anywhere in the TU), replacing them with equivalent-size
+  plain byte arrays so every other field keeps its original offset.
+  First file in this series where the struct carrying the derive is
+  genuinely partially load-bearing rather than a clean opaque-or-don't
+  binary choice.
+
+Issue #29 (KBUILD_RUSTFLAGS missing riscv-march-y's Zacas/Zabha) hit
+again, a fourth confirmation after `rcuref.c` (`amocas`), `lwq.c`
+(`amoswap`), `objpool.c` (`cmpxchg`, all 4 widths): this file's
+`refcount_dec_and_test` -> `try_cmpxchg` -> `cmpxchg` chain (used by
+`kref_put`/`klist_release`) hit both issue #29 findings:
+- `[reg]` bracket addressing in 14 occurrences across `amoadd.w` and
+  `amocas.{b,h,w,d}` plus their LR/SC fallback templates. Fixed:
+  `[{N}]`/`[{N:}]` -> `0({N})`/`0({N:})` throughout.
+- Zacas/Zabha ISA-string gap: all 4 `amocas.{b,h,w,d}` fast-path arms
+  rejected by LLVM regardless of the `riscv_has_extension_unlikely()`
+  runtime guard. Fixed: dropped all 4 `if <guard> { amocas asm } else
+  { <LR/SC fallback> }` wrappers, keeping the LR/SC fallback
+  unconditional in all 4 arms, same fix as `objpool.c`.
+
+### New gap class: `LIST_POISON1`/`LIST_POISON2` fail Rust const-eval
+
+`lib/klist_rs.o` initially failed with `E0080` ("in-bounds pointer
+arithmetic failed ... dangling pointer, it has no provenance") on both
+`LIST_POISON1`/`LIST_POISON2`, c2rust's direct translation of
+`include/linux/poison.h`'s `((void *) 0x100 + POISON_POINTER_DELTA)`
+idiom as a Rust `const` item using `.offset()` on a pointer fabricated
+from a bare integer cast. C allows this trivially; Rust's const
+evaluator rejects pointer arithmetic on a no-provenance pointer even
+though both addresses are fixed non-null sentinels the kernel never
+dereferences (`list_del()` only ever compares against them). Not seen
+in any prior file in this series — first file whose C source actually
+uses `LIST_POISON1`/`LIST_POISON2` (`list_del()`, called by
+`klist_release`/`klist_del`, both exported). Fixed by rewriting both as
+plain `u64` integer arithmetic + `as` cast (`0x100u64.wrapping_add(
+POISON_POINTER_DELTA) as *mut c_void`), bit-identical to the C value,
+no pointer-provenance question involved either way.
+
+### New gap class: parameter name shadows a same-named tuple struct
+
+`E0530` ("function parameters cannot shadow tuple structs") on the
+static helper `knode_set_klist(struct klist_node *knode, struct klist
+*klist)`: c2rust translated the C parameter name `klist` literally (C
+keeps the `struct klist` type tag and the `klist` identifier in
+separate namespaces), but c2rust's own generated Rust type for `struct
+klist` is also named `klist` (a tuple struct, `pub struct
+klist(pub C2Rust_klist_Inner)`), and Rust has one flat namespace for
+both — the parameter shadows the type. Fixed by renaming the parameter
+only (`klist` -> `klist_ptr`); the type and both call sites are
+unaffected (both are positional). Not a fix a rulesdb-side
+`#[no_mangle]`/`opaque_marker!`-style mechanical pass would catch —
+this is a naming collision, not a feature/unsafe/dead-code gap, so it's
+worth calling out as its own class going forward, distinct from the
+other 5 known ones.
+
+### Real boot-blocking bug: fabricated register-variable global is genuinely live here, not dead
+
+Build succeeded clean, but the kernel hung after the OpenSBI banner —
+no `Linux version` line, no KUnit output, no init. `-d guest_errors,
+unimp,int` tracing pinpointed a `load_page_fault` at address `0x8`
+with `epc` inside `klist_add_tail`, tracing (via `llvm-nm
+--numeric-sort` + disassembly of the faulting `auipc`/`ld`/`lw`
+sequence) to a dereference of the fabricated
+`riscv_current_is_tp` static at offset 8 (`task_struct.__state`,
+immediately after `thread_info`).
+
+Root cause: unlike `lzo1x_decompress_safe.c`/`objpool.c` (both fully
+dead, grep-confirmed, safe to delete), this file's `get_current()` —
+which just returns the fabricated `riscv_current_is_tp` static
+verbatim — **is** genuinely called, via `spin_unlock()`'s inlined
+preemption-check path (`__preempt_count_dec_and_test` ->
+`tif_need_resched` -> `get_current()`), which is reached on every
+`klist_add_head`/`klist_add_tail` call — real device-registration
+traffic (`device_add()` in `drivers/base/core.c`) during boot. Since
+nothing ever assigns the fabricated static, `get_current()` always
+returned a null `*mut task_struct`, and the preemption check
+dereferenced it. The existing "confirmed dead via grep, delete" fix
+from prior files is unsound in general — it happened to be correct for
+`lzo1x_decompress_safe.c`/`objpool.c` only because grep confirmed those
+specific call sites were unreachable, not because the fabricated-static
+pattern is inherently safe to delete.
+
+Fixed by rewriting `get_current()` to read the real `tp` register
+directly via `asm!("mv {0}, tp", out(reg) tp, ...)`, mirroring what
+`arch/riscv/include/asm/current.h`'s `register struct task_struct
+*riscv_current_is_tp __asm__("tp")` extension actually compiles to,
+instead of reading a fake `.bss` global back. `current_stack_pointer`
+(the `sp`-bound half of the same register-variable pair) remained
+grep-confirmed dead in this TU and was deleted outright, not given the
+same treatment. General lesson for future files: **before deleting a
+fabricated register-variable static, grep for calls to `get_current()`
+specifically** (not just direct references to the static's name), since
+the static is only ever accessed indirectly through that accessor —
+a textual grep for the static's own identifier alone is not sufficient
+to prove it's dead.
+
+### Outcome: clean boot after the `get_current()` fix
+
+- `make ARCH=riscv LLVM=1 lib/klist_rs.o` — clean, 0 errors (606
+  warnings, all missing-doc/unused-var lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` and `Image.xz` produced. `lib/klist.o`
+  correctly never built.
+- `llvm-nm`: all 13 symbols `T` in both `lib/klist_rs.o` and `vmlinux`
+  (`ffffffff801a25aa T klist_add_before`, `ffffffff801a2658 T
+  klist_add_behind`, `ffffffff801a2706 T klist_add_head`,
+  `ffffffff801a27ae T klist_add_tail`, `ffffffff801a2856 T klist_del`,
+  `ffffffff801a286e T klist_init`, `ffffffff801a2886 T
+  klist_iter_exit`, `ffffffff801a28ae T klist_iter_init`,
+  `ffffffff801a28c4 T klist_iter_init_node`, `ffffffff801a2954 T
+  klist_next`, `ffffffff801a2a70 T klist_node_attached`,
+  `ffffffff801a2a86 T klist_prev`, `ffffffff801a2ba2 T klist_remove`).
+- `scripts/boot_qemu.py --run-id combined-c2rust-8`: boots clean,
+  17/17 KUnit suites pass (`fail:0` every suite, 0 `not ok`),
+  `initramfs init reached, PID 1 alive`, no panic/oops/BUG/WARN in the
+  log. Archived at
+  `docs/status/boot-logs/20260719T124934+1000-combined-c2rust-8.log`.
+  No dedicated klist KUnit suite in this config.
+
+Seventh file to clear the bar, and the first to hit a genuine
+boot-time (not just build-time) bug from the transpiler's output —
+every prior file's register-variable statics were dead code; this one
+proves the "grep for the identifier, delete if unused" heuristic is
+not sufficient in general and the accessor function must be checked
+too. Also the first file needing a real `LIST_POISON`-style const-eval
+fix and the first hitting a parameter/type namespace collision. Issue
+#29 (bracket addressing + Zacas/Zabha) recurred a fourth time,
+unchanged in shape from `objpool.c`.
