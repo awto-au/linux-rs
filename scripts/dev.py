@@ -6,8 +6,10 @@ Standardised, terse, agent-friendly. Every subcommand logs to
 tmp/<sub>.log and prints only the outcome lines that matter.
 
   dev.py build                  # make riscv kernel (LLVM=1 -j32)
-  dev.py boot                   # boot QEMU -> tmp/qemu-boot.log, KUnit summary
-  dev.py check                  # build + boot + fail on any 'not ok'
+  dev.py boot [--run-id NAME]   # boot QEMU -> tmp/qemu-boot[-NAME].log, KUnit summary
+                                 # (--run-id isolates the log; required for concurrent
+                                 # boots against different worktrees, see linux-rs#28)
+  dev.py check [--run-id NAME]  # build + boot + fail on any 'not ok'
   dev.py report                 # regenerate docs/STATUS.md + status.png only
   dev.py config -e OPT [-e ..]  # scripts/config -e + olddefconfig
   dev.py integrate --obj lib/foo.o --header linux/foo.h --kunit CONFIG_X --suite s
@@ -108,16 +110,29 @@ def run_post_boot_checks():
         sh(["python3", str(S / script)], quiet_ok=False)
 
 
-def boot():
+def boot(run_id=None):
     # Pass the full relative path (e.g. "linux-riscv-worktrees/8250-tier-b"),
     # not TREE.name — TREE.name silently strips any subdirectory prefix,
     # which broke boot_qemu.py's `REPO / args.tree` join for any tree that
     # isn't a direct child of REPO (i.e. every linux_riscv_worktree.py
     # worktree, which lives under linux-riscv-worktrees/<name>/). Found
     # while boot-testing a Tier B worktree per that script's own guidance.
-    sh(["python3", str(S / "boot_qemu.py"), "--tree", TREE_REL],
-       log="dev-boot.log", timeout=600)
-    txt = (REPO / "tmp/qemu-boot.log").read_text(errors="replace")
+    #
+    # --run-id (awto-au/linux-rs#28 batch): boot_qemu.py has supported
+    # --run-id since before this project ran concurrent worktree agents,
+    # but dev.py boot never passed it through and always read back the
+    # single shared tmp/qemu-boot.log — under N concurrent `dev.py boot`
+    # calls (one per worktree), each overwrites the others' log mid-read,
+    # a real source of lost debugging time (see combined-c2rust-boot-10's
+    # agent report). Pass --run-id through end-to-end so each caller gets
+    # its own tmp/qemu-boot-<run_id>.log, isolated for the whole call.
+    cmd = ["python3", str(S / "boot_qemu.py"), "--tree", TREE_REL]
+    log_name = "qemu-boot.log"
+    if run_id:
+        cmd += ["--run-id", run_id]
+        log_name = f"qemu-boot-{run_id}.log"
+    sh(cmd, log="dev-boot.log", timeout=600)
+    txt = (REPO / "tmp" / log_name).read_text(errors="replace")
     # Primary gate: unchanged from before initramfs support existed —
     # any 'not ok' KUnit line is a hard fail, no KUnit output at all is a
     # hard fail. Do not weaken this; it's the project's main correctness
@@ -158,15 +173,26 @@ def main() -> int:
         return 1
     cmd, rest = sys.argv[1], sys.argv[2:]
 
+    def pop_run_id(argv):
+        # Minimal --run-id NAME extraction, not full argparse — dev.py's
+        # existing subcommands (config -e, etc) already hand-parse `rest`
+        # rather than pulling in argparse project-wide.
+        if "--run-id" in argv:
+            i = argv.index("--run-id")
+            return argv[i + 1], argv[:i] + argv[i + 2:]
+        return None, argv
+
     if cmd == "build":
         kmake()
         print("BUILD OK")
     elif cmd == "boot":
-        boot()
+        run_id, rest = pop_run_id(rest)
+        boot(run_id)
     elif cmd == "check":
+        run_id, rest = pop_run_id(rest)
         run_pre_build_checks()
         kmake()
-        boot()
+        boot(run_id)
         run_post_boot_checks()
     elif cmd == "report":
         sh(["python3", str(S / "report.py")], quiet_ok=False)
