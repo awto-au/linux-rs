@@ -50,11 +50,21 @@ in one blocking subprocess.run() specifically so each line can be
 timestamped as it actually arrives, not after the whole process exits.
 
 Usage: boot_qemu.py [--tree linux-riscv] [--append "extra args"] [--run-id NAME]
+                     [--qemu-extra "raw qemu args"]
+
+--qemu-extra (awto-au/linux-rs#34, block-layer bring-up): the QEMU
+invocation itself was previously fixed — no way to attach a -drive/
+-device (e.g. virtio-blk-device) without editing this file. Additive
+only: shlex-split and appended to the end of the qemu-system-riscv64
+argv, so a caller that never passes it (every existing caller: dev.py
+boot()/check(), boot-history rows to date) gets byte-identical argv to
+before this flag existed.
 """
 import argparse
 import csv
 import datetime
 import fcntl
+import shlex
 import shutil
 import subprocess
 import sys
@@ -162,6 +172,12 @@ def main() -> int:
                      help="isolate this run's log to tmp/qemu-boot-<id>.log instead of "
                           "the shared tmp/qemu-boot.log, so multiple boots can run "
                           "concurrently without clobbering each other's output")
+    ap.add_argument("--qemu-extra", default="",
+                     help="raw extra args appended verbatim to the qemu-system-riscv64 "
+                          "invocation (shlex-split), e.g. "
+                          "'-drive file=test.img,format=raw,if=none,id=blk0 "
+                          "-device virtio-blk-device,drive=blk0'. Additive only — "
+                          "omitting it (the default) leaves the argv unchanged.")
     args = ap.parse_args()
 
     log_name = f"qemu-boot-{args.run_id}.log" if args.run_id else "qemu-boot.log"
@@ -187,6 +203,8 @@ def main() -> int:
         "-initrd", str(initrd),
         "-append", cmdline.strip(),
     ]
+    if args.qemu_extra:
+        cmd += shlex.split(args.qemu_extra)
     print(f"booting {image}\ninitrd: {initrd}\nlog: {LOG}")
     # Popen + line-by-line streaming (not a single blocking subprocess.run)
     # so each line can be stamped with real elapsed time as it arrives —
