@@ -18,6 +18,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py c2rust-baseline [--limit N]     # full-corpus c2rust triage -> patterns.db directly
   dev.py c2rust-regress BEFORE AFTER [--file-issue]  # per-decl regression diff between 2 baselined revs
   dev.py c2rust-clippy [--limit N]       # clippy-check c2rust clean outputs -> patterns.db
+  dev.py safety-scan [--population P] [--limit N]  # per-function unsafe/safe scan -> patterns.db
   dev.py db                     # rebuild rulesdb/patterns.db (ephemeral, rebuild-not-migrate)
   dev.py q <subcommand> ...     # quick SQL checks against patterns.db (see query_db.py --help)
   dev.py patch N                # format-patch HEAD -> patches/ start-number N
@@ -212,6 +213,13 @@ def main() -> int:
         # of rustc. See check_c2rust_output_clippy.py's module doc for
         # the SVH-mismatch pitfall this avoids.
         sh(["python3", str(S / "check_c2rust_output_clippy.py"), *rest], quiet_ok=False)
+    elif cmd == "safety-scan":
+        # Per-function unsafe/raw-pointer mechanical scan -> patterns.db's
+        # function_safety_status (rulesdb/schema.sql) — the state-1/2 half
+        # of the 5-state unsafe-baseline->safe-verified pipeline; states
+        # 3-5 are set by a future real safe-lift conversion tool, not
+        # this scanner. See scan_function_safety.py's module doc.
+        sh(["python3", str(S / "scan_function_safety.py"), *rest], quiet_ok=False)
     elif cmd == "db":
         sh(["python3", str(S / "build_db.py")], quiet_ok=False)
         sh(["python3", str(S / "import_cscope.py")], quiet_ok=False)

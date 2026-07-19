@@ -677,3 +677,195 @@ SELECT c_file, population,
        MAX(checked_at) AS last_checked_at
 FROM file_oracle_status
 GROUP BY c_file, population;
+
+-- ---- per-function safety-tier tracking (unsafe-baseline -> safe-verified) ----
+--
+-- Peer to file_oracle_status, not nested under it: file_oracle_status
+-- answers "does this file's translation match the C oracle" (tier 1-5,
+-- BEHAVIORAL correctness). This table answers a DIFFERENT question per
+-- function: "how much of this function's C-parity Rust is expressible
+-- without unsafe/raw-pointer/FFI escape hatches". A function can be
+-- oracle tier-5 verified (behaviorally perfect) while still 100%
+-- unsafe-baseline -- these are orthogonal axes, exactly as PLAN.md's
+-- three-class unsafe policy and file_oracle_status's own tier column
+-- are orthogonal to each other today.
+--
+-- Independent of translation_targets/target_id (docs/multi-arch-safety-
+-- tier-tracking-plan-2026-07-19.md's arch/endian axis): the safe-lift
+-- rules (0023/0024/0025) rewrite lock/refcount/ownership patterns that do
+-- not vary by -march/-mabi/endianness, so this table is NOT keyed by
+-- target_id. If a future safe-lift rule is found to be arch-conditional,
+-- add target_id then -- do not speculatively add it now (same discipline
+-- the multi-arch plan itself applies to translation_targets rows).
+--
+-- Grain is the FUNCTION, keyed (c_file, c_func_name, population) --
+-- finer than file_oracle_status's (c_file, population) because a single
+-- TU routinely mixes functions that are trivially safe (pure arithmetic)
+-- with functions that must stay unsafe forever (MMIO/FFI), and a
+-- file-level rollup would hide that mix. c_func_name is the C source
+-- name (stable across a safe-lift rewrite of the SAME function -- the
+-- lift changes the function's Rust body, not its identity); population
+-- distinguishes landed_tu vs c2rust_corpus exactly as file_oracle_status
+-- already does, because c2rust_corpus has no safe-lift output at all
+-- today (c2rust only emits unsafe-baseline, per the multi-arch plan
+-- §5) -- rows for that population will observationally never progress
+-- past 'unsafe-baseline' until/unless that changes.
+CREATE TABLE function_safety_status (
+    id INTEGER PRIMARY KEY,
+    c_file TEXT NOT NULL,          -- relative to linux-riscv/, e.g. "lib/bcd.c" (matches file_oracle_status.c_file)
+    c_func_name TEXT NOT NULL,     -- the C declaration's name, e.g. "bcd2bin" (stable identity across safe-lift rewrites)
+    population TEXT NOT NULL,      -- 'landed_tu' | 'c2rust_corpus', same vocabulary as file_oracle_status.population
+    rs_func_name TEXT,             -- the emitted Rust fn name, when it differs from c_func_name (rare; NULL = same name)
+    rs_file TEXT,                  -- path to the Rust source actually scanned for this row's state
+
+    -- Mechanical pipeline state. Linear in the common case (each state
+    -- supersedes the last for the SAME function) but state 2 is a
+    -- terminal finding for functions that bypass 3/4 entirely -- a
+    -- function mechanically found already-safe at state 1->2 has nothing
+    -- left to "attempt" or "verify" beyond re-scanning after any future
+    -- edit; it does not pass through 3/4 to reach a meaningful 5.
+    --   1 unsafe-baseline               -- default for anything translated at all
+    --   2 mechanically-checked-already-safe -- scanned: zero `unsafe` tokens, zero raw-pointer types in the fn body
+    --   3 attempted-safe-conversion     -- a real rewrite onto kernel-crate safe wrapper types was tried (0023/0024/0025-style)
+    --   4 safe-verified                 -- the attempted conversion PASSED a real file_oracle_status tier (see oracle_tier below)
+    --   5 safe-with-exceptions          -- distinct terminal state: verified safe only under this project's
+    --                                      already-accepted FFI/ABI-boundary exceptions (see accepted_exception_rule_id) --
+    --                                      NOT a further step past safe-verified; a function is EITHER strict-safe (state 4,
+    --                                      accepted_exception_rule_id IS NULL) OR safe-with-exceptions (state 5, NOT NULL),
+    --                                      never both, because the exception is what stops it from ever reaching strict state 4.
+    state TEXT NOT NULL CHECK (state IN (
+        'unsafe-baseline',
+        'mechanically-checked-already-safe',
+        'attempted-safe-conversion',
+        'safe-verified',
+        'safe-with-exceptions'
+    )),
+
+    -- Populated only for state IN ('mechanically-checked-already-safe',
+    -- 'attempted-safe-conversion', 'safe-verified', 'safe-with-exceptions')
+    -- -- the raw counts backing the state-2 mechanical scan, kept even
+    -- after a function progresses past state 2 so "why did the scanner
+    -- call this safe" stays auditable without re-scanning history.
+    unsafe_token_count INTEGER,        -- literal `unsafe` occurrences in the fn body (0 required for state >= 2)
+    raw_pointer_count INTEGER,         -- *const T / *mut T occurrences in the fn signature+body (0 required for state >= 2)
+
+    -- Which safe-lift rule(s) this conversion attempt applied, e.g.
+    -- "safe-lift-lock-guard" -- NULL until state >= 3. Free text, not a
+    -- strict FK, because a single conversion commonly applies more than
+    -- one rule (lock-guard AND refcount in the same function); store the
+    -- primary/first-applied rule id here and any others in `detail`.
+    conversion_rule_id TEXT REFERENCES rules(id),
+
+    -- The file_oracle_status tier this function's SAFE conversion passed
+    -- (reusing file_oracle_status's existing 1-5 tier vocabulary
+    -- verbatim, per instruction -- no parallel verification concept).
+    -- This is NOT a join key back to a specific file_oracle_status row
+    -- (that table is file-grained, this is function-grained, and a
+    -- function's safe conversion may pass a tier before or after its
+    -- file's unsafe-baseline does) -- it is the tier NUMBER the safe
+    -- conversion was independently checked against, recorded here
+    -- because file_oracle_status has no function-level column to hold
+    -- it. Populated only for state IN ('safe-verified', 'safe-with-exceptions').
+    oracle_tier INTEGER CHECK (oracle_tier IS NULL OR oracle_tier BETWEEN 1 AND 5),
+
+    -- The "safe" here is qualified by an already-accepted project
+    -- exception (rulesdb/rules/0018-c-abi-allocator-contract.toml is the
+    -- canonical example: a kmalloc/kfree pair that crosses the C ABI
+    -- MUST stay a raw-pointer FFI shim forever -- 0018 forbids lifting it
+    -- to kernel::alloc types precisely because that would be WRONG, not
+    -- merely unattempted). NULL means strict-safe: no accepted exception
+    -- was invoked, the function is safe on its own terms. NOT NULL means
+    -- state must be 'safe-with-exceptions', citing the specific rule
+    -- (0018-style intrinsically-unsafe-boundary rule, or a future rule of
+    -- the same shape) that licenses the remaining unsafe/FFI surface.
+    accepted_exception_rule_id TEXT REFERENCES rules(id),
+
+    loc INTEGER NOT NULL,          -- Rust fn body line count at scan time -- the weight for LOC% rollups (see views below);
+                                    -- a 5-line and a 500-line safe function must NOT count equally in a coverage percentage
+    detail TEXT,                   -- short human-readable note (e.g. "lifted to SpinLock<T>, second refcount left unsafe per 0018")
+    evidence_ref TEXT,             -- pointer to the real artifact: commit hash, GitHub issue/comment URL (same vocabulary as file_oracle_status.evidence_ref)
+    checked_at TEXT NOT NULL,      -- ISO 8601, when this row's state was last (re)computed by the scanner
+    UNIQUE (c_file, c_func_name, population)
+);
+CREATE INDEX idx_func_safety_cfile ON function_safety_status(c_file);
+CREATE INDEX idx_func_safety_state ON function_safety_status(state);
+CREATE INDEX idx_func_safety_exception ON function_safety_status(accepted_exception_rule_id);
+
+-- Per-file rollup: counts AND loc-weighted state, so "how safe is this
+-- file" is one row, not a manual GROUP BY each time. loc_* columns sum
+-- function-body LOC per state -- the basis for the LOC% figures the
+-- coverage report needs (a file that is 90% functions-by-count safe but
+-- those are all 3-line helpers next to one 400-line unsafe-baseline
+-- function is NOT 90% safe by LOC, and this view is what exposes that).
+CREATE VIEW function_safety_file_summary AS
+SELECT
+    c_file, population,
+    COUNT(*)                                                          AS fn_count,
+    SUM(loc)                                                          AS total_loc,
+    SUM(CASE WHEN state = 'unsafe-baseline' THEN 1 ELSE 0 END)        AS fn_unsafe_baseline,
+    SUM(CASE WHEN state = 'unsafe-baseline' THEN loc ELSE 0 END)      AS loc_unsafe_baseline,
+    SUM(CASE WHEN state = 'mechanically-checked-already-safe' THEN 1 ELSE 0 END) AS fn_already_safe,
+    SUM(CASE WHEN state = 'mechanically-checked-already-safe' THEN loc ELSE 0 END) AS loc_already_safe,
+    SUM(CASE WHEN state = 'attempted-safe-conversion' THEN 1 ELSE 0 END) AS fn_attempted,
+    SUM(CASE WHEN state = 'attempted-safe-conversion' THEN loc ELSE 0 END) AS loc_attempted,
+    SUM(CASE WHEN state = 'safe-verified' THEN 1 ELSE 0 END)          AS fn_safe_verified,
+    SUM(CASE WHEN state = 'safe-verified' THEN loc ELSE 0 END)        AS loc_safe_verified,
+    SUM(CASE WHEN state = 'safe-with-exceptions' THEN 1 ELSE 0 END)   AS fn_safe_with_exceptions,
+    SUM(CASE WHEN state = 'safe-with-exceptions' THEN loc ELSE 0 END) AS loc_safe_with_exceptions,
+    -- strict-safe LOC% = (already-safe + safe-verified) / total, EXCLUDING safe-with-exceptions
+    ROUND(100.0 * (
+        SUM(CASE WHEN state = 'mechanically-checked-already-safe' THEN loc ELSE 0 END) +
+        SUM(CASE WHEN state = 'safe-verified' THEN loc ELSE 0 END)
+    ) / NULLIF(SUM(loc), 0), 1)                                        AS strict_safe_loc_pct,
+    -- safe-with-exceptions-allowed LOC% = strict-safe PLUS safe-with-exceptions
+    ROUND(100.0 * (
+        SUM(CASE WHEN state = 'mechanically-checked-already-safe' THEN loc ELSE 0 END) +
+        SUM(CASE WHEN state = 'safe-verified' THEN loc ELSE 0 END) +
+        SUM(CASE WHEN state = 'safe-with-exceptions' THEN loc ELSE 0 END)
+    ) / NULLIF(SUM(loc), 0), 1)                                        AS exceptions_allowed_loc_pct,
+    MAX(checked_at)                                                    AS last_checked_at
+FROM function_safety_status
+GROUP BY c_file, population;
+
+-- Per-subsection rollup: "subsection" = top-level directory component of
+-- c_file (lib/, drivers/, fs/, kernel/, arch/riscv/, net/, mm/, ...).
+-- Deliberately NOT a stored column or a parse of kernel Kconfig's
+-- menu/endmenu structure -- see docs/safety-coverage-baseline-design-
+-- 2026-07-19.md for the rejected Kconfig-menu alternative and why the
+-- directory proxy was chosen instead. Derived here via SUBSTR/INSTR so
+-- there is no redundant column to drift out of sync with c_file; arch/*
+-- groups one level deeper (arch/riscv/ as a unit) because arch/ alone
+-- spans every unrelated architecture in the tree.
+CREATE VIEW function_safety_subsection_summary AS
+SELECT
+    CASE WHEN c_file LIKE 'arch/%'
+         THEN substr(c_file, 1, instr(substr(c_file, 6), '/') + 5)
+         ELSE substr(c_file, 1, instr(c_file, '/') - 1)
+    END AS subsection,
+    population,
+    COUNT(*)                                                          AS fn_count,
+    SUM(loc)                                                          AS total_loc,
+    SUM(CASE WHEN state IN ('mechanically-checked-already-safe','safe-verified')
+             THEN loc ELSE 0 END)                                     AS strict_safe_loc,
+    SUM(CASE WHEN state IN ('mechanically-checked-already-safe','safe-verified','safe-with-exceptions')
+             THEN loc ELSE 0 END)                                     AS exceptions_allowed_loc,
+    ROUND(100.0 * SUM(CASE WHEN state IN ('mechanically-checked-already-safe','safe-verified')
+             THEN loc ELSE 0 END) / NULLIF(SUM(loc), 0), 1)           AS strict_safe_loc_pct,
+    ROUND(100.0 * SUM(CASE WHEN state IN ('mechanically-checked-already-safe','safe-verified','safe-with-exceptions')
+             THEN loc ELSE 0 END) / NULLIF(SUM(loc), 0), 1)           AS exceptions_allowed_loc_pct
+FROM function_safety_status
+GROUP BY subsection, population;
+
+-- Whole-corpus rollup: same LOC% formulas with no GROUP BY, for the
+-- single top-of-report headline number.
+CREATE VIEW function_safety_overall_summary AS
+SELECT
+    population,
+    COUNT(*)                                                          AS fn_count,
+    SUM(loc)                                                          AS total_loc,
+    ROUND(100.0 * SUM(CASE WHEN state IN ('mechanically-checked-already-safe','safe-verified')
+             THEN loc ELSE 0 END) / NULLIF(SUM(loc), 0), 1)           AS strict_safe_loc_pct,
+    ROUND(100.0 * SUM(CASE WHEN state IN ('mechanically-checked-already-safe','safe-verified','safe-with-exceptions')
+             THEN loc ELSE 0 END) / NULLIF(SUM(loc), 0), 1)           AS exceptions_allowed_loc_pct
+FROM function_safety_status
+GROUP BY population;
