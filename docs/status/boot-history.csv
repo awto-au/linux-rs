@@ -107,3 +107,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T14:07:31+10:00,combined-c2rust-boot-12,17,0,1,0,docs/status/boot-logs/20260719T140731+1000-combined-c2rust-boot-12.log
 2026-07-19T14:49:58+10:00,virtio-blk-const-fix-verify,17,0,1,0,docs/status/boot-logs/20260719T144958+1000-virtio-blk-const-fix-verify.log
 2026-07-19T14:55:29+10:00,combined-c2rust-boot-15,17,0,1,0,docs/status/boot-logs/20260719T145529+1000-combined-c2rust-boot-15.log
+2026-07-19T14:56:30+10:00,combined-c2rust-boot-16,15,0,0,0,docs/status/boot-logs/20260719T145630+1000-combined-c2rust-boot-16.log
