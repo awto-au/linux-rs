@@ -2788,3 +2788,103 @@ KUnit suites pass, 0 not ok, INIT REACHED. `lib/lz4/lz4_decompress.o`
 never built. Log:
 `docs/status/boot-logs/20260719T202959+1000-combined-boot-lz4_decompress.log`.
 
+## Twenty-first candidate: `lib/decompress_bunzip2.c`
+
+Worktree `combined-c2rust-boot-22`, branch `agent-combined-c2rust-boot-22`,
+based on `linux-rs/phase2-gcd`. 308 statements — largest file attempted
+in the series so far. All 6 functions (`get_bits`, `get_next_block`,
+`read_bunzip`, `nofill`, `start_bunzip`, `bunzip2`) are `__init`-marked
+(`INIT` macro under non-`PREBOOT` build); only `bunzip2` is externally
+called (from `lib/decompress.c`, plain C, by symbol name — no
+`EXPORT_SYMBOL` at all in this file). c2rust binary verified fresh via
+`dev.py c2rust-build` first.
+
+Corpus-capture quirk, not a c2rust bug: raw baseline transpile (via the
+cached `compile_commands.json` entry) failed AST-export with 4x
+`-Werror=incompatible-pointer-types-discards-qualifiers` on the
+`error("literal")` call sites (`bunzip2.h`'s `error` callback takes
+non-const `char *x`, real kernel `-Werror=incompatible-pointer-types`
+does **not** promote the discards-qualifiers sub-diagnostic — confirmed
+by building `lib/decompress_bunzip2.o` clean with the real captured
+kbuild flags). Re-transpiled with `-Wno-incompatible-pointer-types-discards-qualifiers`
+appended to the scratch compile_commands.json only (no source or
+c2rust changes) — clean transpile, and the resulting Rust correctly
+casts the literals to `*mut c_char` matching the (loose) C signature.
+
+`check-register-statics`: 0 live corpus-wide (unchanged), this file
+dead/safe — 0 `get_current()` calls. `-1 as usize`: absent. All 6
+`__init` functions carry `#[link_section = ".init.text"]` correctly in
+the raw c2rust output (issue #40's fix holding, no regression). No
+`#![feature(...)]`, no `.init_array`, no `::libc::`, no `warn_on!`, one
+`asm!("ebreak")` (standard `BUG()` trap). Rule 0009's unsigned-wrapping
+machinery already covers every bit-buffer/CRC-table op in `get_bits`/
+`start_bunzip` (`.wrapping_add`/`.wrapping_sub`/`.wrapping_mul`)
+end-to-end — manually reviewed all signed-`int` arithmetic in
+`get_next_block` (Huffman `limit[]`/`base[]`/`permute[]` construction,
+MTF run-length accumulation) against the format's own bounds
+(`MAX_HUFCODE_BITS`=20, `MAX_SYMBOLS`=258, `MAX_GROUPS`=6): all
+well-bounded, no test_sort.c-style intentional-wraparound idiom present
+here, no wrapping_* hand-fix needed anywhere in this file.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added fresh to this worktree's
+`lib/Kconfig` (not yet present on `phase2-gcd`). `lib/Makefile`'s
+`lib-$(CONFIG_DECOMPRESS_BZIP2) += decompress_bunzip2.o` wrapped in
+`ifdef CONFIG_RUST_C2RUST_BOOT_TEST` / `else` selecting
+`decompress_bunzip2_rs.o` vs `decompress_bunzip2.o` (`lib-y`/`lib.a`
+linkage, not `obj-y`/`built-in.a` — confirmed via `llvm-ar t lib/lib.a`
+containing `decompress_bunzip2_rs.o`, not the plain-C object).
+
+One self-inflicted bug caught before commit, not a c2rust gap: an
+initial `BitfieldStruct`-opaquing pass (same idiom as `fonts.c`/
+`test_sort.c` for the standard `task_struct`/`mmap_action`/
+`signal_struct`/`sched_dl_entity` dead-by-construction quartet —
+grep-confirmed zero references in the 6 live function bodies) had an
+off-by-one in the derive-line detection, deleting each struct's body
+but leaving its `#[derive(Copy, Clone, ::c2rust_bitfields::BitfieldStruct)]`
+attribute line orphaned above the next unrelated item — 2 cases
+produced `E0119` conflicting-Copy/Clone-impl errors (colliding with
+`thread_struct`'s/`rlimit`'s own genuine `#[derive(Copy, Clone)]`), 2
+cases left a bare attribute before a `pub type` alias. Caught by the
+first `rustc` build attempt, fixed by deleting the 4 orphaned lines;
+rebuilt clean on the second attempt.
+
+### Outcome: clean boot, largest file in the series to date
+
+- `make ARCH=riscv LLVM=1 lib/decompress_bunzip2_rs.o` — clean, 0
+  errors (1649 warnings, all missing-doc/FFI-safety, pre-existing
+  pattern).
+- `dev.py build` succeeds, `arch/riscv/boot/Image` produced. `lib/lib.a`
+  contains `decompress_bunzip2_rs.o` (`llvm-ar t` confirmed), not
+  `decompress_bunzip2.o`.
+- `llvm-nm`: `bunzip2` `T` in both the `.o` and `vmlinux`
+  (`ffffffff8021dfc6 T bunzip2`); internal helpers (`get_bits`,
+  `get_next_block`, `read_bunzip`, `start_bunzip`, `nofill`) correctly
+  Rust-mangled `t` (local); `riscv_current_is_tp`/`current_stack_pointer`
+  absent from both entirely.
+- `dev.py boot --run-id combined-c2rust-boot-22`: boots clean, **17/17
+  KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 `not ok`),
+  `INIT REACHED (initramfs userspace boot verified)`, no panic/oops/
+  BUG/WARN in the log. Archived at
+  `docs/status/boot-logs/20260719T203313+1000-combined-c2rust-boot-22.log`.
+  Boot-history row committed/pushed automatically by `dev.py boot`
+  (`1d4c18b`).
+- **Runtime-exercise caveat**: this kernel's initramfs is gzip- not
+  bzip2-compressed (`CONFIG_RD_BZIP2=y` selects `DECOMPRESS_BZIP2` for
+  link-in, but nothing in this build's boot path actually calls
+  `bunzip2()`), and no dedicated KUnit suite exists for bzip2 decode —
+  same "links and boots, not runtime-exercised" caveat as most non-test
+  files in this series. The wraparound-arithmetic review above is by
+  inspection against the format's own bounds, not by an observed
+  execution trace.
+
+Largest file (308 statements) and most `__init` functions (6, all of
+them) of any file in the series so far; confirms #40's `__init` ->
+`#[link_section]` fix holds across a whole-file, not just single-symbol,
+case, and that rule 0009's unsigned-wrapping coverage extends cleanly to
+dense bit-manipulation code without needing any file-specific
+wrapping_* hand-fix. The only genuine friction was the pre-existing
+corpus-capture `-Werror` mismatch (worked around locally, not a source
+or c2rust change) and a self-inflicted script bug in this session's own
+opaquing pass (caught by the normal build-then-fix loop, not a hidden
+runtime issue).
+
