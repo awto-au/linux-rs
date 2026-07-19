@@ -109,7 +109,7 @@
 <body>
 
 <h1>linux-rs — live status dashboard</h1>
-<p class="subtitle">Generated 2026-07-19T20:15:12+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
+<p class="subtitle">Generated 2026-07-19T20:16:57+10:00 by <code>scripts/generate_dashboard.py</code> from live queries against
   <code>rulesdb/patterns.db</code>. See <a href="STATUS.md">docs/STATUS.md</a> for the full
   hand-translation KUnit boot report; both tracks' progress-over-time charts, the two-track work
   queue, and the awtoau/c2rust transpiler-fork issue timeline all live on this one page.</p>
@@ -119,10 +119,10 @@
 <div class="stat-row">
   <div class="stat-tile p0"><div class="n">0</div><div class="label">P0 items open</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">P1 items open</div></div>
-  <div class="stat-tile"><div class="n">18</div><div class="label">work items active (all tracks)</div></div>
+  <div class="stat-tile"><div class="n">14</div><div class="label">work items active (all tracks)</div></div>
   <div class="stat-tile"><div class="n">0</div><div class="label">confirmed boot-path blocking</div></div>
-  <div class="stat-tile"><div class="n">6</div><div class="label">awtoau/c2rust issues open</div></div>
-  <div class="stat-tile"><div class="n">21</div><div class="label">awtoau/c2rust issues closed</div></div>
+  <div class="stat-tile"><div class="n">5</div><div class="label">awtoau/c2rust issues open</div></div>
+  <div class="stat-tile"><div class="n">22</div><div class="label">awtoau/c2rust issues closed</div></div>
   <div class="stat-tile"><div class="n">38</div><div class="label">TUs hand-translated (live from git)</div></div>
   <div class="stat-tile"><div class="n">6</div><div class="label">functions wired into live boot path (1 file)</div></div>
 </div>
@@ -141,7 +141,7 @@
   then files-affected. Click any column header to sort/re-sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="work-items-table">
-  <caption>18 active work items</caption>
+  <caption>14 active work items</caption>
   <thead>
     <tr>
       <th data-sort-key>Priority<span class="arrow"></span></th>
@@ -295,46 +295,6 @@
         <td data-sort-value="unassigned">unassigned</td>
         <td><a href="https://github.com/awtoau/c2rust/issues/20">awtoau/c2rust#20</a></td>
       </tr>
-      <tr>
-        <td data-sort-value="9"><span class="pill pill-none">—</span></td>
-        <td>refcount.h overflow-detection idiom: signed +/- panics instead of gracefully wrapping (fixed in 1f8c61cf2)</td>
-        <td data-sort-value="c2rust">c2rust</td>
-        <td data-sort-value="open">open</td>
-        <td data-sort-value="0">no</td>
-        <td data-sort-value="-1"></td>
-        <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awtoau/c2rust/issues/27">awtoau/c2rust#27</a></td>
-      </tr>
-      <tr>
-        <td data-sort-value="9"><span class="pill pill-none">—</span></td>
-        <td>c2rust boot-screening (klist.c): fabricated register-variable static was genuinely live, not dead — plus 2 new build gaps (LIST_POISON const-eval, param/type name collision)</td>
-        <td data-sort-value="kernel">kernel</td>
-        <td data-sort-value="open">open</td>
-        <td data-sort-value="0">no</td>
-        <td data-sort-value="-1"></td>
-        <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awto-au/linux-rs/issues/30">awto-au/linux-rs#30</a></td>
-      </tr>
-      <tr>
-        <td data-sort-value="9"><span class="pill pill-none">—</span></td>
-        <td>c2rust boot-screening (lib/tests/test_sort.c): literal translation of overflow-reliant C arithmetic panics at runtime under Rust&#x27;s default overflow checks</td>
-        <td data-sort-value="kernel">kernel</td>
-        <td data-sort-value="open">open</td>
-        <td data-sort-value="0">no</td>
-        <td data-sort-value="-1"></td>
-        <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awto-au/linux-rs/issues/36">awto-au/linux-rs#36</a></td>
-      </tr>
-      <tr>
-        <td data-sort-value="9"><span class="pill pill-none">—</span></td>
-        <td>refcount.h overflow-detection idiom panics under -Coverflow-checks=y (c2rust-side fix landed)</td>
-        <td data-sort-value="kernel">kernel</td>
-        <td data-sort-value="open">open</td>
-        <td data-sort-value="0">no</td>
-        <td data-sort-value="-1"></td>
-        <td data-sort-value="unassigned">unassigned</td>
-        <td><a href="https://github.com/awto-au/linux-rs/issues/39">awto-au/linux-rs#39</a></td>
-      </tr>
   </tbody>
 </table>
 </div>
@@ -346,7 +306,7 @@
   per assignee (no worker-assignment tracking exists to query). Click headers to sort.</p>
 <div class="scroll-x">
 <table class="sortable" id="c2rust-issues-table">
-  <caption>27 issues total &mdash; 6 open, 21 closed</caption>
+  <caption>27 issues total &mdash; 5 open, 22 closed</caption>
   <thead>
     <tr>
       <th data-sort-key>#<span class="arrow"></span></th>
@@ -375,7 +335,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T02:11:51Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="2.335569090011574">2.3</td>
+        <td data-sort-value="2.3367842166898147">2.3</td>
       </tr>
       <tr>
         <td data-sort-value="3">#3</td>
@@ -384,7 +344,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T05:13:00Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="2.209770478900463">2.2</td>
+        <td data-sort-value="2.2109856055787036">2.2</td>
       </tr>
       <tr>
         <td data-sort-value="4">#4</td>
@@ -393,7 +353,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T06:13:07Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="2.168022793715278">2.2</td>
+        <td data-sort-value="2.1692379203935186">2.2</td>
       </tr>
       <tr>
         <td data-sort-value="5">#5</td>
@@ -402,7 +362,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-17T11:52:02Z">2026-07-17</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.9326639974189816">1.9</td>
+        <td data-sort-value="1.9338791240972222">1.9</td>
       </tr>
       <tr>
         <td data-sort-value="6">#6</td>
@@ -537,7 +497,7 @@
         <td data-sort-value="open"><span class="state state-open">open</span></td>
         <td data-sort-value="2026-07-18T08:46:33Z">2026-07-18</td>
         <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="1.0614718677893518">1.1</td>
+        <td data-sort-value="1.0626869944675925">1.1</td>
       </tr>
       <tr>
         <td data-sort-value="21">#21</td>
@@ -597,10 +557,10 @@
         <td data-sort-value="27">#27</td>
         <td><a href="https://github.com/awtoau/c2rust/issues/27">refcount.h overflow-detection idiom: signed +/- panics instead of gracefully wrapping (fixed in 1f8c61cf2)</a></td>
         <td data-sort-value="9"><span class="pill pill-none">—</span></td>
-        <td data-sort-value="open"><span class="state state-open">open</span></td>
+        <td data-sort-value="closed"><span class="state state-closed">closed</span></td>
         <td data-sort-value="2026-07-19T06:11:09Z">2026-07-19</td>
-        <td data-sort-value="">&mdash;</td>
-        <td data-sort-value="0.1693885344560185">0.2</td>
+        <td data-sort-value="2026-07-19T10:16:26Z">2026-07-19</td>
+        <td data-sort-value="0.17033564814814814">0.2</td>
       </tr>
   </tbody>
 </table>
@@ -636,9 +596,9 @@
   dollars): the real mtimes of this session's <code>tmp/*.log</code> files, one per script invocation, and the
   real <code>run_at</code> spread already recorded in <code>c2rust_attempts</code>. Today's baseline runs span
   2026-07-17T12:26:20 to 2026-07-19T10:04:30 UTC
-  (56 runs). 131 script-invocation logs in tmp/, spanning 3 days, 11:06:08.124501 from 2026-07-16T09:09+10:00 to 2026-07-19T20:15+10:00
+  (56 runs). 131 script-invocation logs in tmp/, spanning 3 days, 11:07:53.143811 from 2026-07-16T09:09+10:00 to 2026-07-19T20:16+10:00
   <div class="proxy-list">
-    check_fabricated_register_statics.log &mdash; 2026-07-19T17:33+10:00<br>dev-config.log &mdash; 2026-07-19T17:35+10:00<br>dev-build.log &mdash; 2026-07-19T17:36+10:00<br>qemu-boot-combined-c2rust-boot-19.log &mdash; 2026-07-19T17:36+10:00<br>build_initramfs.log &mdash; 2026-07-19T17:36+10:00<br>qemu-boot-combined-c2rust-boot-18.log &mdash; 2026-07-19T17:36+10:00<br>qemu-boot-combined-c2rust-boot-20.log &mdash; 2026-07-19T17:36+10:00<br>dev-boot.log &mdash; 2026-07-19T17:36+10:00<br>c2rust-baseline-verify.log &mdash; 2026-07-19T17:54+10:00<br>c2rust-baseline-fresh.log &mdash; 2026-07-19T17:56+10:00<br>c2rust_regression_check.log &mdash; 2026-07-19T20:00+10:00<br>investigate_c2rust_failure.log &mdash; 2026-07-19T20:02+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-19T20:08+10:00<br>c2rust-baseline.log &mdash; 2026-07-19T20:08+10:00<br>readiness.log &mdash; 2026-07-19T20:14+10:00<br>report.log &mdash; 2026-07-19T20:14+10:00<br>dev.log &mdash; 2026-07-19T20:14+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-19T20:14+10:00<br>sync_work_items.log &mdash; 2026-07-19T20:14+10:00<br>generate_dashboard.log &mdash; 2026-07-19T20:15+10:00
+    check_fabricated_register_statics.log &mdash; 2026-07-19T17:33+10:00<br>dev-config.log &mdash; 2026-07-19T17:35+10:00<br>dev-build.log &mdash; 2026-07-19T17:36+10:00<br>qemu-boot-combined-c2rust-boot-19.log &mdash; 2026-07-19T17:36+10:00<br>build_initramfs.log &mdash; 2026-07-19T17:36+10:00<br>qemu-boot-combined-c2rust-boot-18.log &mdash; 2026-07-19T17:36+10:00<br>qemu-boot-combined-c2rust-boot-20.log &mdash; 2026-07-19T17:36+10:00<br>dev-boot.log &mdash; 2026-07-19T17:36+10:00<br>c2rust-baseline-verify.log &mdash; 2026-07-19T17:54+10:00<br>c2rust-baseline-fresh.log &mdash; 2026-07-19T17:56+10:00<br>c2rust_regression_check.log &mdash; 2026-07-19T20:00+10:00<br>investigate_c2rust_failure.log &mdash; 2026-07-19T20:02+10:00<br>run_c2rust_baseline.log &mdash; 2026-07-19T20:08+10:00<br>c2rust-baseline.log &mdash; 2026-07-19T20:08+10:00<br>readiness.log &mdash; 2026-07-19T20:14+10:00<br>report.log &mdash; 2026-07-19T20:14+10:00<br>dev.log &mdash; 2026-07-19T20:14+10:00<br>crawl_c2rust_upstream.log &mdash; 2026-07-19T20:16+10:00<br>sync_work_items.log &mdash; 2026-07-19T20:16+10:00<br>generate_dashboard.log &mdash; 2026-07-19T20:16+10:00
   </div>
   <em>(most-recent 20 of 131 log files shown; commit/time-based proxy only, not actual token usage)</em>
 </div>
