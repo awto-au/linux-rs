@@ -112,3 +112,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T15:00:17+10:00,combined-c2rust-boot-17,17,0,1,0,docs/status/boot-logs/20260719T150017+1000-combined-c2rust-boot-17.log
 2026-07-19T16:13:26+10:00,klist-refcount-fix,17,0,1,0,docs/status/boot-logs/20260719T161326+1000-klist-refcount-fix.log
 2026-07-19T17:36:32+10:00,combined-c2rust-boot-19,18,0,1,0,docs/status/boot-logs/20260719T173632+1000-combined-c2rust-boot-19.log
+2026-07-19T17:36:41+10:00,combined-c2rust-boot-18,17,0,1,0,docs/status/boot-logs/20260719T173641+1000-combined-c2rust-boot-18.log
