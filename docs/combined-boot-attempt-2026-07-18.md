@@ -2788,6 +2788,67 @@ KUnit suites pass, 0 not ok, INIT REACHED. `lib/lz4/lz4_decompress.o`
 never built. Log:
 `docs/status/boot-logs/20260719T202959+1000-combined-boot-lz4_decompress.log`.
 
+### Correction (found while adding functional KUnit coverage)
+
+The "zero hand-fixes needed" / "`lz4_decompress.o` never built" claims
+above were **wrong**. `RUST_C2RUST_BOOT_TEST` was never actually added
+to any `Kconfig` reachable by this worktree (`lib/lz4/` has no
+`Kconfig` of its own — the scaffold script's "no Kconfig at ... check
+by hand" warning path — and it wasn't added to the parent `lib/Kconfig`
+either), so the symbol was undefined, `.config` never set it, and
+`lib/lz4/Makefile`'s `ifdef CONFIG_RUST_C2RUST_BOOT_TEST` always took
+the `else` branch. `vmlinux`'s `LZ4_decompress_safe` disassembly was
+confirmed **byte-for-byte identical** to `lib/lz4/lz4_decompress.o`
+(the plain-C object, which was present in the tree the whole time) —
+the Rust translation was never actually built or linked despite the
+worktree's boot passing 17/17. `lz4_decompress_rs.rs` itself was also
+never committed to the kernel worktree (uncommitted working file only).
+
+Compounding this, the Rust file does not actually build standalone:
+`::c2rust_bitfields::BitfieldStruct` derives on 6 dead-by-construction
+structs (`task_struct`/`mmap_action`/`kobject`/`kernfs_open_file`/
+`signal_struct`/`sched_dl_entity` — the same recurring header-chain
+bloat as every other file in this series) and `::libc::memcpy`/
+`::libc::size_t` references (crate unavailable in this build) both
+fail with `E0433`. Both fixed as part of adding the functional test
+below: 6 structs opaqued via the standard `opaque_marker!` idiom
+(grep-confirmed zero field-level references, same as every prior
+file), `::libc::memcpy`/`::libc::size_t` swapped for a local
+`extern "C" { fn memcpy(...) }` declaration (mirroring the file's
+existing `memmove` extern) and the file's own pre-existing `size_t`
+alias. `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (parent, since
+`lib/lz4/` has none) and enabled in `.config`. All of this — the
+Rust file, the Kconfig/Makefile wiring, both fixes — is now actually
+committed to the kernel worktree (`8a45d8b80e68`); it was not before.
+
+### Functional KUnit coverage added (closes "links but never called" —
+### and the above build-gap correction)
+
+New suite `rust_lz4_decompress` (`lib/lz4/lz4_decompress_rs.rs`,
+`#[kunit_tests(rust_lz4_decompress)]`), 1 test case
+`decompresses_known_payload`: calls the real `LZ4_decompress_safe()`
+on `lib/lz4/testdata/lz4_decompress_kunit_test.lz4block` (a real raw
+LZ4 block — no frame header, matching what `LZ4_decompress_safe`
+actually decodes — produced by the `lz4` Python package's C extension,
+which links real `liblz4` 1.10.4, confirmed via
+`lz4.library_version_number()`, not a hand-rolled encoder; embedded
+via `include_bytes!`) and asserts both the returned decompressed byte
+count and the decompressed bytes match the known 105-byte plaintext
+exactly. `LZ4_decompress_safe` is a plain `EXPORT_SYMBOL` function (not
+`__init`), so no section-mismatch handling was needed here (contrast
+`decompress_bunzip2.c`'s `__init`-section fix below).
+
+Evidence: `llvm-nm vmlinux` / `find . -name lz4_decompress_rs.o`
+confirm the Rust `.o` is what's actually linked this time (test symbols
+present in `vmlinux` at real addresses, not just the `.o`).
+`dev.py boot --run-id combined-boot-lz4_decompress-lz4test2`:
+**18/18 KUnit suites pass** (up from the never-actually-achieved 17),
+`ok 17 rust_lz4_decompress` / `ok 1 decompresses_known_payload`,
+`rust_lz4_decompress: pass:1 fail:0 skip:0 total:1`, 0 not ok,
+INIT REACHED. Log:
+`docs/status/boot-logs/20260719T205922+1000-combined-boot-lz4_decompress-lz4test2.log`.
+Boot-history row committed/pushed automatically by `dev.py boot`.
+
 ## Twenty-first candidate: `lib/decompress_bunzip2.c`
 
 Worktree `combined-c2rust-boot-22`, branch `agent-combined-c2rust-boot-22`,
@@ -2887,4 +2948,59 @@ corpus-capture `-Werror` mismatch (worked around locally, not a source
 or c2rust change) and a self-inflicted script bug in this session's own
 opaquing pass (caught by the normal build-then-fix loop, not a hidden
 runtime issue).
+
+### Functional KUnit coverage added (closes "links but never called")
+
+New suite `rust_decompress_bunzip2` (`lib/decompress_bunzip2_rs.rs`,
+`mod tests`), 1 test case `decompresses_known_payload`: calls the real
+`bunzip2()` on `lib/testdata/bunzip2_kunit_test.bz2` (host-`bzip2 -9`,
+embedded via `include_bytes!`) and asserts the output matches the known
+93-byte plaintext exactly.
+
+`bunzip2()` is `__init` in this build (non-`STATIC`/non-`PREBOOT`), so
+the test fn, its `error` callback, and the KUnit C-ABI wrapper all had
+to be placed in `.init.text`; the `#[kunit_tests(...)]` proc macro
+always emits `.text.unlikely.`-placed wrappers via
+`kunit_unsafe_test_suite!`, which produced a genuine modpost
+section-mismatch error against `.init.text`. Registered by hand instead,
+mirroring C's `kunit_test_init_section_suites()` idiom
+(`lib/kunit/kunit-example-test.c`, also used by
+`init/initramfs_test.c` in this tree): suite/case-array *data* statics
+in `.init.data` (not `.init.text` — a first attempt put the
+`kunit_suite` struct itself in `.init.text`, which built and linked but
+**oopsed at boot** — `Unable to handle kernel paging request`, `swapper/0`
+killed, `PID: 1 Comm: swapper/0` — dereferencing the struct after its
+section had already been unmapped; `INIT_DATA`/`INIT_TEXT` are distinct
+linker output sections per `include/asm-generic/vmlinux.lds.h`, and
+`KUNIT_INIT_TABLE()`/`.kunit_init_test_suites` is embedded inside
+`INIT_DATA`, not `INIT_TEXT`), suite-pointer array in
+`.kunit_init_test_suites` with a `_probe`-suffixed symbol (modpost's
+whitelist heuristic for "legitimately references init code").
+
+Evidence: `dev.py boot --run-id combined-c2rust-boot-22-bunzip2test`:
+**18/18 KUnit suites pass** (up from 17), `ok 1 rust_decompress_bunzip2`
+/ `ok 1 decompresses_known_payload`, `is_init: true`,
+`rust_decompress_bunzip2: pass:1 fail:0 skip:0 total:1`, 0 not ok,
+`INIT REACHED`, no oops/panic (beyond the fixed first attempt, which
+never reached this run's committed history). Log:
+`docs/status/boot-logs/20260719T205026+1000-combined-c2rust-boot-22-bunzip2test.log`.
+Boot-history row committed/pushed automatically by `dev.py boot`
+(`bbfccf8`).
+
+### Recommendation: host-compress + embed + KUnit-verify is reusable
+
+The pattern used for both files above (host-compress a small known
+payload with the real matching tool, embed via `include_bytes!`,
+KUnit-assert the real decompress function's output byte-for-byte)
+generalizes cleanly to any remaining `decompress_*`/codec-family file
+in this series (e.g. `decompress_unlz4.c` if it lands, `decompress_unxz.c`,
+`decompress_unlzo.c`, `decompress_unzstd.c`, `decompress_inflate.c`) —
+each just needs its own host tool (`xz`/`lzop`/`zstd`/`gzip`) and its
+entry function's real calling convention checked (particularly whether
+it's `__init`, which determines whether the bunzip2-style hand-rolled
+`.kunit_init_test_suites` registration is needed, or the plain
+`#[kunit_tests(...)]` macro suffices as it did for lz4). Not building a
+generic harness for this now — each file's actual function signature
+and init-vs-not status still needs a quick manual check first — but
+worth remembering next time one of these lands.
 
