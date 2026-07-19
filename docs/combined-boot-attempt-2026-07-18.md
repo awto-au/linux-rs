@@ -890,3 +890,82 @@ Confirms the update note's prediction: this file needed hand-fixing
 only for the 2 gap classes the transpiler fix didn't cover
 (`#[export]`, `BitfieldStruct` derive), plus one previously-undocumented
 leftover-feature-line strip. Zero instances of the 3 now-fixed classes.
+
+## Sixth candidate: `lib/objpool.c`
+
+Worktree `combined-c2rust-boot-6`, branch `agent-combined-c2rust-boot-6`.
+Target: `objpool_init`, `objpool_free`, `objpool_drop`, `objpool_fini`,
+all `EXPORT_SYMBOL_GPL`, 203 lines of C, lock-free per-CPU object pool
+using `cmpxchg()`. c2rust binary at `8bf6855c6` (post-fix). Fresh
+transpile via `investigate_c2rust_failure.py --rerun`: `outcome=clean`,
+`c2rust_rev=8bf6855c6`.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `objpool.o` pulled out of the bundled
+`lib-y` line, swapped for `objpool_rs.o` under the config. Raw transpile
+copied to `lib/objpool_rs.rs` (2781 lines).
+
+Of the 3 gap classes fixed upstream in `8bf6855c6`: confirmed absent —
+no `extern_types`/`asm` in the feature line, `unsafe {}` already
+wrapping every function body, no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick anywhere in the output.
+
+Fixes needed, both from the 2 classes the fix didn't cover:
+- `#[export]` → `#[no_mangle]` on all 4 functions (all 4 source sites
+  are `EXPORT_SYMBOL_GPL`), `use ::macros::export;` import dropped.
+- `c2rust_bitfields::BitfieldStruct` derive on `task_struct` and
+  `sched_dl_entity`: both dead-by-value (grep-confirmed zero field
+  access anywhere in the TU; `riscv_current_is_tp`, the only pointer
+  touchpoint into `task_struct`, is itself unreferenced after
+  declaration). Opaqued both via the standard `opaque_marker!` idiom.
+
+Same leftover-feature-line item `timerqueue.c` hit:
+`#![feature(label_break_value, raw_ref_op, strict_provenance)]` present
+and disallowed (zero overlap with `rust_allowed_features`); stripped.
+Differs from `timerqueue.c`'s leftover set by also carrying
+`label_break_value` — confirms the leftover set is per-file, not fixed.
+
+Register-variable pseudo-globals (`current.h`): both
+`riscv_current_is_tp` and `current_stack_pointer` fabricated as usual;
+both confirmed dead by grep (declaration only, never read/written) and
+deleted.
+
+RISC-V inline-asm: this file's `cmpxchg()` (4-arm match, sizes 1/2/4/8
+bytes) hit both issue #29 findings again, a third confirmation after
+`rcuref.c` (`amocas`) and `lwq.c` (`amoswap`):
+- `[reg]` bracket addressing in 13 occurrences across `amocas.{b,h,w,d}`
+  and their LR/SC fallback asm templates. Fixed: `[{N}]`/`[{N:}]` →
+  `0({N})`/`0({N:})` throughout.
+- Zacas/Zabha ISA-string gap (`KBUILD_RUSTFLAGS` has no
+  `_zacas`/`_zabha` target-feature augmentation for Rust): all 4
+  `amocas.{b,h,w,d}` fast-path arms rejected by LLVM regardless of the
+  `riscv_has_extension_unlikely()` runtime guard. Fixed: dropped all 4
+  `if <Zabha/Zacas guard> { amocas asm } else { <LR/SC fallback> }`
+  wrappers, keeping the LR/SC fallback unconditional in all 4 arms
+  (sizes 1/2/4/8, not just the sub-word ones `lwq.c` needed this for —
+  this file's `cmpxchg()` macro unrolls all 4 widths in one match, and
+  even the word/doubleword arms use plain Zacas, not just Zabha).
+
+Build: `make ARCH=riscv LLVM=1 lib/objpool_rs.o` clean, 0 errors (661
+warnings, all missing-doc lints). `make ARCH=riscv LLVM=1 -j32`
+succeeds, `arch/riscv/boot/Image` and `Image.xz` produced.
+`lib/objpool.o` correctly never built.
+
+`llvm-nm`: all 4 symbols `T` in both `lib/objpool_rs.o` and `vmlinux`
+(`ffffffff801abf0e T objpool_init`, `ffffffff801abed8 T objpool_free`,
+`ffffffff801abd5a T objpool_drop`, `ffffffff801abda8 T objpool_fini`).
+
+`scripts/boot_qemu.py --run-id combined-c2rust-7`: boots clean, 17/17
+KUnit suites pass (`fail:0` every suite, 0 `not ok`), `initramfs init
+reached, PID 1 alive`, no panic/oops/BUG/WARN in the log. No dedicated
+objpool KUnit suite in this config.
+
+Sixth file to clear the bar. Confirms the update note's prediction
+again: hand-fixing needed only for the 2 gap classes the transpiler fix
+didn't cover, plus the same leftover-feature-line strip `timerqueue.c`
+needed. Both issue #29 findings (bracket addressing, Zacas/Zabha)
+recurred on a third distinct atomic primitive (`cmpxchg` vs. `rcuref.c`'s
+bare CAS and `lwq.c`'s `xchg`), and for the first time on all 4 width
+arms in a single match rather than just the sub-word ones — strengthens
+issue #29's scope to "any Zacas/Zabha-gated `amo*`/`amocas*`
+instruction c2rust emits a runtime-guarded fast path for, any width."
