@@ -1,0 +1,161 @@
+# qemu-system-riscv64 -M virt -m 256M -nographic -no-reboot -kernel /mnt/2tb/git/linux-rs/linux-riscv-worktrees/combined-c2rust-boot-22/arch/riscv/boot/Image -initrd /mnt/2tb/git/linux-rs/tmp/initramfs/initramfs.cpio.gz -append earlycon=sbi console=ttyS0 panic=-1
+00000.036 
+00000.036 OpenSBI v1.7
+00000.036    ____                    _____ ____ _____
+00000.036   / __ \                  / ____|  _ \_   _|
+00000.036  | |  | |_ __   ___ _ __ | (___ | |_) || |
+00000.037  | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+00000.037  | |__| | |_) |  __/ | | |____) | |_) || |_
+00000.037   \____/| .__/ \___|_| |_|_____/|____/_____|
+00000.037         | |
+00000.037         |_|
+00000.037 
+00000.044 Platform Name               : riscv-virtio,qemu
+00000.044 Platform Features           : medeleg
+00000.044 Platform HART Count         : 1
+00000.044 Platform IPI Device         : aclint-mswi
+00000.044 Platform Timer Device       : aclint-mtimer @ 10000000Hz
+00000.044 Platform Console Device     : uart8250
+00000.044 Platform HSM Device         : ---
+00000.044 Platform PMU Device         : ---
+00000.044 Platform Reboot Device      : syscon-reboot
+00000.044 Platform Shutdown Device    : syscon-poweroff
+00000.044 Platform Suspend Device     : ---
+00000.044 Platform CPPC Device        : ---
+00000.044 Firmware Base               : 0x80000000
+00000.044 Firmware Size               : 317 KB
+00000.044 Firmware RW Offset          : 0x40000
+00000.045 Firmware RW Size            : 61 KB
+00000.045 Firmware Heap Offset        : 0x46000
+00000.045 Firmware Heap Size          : 37 KB (total), 2 KB (reserved), 11 KB (used), 23 KB (free)
+00000.045 Firmware Scratch Size       : 4096 B (total), 1400 B (used), 2696 B (free)
+00000.045 Runtime SBI Version         : 3.0
+00000.045 Standard SBI Extensions     : time,rfnc,ipi,base,hsm,srst,pmu,dbcn,fwft,legacy,dbtr,sse
+00000.045 Experimental SBI Extensions : none
+00000.045 
+00000.045 Domain0 Name                : root
+00000.045 Domain0 Boot HART           : 0
+00000.045 Domain0 HARTs               : 0*
+00000.045 Domain0 Region00            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+00000.045 Domain0 Region01            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+00000.046 Domain0 Region02            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+00000.046 Domain0 Region03            : 0x0000000080040000-0x000000008004ffff M: (R,W) S/U: ()
+00000.046 Domain0 Region04            : 0x0000000080000000-0x000000008003ffff M: (R,X) S/U: ()
+00000.046 Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+00000.046 Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+00000.046 Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+00000.046 Domain0 Next Address        : 0x0000000080200000
+00000.046 Domain0 Next Arg1           : 0x000000008fe00000
+00000.046 Domain0 Next Mode           : S-mode
+00000.046 Domain0 SysReset            : yes
+00000.046 Domain0 SysSuspend          : yes
+00000.046 
+00000.046 Boot HART ID                : 0
+00000.046 Boot HART Domain            : root
+00000.046 Boot HART Priv Version      : v1.12
+00000.046 Boot HART Base ISA          : rv64imafdch
+00000.047 Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+00000.047 Boot HART PMP Count         : 16
+00000.047 Boot HART PMP Granularity   : 2 bits
+00000.047 Boot HART PMP Address Bits  : 54
+00000.047 Boot HART MHPM Info         : 16 (0x0007fff8)
+00000.047 Boot HART Debug Triggers    : 2 triggers
+00000.047 Boot HART MIDELEG           : 0x0000000000001666
+00000.047 Boot HART MEDELEG           : 0x0000000000f4b509
+00000.164 Linux version 7.2.0-rc3+ (dan@selwyn) (clang version 22.1.8 (Fedora 22.1.8-1.fc44), LLD 22.1.8) #2 PREEMPT Sun Jul 19 20:48:35 AEST 2026
+00000.164 random: crng init done
+00000.164 Machine model: riscv-virtio,qemu
+00000.164 SBI specification v3.0 detected
+00000.164 SBI implementation ID=0x1 Version=0x10007
+00000.164 SBI TIME extension detected
+00000.164 SBI IPI extension detected
+00000.164 SBI RFENCE extension detected
+00000.164 SBI SRST extension detected
+00000.164 SBI DBCN extension detected
+00000.164 SBI FWFT extension detected
+00000.164 efi: UEFI not found.
+00000.164 OF: reserved mem: 0x0000000080000000..0x000000008003ffff (256 KiB) nomap non-reusable mmode_resv1@80000000
+00000.165 OF: reserved mem: 0x0000000080040000..0x000000008004ffff (64 KiB) nomap non-reusable mmode_resv0@80040000
+00000.165 riscv: base ISA extensions acdfhim
+00000.165 riscv: ELF capabilities acdfim
+00000.165 Ticket spinlock: enabled
+00000.165 Zone ranges:
+00000.165   DMA32    [mem 0x0000000080000000-0x000000008fffffff]
+00000.165   Normal   empty
+00000.165 Movable zone start for each node
+00000.165 Early memory node ranges
+00000.165   node   0: [mem 0x0000000080000000-0x000000008004ffff]
+00000.165   node   0: [mem 0x0000000080050000-0x000000008fffffff]
+00000.165 Initmem setup node 0 [mem 0x0000000080000000-0x000000008fffffff]
+00000.165 Kernel command line: earlycon=sbi console=ttyS0 panic=-1
+00000.165 printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+00000.165 Dentry cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+00000.165 Inode-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+00000.165 software IO TLB: SWIOTLB bounce buffer size adjusted to 0MB
+00000.165 software IO TLB: area num 1.
+00000.166 software IO TLB: mapped [mem 0x000000008ff49000-0x000000008ff89000] (0MB)
+00000.166 Built 1 zonelists, mobility grouping on.  Total pages: 65536
+00000.166 mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+00000.166 SLUB: HWalign=64, Order=0-1, MinObjects=0, CPUs=1, Nodes=1
+00000.166 NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+00000.166 riscv-intc: 64 local interrupts mapped
+00000.166 clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+00000.166 clocksource: riscv_clocksource: mask: 0xffffffffffffffff max_cycles: 0x24e6a1710, max_idle_ns: 440795202120 ns
+00000.166 sched_clock: 64 bits at 10MHz, resolution 100ns, wraps every 4398046511100ns
+00000.166 riscv-timer: Timer interrupt in S-mode is available via sstc extension
+00000.166 Calibrating delay loop (skipped), value calculated using timer frequency.. 20.00 BogoMIPS (lpj=40000)
+00000.166 pid_max: default: 32768 minimum: 301
+00000.166 Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+00000.166 Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+00000.167 VFS: Finished mounting rootfs on nullfs
+00000.167 riscv: ELF compat mode supported
+00000.167 ASID allocator using 16 bits (65536 entries)
+00000.167 EFI services will not be available.
+00000.167 Memory: 245984K/262144K available (1979K kernel code, 2535K rwdata, 2048K rodata, 2156K init, 220K bss, 15508K reserved, 0K cma-reserved)
+00000.167 devtmpfs: initialized
+00000.167 DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+00000.167 clocksource: Switched to clocksource riscv_clocksource
+00000.167 Unpacking initramfs...
+00000.167 workingset: timestamp_bits=62 (anon: 57) max_order=16 bucket_order=0 (anon: 0)
+00000.167 io scheduler mq-deadline registered
+00000.167 io scheduler kyber registered
+00000.167 riscv-plic: plic@c000000: mapped 96 interrupts with 1 handlers for 2 contexts.
+00000.167 Freeing initrd memory: 108K
+00000.167 Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+00000.167 printk: legacy console [ttyS0] disabled
+00000.167 10000000.serial: ttyS0 at MMIO 0x10000000 (irq = 1, base_baud = 230400) is a 16550A
+00000.168 printk: legacy console [ttyS0] enabled
+00000.169 riscv-pmu-sbi: SBI PMU extension is available
+00000.169 riscv-pmu-sbi: 16 firmware and 18 hardware counters
+00000.170 riscv-pmu-sbi: Perf sampling/filtering is not supported as sscof extension is not available
+00000.186 cpu0: scalar unaligned word access speed is 8.00x byte access speed (fast)
+00000.189 clk: Disabling unused clocks
+00000.190 Unable to handle kernel paging request at virtual address ffffffff8021e6cc
+00000.190 Current swapper/0 pgtable: 4K pagesize, 57-bit VAs, pgdp=0x0000000080a9d000
+00000.190 [ffffffff8021e6cc] pgd=0000000023ffec01, p4d=0000000023ffe801, pud=0000000023ffe401, pmd=00000000201000eb
+00000.190 Oops [#1]
+00000.190 CPU: 0 UID: 0 PID: 1 Comm: swapper/0 Not tainted 7.2.0-rc3+ #2 PREEMPTLAZY 
+00000.191 Hardware name: riscv-virtio,qemu (DT)
+00000.191 epc : 0xffffffff80165296
+00000.191  ra : 0xffffffff80165284
+00000.191 epc : ffffffff80165296 ra : ffffffff80165284 sp : ff60000000c6fdd0
+00000.191  gp : ffffffff80895608 tp : ff60000000c68000 t0 : ff60000000c6fde0
+00000.191  t1 : 0000000000000fff t2 : 0000000000000003 s0 : ff60000000c6fe20
+00000.191  s1 : ff60000000d55480 a0 : 0000000000000001 a1 : 0000000000000001
+00000.191  a2 : 0000000000000001 a3 : ffffffff8021e488 a4 : ffffffffffffffff
+00000.191  a5 : 0000000000000000 a6 : fffffffffffffdff a7 : ff60000000c000e0
+00000.191  s2 : ffffffff80894d80 s3 : 0000000000000088 s4 : 0000000000000008
+00000.191  s5 : ffffffff80411758 s6 : ffffffff80411750 s7 : 0000000000000001
+00000.191  s8 : 0000000000000000 s9 : 0000000000000000 s10: 0000000000000000
+00000.191  s11: 0000000000000000 t3 : ffffffff808a0c74 t4 : ffffffff808a0c74
+00000.192  t5 : ffffffff808a0c58 t6 : ff60000000d55488 ssp : 0000000000000000
+00000.192 status: 0000000200000120 badaddr: ffffffff8021e6cc cause: 000000000000000f
+00000.192 [<ffffffff80165296>] 0xffffffff80165296
+00000.192 [<ffffffff80165334>] 0xffffffff80165334
+00000.192 [<ffffffff80200e0e>] 0xffffffff80200e0e
+00000.192 [<ffffffff801ec330>] 0xffffffff801ec330
+00000.192 [<ffffffff80008398>] 0xffffffff80008398
+00000.192 [<ffffffff801f0b5e>] 0xffffffff801f0b5e
+00000.192 Code: 3618 8e63 016a 4581 4505 4605 058e 95a6 6194 85b2 (8223) 24a6 
+00000.192 ---[ end trace 0000000000000000 ]---
+00000.193 Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b
