@@ -2888,3 +2888,207 @@ or c2rust change) and a self-inflicted script bug in this session's own
 opaquing pass (caught by the normal build-then-fix loop, not a hidden
 runtime issue).
 
+
+## Twenty-second candidate: `lib/decompress_unlz4.c`
+
+Worktree `combined-c2rust-boot-21`, branch `agent-combined-c2rust-boot-21`,
+based on `linux-rs/phase2-gcd`. 109 statements (`dev.py readiness
+"lib/*.c"`; the task brief's 137 was a stale figure, re-measured 109 at
+time of attempt). Single function, `unlz4()` — LZ4-compressed
+kernel/initramfs/initrd decompression, called by symbol name from
+`lib/decompress.c`'s `.decompressor = unlz4` table entry (no
+`EXPORT_SYMBOL`, a plain external-linkage `inline` function taking its
+address via the same table-driven dispatch shape as `bunzip2()`/
+`unlzo()`/etc). `#ifdef PREBOOT`/`STATIC` both undefined in this build
+(confirmed via `clang -E`), so only the `#else` branch's `unlz4()`
+exists in this TU — `__decompress()` (the `PREBOOT`-only wrapper) is
+never compiled here and was not translated. c2rust binary verified
+fresh via `dev.py c2rust-build` first.
+
+### New gap class: c2rust silently drops an entire externally-linked `inline` function when a plain prototype precedes its definition in the same TU
+
+Re-transpiled fresh (deleted and rebuilt the isolated
+`compile_commands.json` + baseline dir via `run_c2rust_baseline.py`'s
+own `run_one()`, not a hand-rolled command, to guarantee byte-identical
+flags to the real baseline path). Outcome classified `clean` by every
+existing signal `run_c2rust_baseline.py` checks (0 "Missing top-level
+node", 0 "Missing child", `.rs` file produced, no `panicked at`) — but
+`unlz4()` itself is **entirely absent** from the 3072-line output, not
+even as a private/unmangled fn. Every helper `unlz4()` calls
+(`large_malloc`/`large_free` via `vmalloc`/`vfree`, `LZ4_compressBound`,
+`get_unaligned_le32`, `LZ4_decompress_safe`) was pruned right alongside
+it by the same reachability walk, leaving 3072 lines of pure
+transitively-pulled-in struct/type noise (`task_struct` and its usual
+header-chain closure) and nothing else — the file's *entire* live
+content silently vanished while every existing baseline-classification
+signal read "clean".
+
+Root-caused to `c2rust-transpile/src/c_ast/mod.rs:1214`,
+`prune_unwanted_decls`'s root-selection condition for global inline
+functions: `Function { body: Some(_), is_global: true, is_inline,
+is_inline_externally_visible, .. } if !is_inline ||
+is_inline_externally_visible => true`. `is_inline_externally_visible`
+is sourced directly from Clang's own
+`FD->isInlineDefinitionExternallyVisible()`
+(`c2rust-ast-exporter/src/AstExporter.cpp:2269`) — correct in
+principle ("we rely on clang to determine visibility", per the
+adjacent comment) — but empirically returns `false` here even though
+Clang's own codegen (and this project's real
+`make ARCH=riscv LLVM=1 lib/decompress_unlz4.o`) emits `unlz4` as a
+genuine external `T` symbol (`llvm-nm lib/decompress_unlz4.o` on the
+plain-C build: `0000000000000000 T unlz4`).
+
+Isolated to a 10-line standalone repro, independent of any kernel
+header or macro: a plain external prototype (`int myfunc(unsigned char
+*inbuf, long len);`) declared **before** an `inline`-only (no `extern`,
+no `gnu_inline` needed to reproduce it) definition of the same function
+in one TU causes c2rust to drop the whole decl silently; the identical
+function with `gnu_inline` + `unused` + `section` + `cold` attributes
+stacked (matching this file's real `INIT unlz4(...)` expansion exactly)
+reproduces it too. Swapping the two declarations' order — prototype
+declared *after* the inline definition instead of before — makes the
+function reappear (as a private, non-`pub` fn, per c2rust's documented
+gnu89-visibility handling for `gnu_inline`, which is itself correct).
+`decompress_unlz4.c`'s real structure is exactly the failing shape:
+`#include <linux/decompress/unlz4.h>` (the prototype) at the top of the
+file, `unlz4()`'s `inline`-attributed definition later. Distinct from
+every previously-cataloged gap class in this series (`#[export]`,
+`__init` section, register-variable statics, `-1 as usize`,
+`c_variadic`, signed-overflow-wraparound) — this is the first file
+where c2rust drops a function's *entire definition*, undetected by any
+existing `run_c2rust_baseline.py` failure signal. Also distinct from
+`decompress_bunzip2.c`'s (twenty-first candidate, same session)
+`-Werror=incompatible-pointer-types-discards-qualifiers` AST-export
+finding — this file hits that same diagnostic on its own `error()`
+call sites, but suppressing it with
+`-Wno-incompatible-pointer-types-discards-qualifiers` (verified
+directly, same workaround) does **not** bring `unlz4()` back; the
+function-drop is a separate, deeper bug already present with 0
+warnings/errors once that diagnostic is silenced.
+
+Filed as [awto-au/linux-rs#42](https://github.com/awto-au/linux-rs/issues/42)
+with the full repro. Distinct from
+[awto-au/linux-rs#41](https://github.com/awto-au/linux-rs/issues/41)
+(`decompress_bunzip2.c`'s `-Werror=incompatible-pointer-types-discards-qualifiers`
+AST-export finding, same session) — confirmed by testing: suppressing
+that diagnostic does not bring `unlz4()` back. No fix attempted in the
+fork this session — out of scope for a same-day hand-fix (touches core
+AST-root-selection logic, not a narrow per-file pattern), and the
+boot-screening task doesn't require it to be fixed upstream before
+landing this file.
+
+### Hand-reconstruction, not a c2rust-output patch
+
+Because the raw output has no `unlz4()` to fix, `lib/decompress_unlz4_rs.rs`
+was hand-written directly from the C source rather than derived from
+c2rust output — the first file in the series where this was necessary.
+Translated using the same type idioms c2rust itself uses elsewhere in
+this corpus (`u8_0`/`size_t`/`u32_0` aliases, raw-pointer
+`unsafe extern "C" fn`, `unsafe {}`-wrapped body) so the file reads
+consistently with every other translated TU, not as bespoke
+hand-written Rust. The C source's `goto exit_N`-chain (4 labels, all
+forward jumps into a shared fallthrough cleanup chain, no
+backward/loop-re-entry gotos) translates directly to nested Rust
+labeled blocks (`'exit_0 { ... 'exit_1 { ... 'exit_2 { loop { ... } }
+cleanup_2 } cleanup_1 } return ret;`) matching the C fallthrough
+semantics exactly, simpler than reproducing c2rust's usual
+`c2rust_current_block` numeric-dispatch idiom (reserved for genuine
+backward/cross-branch gotos, not needed here). `#[no_mangle]` (address
+taken by `lib/decompress.c`'s dispatch table, same requirement class as
+an `EXPORT_SYMBOL`'d function even though this one uses no export
+macro at all) + `#[link_section = ".init.text"]` + `#[cold]` applied by
+hand, matching issue #40's established `__init` -> section-attribute
+fix (`#define INIT __init` in this build's non-`PREBOOT` `mm.h`
+branch).
+
+`check-register-statics`: 0 live corpus-wide (unchanged) — moot for
+this file's hand-written replacement, which never included the
+fabricated `riscv_current_is_tp`/`current_stack_pointer` statics in the
+first place (they were dead-per-rule-0031 in the doomed baseline output
+too, before it was discarded). `-1 as usize`: absent, not applicable to
+hand-written code.
+
+### Overflow-arithmetic review (task's specific risk flag) — one narrow `wrapping_sub` applied
+
+Per the task brief's warning, reviewed every arithmetic site in the
+hand-translation against the C source's actual semantics rather than
+assuming Rust's checked-by-default `-`/`+` were safe drop-ins. Found
+one load-bearing case: C's `size -= chunksize;` (both `long size` and
+`size_t chunksize` are 64-bit under this target's LP64 ABI) is
+immediately followed by `if (size < 0) { error("data corrupted"); ...
+}` — `chunksize` comes straight from `get_unaligned_le32()` on the
+untrusted compressed stream in the `!fill` (fully-buffered, no
+streaming callback) path, unchecked against any bound before this
+subtraction, so `chunksize > size` is a real malformed/truncated-input
+case the C deliberately detects via the signed result going negative —
+same shape as `test_sort.c`'s issue #36/#39 finding, confirmed by
+reading `docs/overflow-wraparound-detection-scoping-2026-07-19.md`
+first per the task brief. Fixed narrowly at the exact site with
+`size = size.wrapping_sub(chunksize as c_long)`, reproducing C's actual
+runtime behavior exactly — no blanket signed-arithmetic-wrapping
+change, matching the established scoping. Not a reachable *overflow*
+at this bit width in practice (`chunksize` bounded under 2^32 by its
+32-bit source field, `size` bounded by the real input buffer length,
+both far below `i64::MAX`) but applied defensively per the established
+narrow-fix pattern rather than relying on that bound. Every other
+arithmetic site (`size -= 4` / `+= 4`, `*posp += 4` / `+= chunksize`,
+pointer `.offset(...)` advances) operates on values already bounds-checked
+immediately beforehand (`size < 4` guards, fixed 4-byte header reads) —
+reviewed and left as plain arithmetic, no `wrapping_*` needed.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added fresh to this worktree's
+`lib/Kconfig` (not present on `phase2-gcd`). `lib/Makefile`'s
+`lib-$(CONFIG_DECOMPRESS_LZ4) += decompress_unlz4.o` wrapped in `ifdef
+CONFIG_RUST_C2RUST_BOOT_TEST` / `else` selecting `decompress_unlz4_rs.o`
+vs `decompress_unlz4.o` (`lib-y`/`lib.a` linkage, same shape as
+`decompress_bunzip2.c`'s Makefile edit this same session — confirmed
+via `llvm-ar t lib/lib.a` containing `decompress_unlz4_rs.o`, not the
+plain-C object).
+
+### Outcome: clean boot, first file in the series requiring a hand-reconstructed (not c2rust-derived) function body
+
+- `make ARCH=riscv LLVM=1 lib/decompress_unlz4_rs.o` — clean, 0 errors
+  (4 warnings, all missing-doc lints on the 3 type aliases + crate root,
+  pre-existing pattern, smallest warning count of any file in the
+  series so far since there's no dead struct-closure noise to carry).
+- `dev.py build` succeeds, `arch/riscv/boot/Image`/`Image.xz` produced.
+  `lib/lib.a` contains `decompress_unlz4_rs.o` (`llvm-ar t` confirmed),
+  not `decompress_unlz4.o`.
+- `llvm-objdump -h lib/decompress_unlz4_rs.o`: `unlz4` sits in
+  `.init.text` (`3 .init.text 000003c8 ...`), confirming the hand-applied
+  `#[link_section]` took effect.
+- `llvm-nm`: `unlz4` `T` in both the `.o` and `vmlinux`
+  (`ffffffff8021de7e T unlz4`); `riscv_current_is_tp`/
+  `current_stack_pointer` absent from both entirely (never included).
+- `dev.py boot --run-id combined-c2rust-boot-21`: boots clean, **17/17
+  KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 `not ok`),
+  `INIT REACHED (initramfs userspace boot verified)`, no panic/oops/
+  BUG/WARN in the log (only "panic" match is the `panic=-1` boot
+  argument). Archived at
+  `docs/status/boot-logs/20260719T203900+1000-combined-c2rust-boot-21.log`.
+  Boot-history row committed/pushed automatically by `dev.py boot`
+  (`6cab676`).
+- **Runtime-exercise caveat**: this kernel's initramfs is gzip- not
+  LZ4-compressed, and no dedicated KUnit suite exists for LZ4 decode
+  in this config, so `unlz4()`'s actual decompression logic (and the
+  `wrapping_sub` fix's behavior on real malformed input) was **not**
+  runtime-exercised by this boot — same "links and boots, not
+  exercised" caveat as most non-KUnit files in this series. The
+  overflow review above is by inspection against the C source's own
+  documented behavior, not an observed execution trace.
+
+First file in the series where c2rust's raw output had *nothing* to
+patch because the function under test never made it into the output at
+all — every prior file's fix scope was "start from c2rust's translation
+and correct specific gaps"; this one required reconstructing the
+translation from the C source directly once the root cause (a genuine,
+previously-undocumented c2rust AST-root-selection bug, not a kernel-
+idiom mismatch) was confirmed via isolated repro and distinguished from
+the superficially-similar `-Werror` diagnostic `decompress_bunzip2.c`
+hit the same session. Confirms `check-register-statics` holds at 0 live
+corpus-wide and that the task's flagged overflow-arithmetic risk was
+real (one genuine wraparound-reliant site found and fixed narrowly),
+consistent with `test_sort.c`'s and `decompress_bunzip2.c`'s findings
+that this file class (compression/decompression, PRNG, and other
+C-idiom numeric code) is where this project's overflow-wraparound gap
+class concentrates.
