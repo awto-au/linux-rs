@@ -640,6 +640,70 @@ whether the function is `EXPORT_SYMBOL`'d (drives the `.init_array`/
 are actually touched by value/by-field versus merely pulled in as dead
 header noise.
 
+### Retroactive fix: latent null-deref in `get_current()`, same bug class as klist.c (issue #31)
+
+The "boots clean" outcome above was true but incomplete: nothing in
+this project's boot path calls `current_is_single_threaded()`, so the
+function's guaranteed null-pointer bug was never exercised. Found by
+cross-checking klist.c's fix (issue #30) against the other landed
+combined-boot files: `get_current()` at
+`lib/is_single_threaded_rs.rs:1395` returned the fabricated
+`riscv_current_is_tp` `.bss` static verbatim (always null, nothing ever
+assigns it), and `current_is_single_threaded()`
+(`#[no_mangle]`, line 1533) dereferences its result
+(`(*task).mm`) as its first real statement — a guaranteed
+null-pointer deref the moment anything calls this function (real
+callers in upstream Linux: `fs/exec.c`'s `de_thread()`, a handful of
+`/proc` paths — none reached by this project's current minimal boot).
+
+Fixed identically to klist.c: `get_current()` rewritten to read the
+real `tp` register directly via
+`asm!("mv {0}, tp", out(reg) tp, options(nomem, nostack,
+preserves_flags))`, and both fabricated statics
+(`riscv_current_is_tp` and the unread `current_stack_pointer`,
+grep-confirmed zero references anywhere else in the TU) deleted
+outright rather than left as unread dead code.
+
+**Verification (disassembly, not boot-only — boot alone can't catch
+this since nothing calls the function during boot):**
+
+Before fix — `llvm-nm lib/is_single_threaded_rs.o`:
+```
+0000000000000000 T current_is_single_threaded
+0000000000000000 B current_stack_pointer
+0000000000000008 B riscv_current_is_tp
+```
+Before fix — disassembly of `current_is_single_threaded`'s task-pointer
+load: `auipc a6, 0x0` / `ld a1, 0x0(a6)` — a PC-relative load from
+`.bss` (the fabricated always-null static), then `ld a0, 0x5c8(a1)`
+dereferences it. Guaranteed fault the instant this runs.
+
+After fix — `llvm-nm lib/is_single_threaded_rs.o`:
+```
+0000000000000000 T current_is_single_threaded
+```
+`riscv_current_is_tp`/`current_stack_pointer` symbols gone entirely
+(not just unreferenced — absent from the object). `llvm-objdump -r`
+confirms zero relocations to either name anywhere in the `.o`.
+Disassembly of the same load site now reads `mv a0, tp` — a genuine
+register move, immediately followed by the same `ld a2, 0x5c8(a0)`
+(`.mm`) / `ld a1, 0x3d0(a0)` (`.signal`) field dereferences, now
+against the real task pointer. A second `get_current()` call site
+(preempt-count path further down the function) compiles to `mv a2, tp`
+identically. `vmlinux` also carries zero references to either
+fabricated static
+(`llvm-nm vmlinux | grep 'riscv_current_is_tp\|current_stack_pointer'`
+empty).
+
+Full rebuild (`dev.py build`, `LINUXRS_TREE=linux-riscv-worktrees/combined-c2rust-boot-3`)
+and reboot (`dev.py boot`) after the fix: 17/17 KUnit suites pass,
+`fail:0` every suite, 0 `not ok`, INIT REACHED — same as the original
+"boots clean" outcome, now backed by object-level proof that
+`get_current()` reads the real register instead of a fabricated
+always-null global, rather than boot-clean status alone (which cannot
+distinguish "fixed" from "still broken but unreached," exactly the gap
+issue #31 flagged).
+
 ### Updated fix-scope tally
 
 With three files done, tally unchanged in kind from the two-file tally
