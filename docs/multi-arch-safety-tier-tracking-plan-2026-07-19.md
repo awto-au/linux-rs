@@ -1,494 +1,143 @@
-# Plan: tracking safety tier and arch/endian variants per function/file, and surviving kernel rebases
+# Plan: safety-tier and arch/endian tracking, per function/file
 
-Status: **planning document, no code written, no schema/Kconfig files modified.**
-Grounded in this project's actual current state as of 2026-07-19 (38
-hand-translated TUs, 1 arch, `rulesdb/patterns.db` schema at 680 lines).
+No code/schema/Kconfig applied yet — DDL below is proposed.
 
-## 0. Bottom line up front
+## Axes
 
-- **"The 3 versions" = the arch/endian target matrix**: 32-bit × 64-bit ×
-  {little, big} endian, the real complete combination space (no 128-bit
-  word width, no third endianness anywhere in the kernel — confirmed:
-  zero `CONFIG_*128BIT` hits across `arch/*/Kconfig`, every `ENDIAN`
-  symbol resolves to little/big). 4 real configs: riscv64-LE (shipping
-  today), riscv32-LE, riscv64-BE, riscv32-BE. See §1.
-- The safety-tier progression (unsafe-baseline → safe-lifted →
-  optimised-if-pure, already named in PLAN.md's Phase 2 step 3/Phase 2.5)
-  is real and tracked as a **second, independent axis** — see §1.
-- **Kconfig question: hybrid, not either/or.** Real kernel Kconfig
-  (`CONFIG_RUST_<slice>`-style, already proven across 5+ landed 8250 slices)
-  answers "what can be built into this exact kernel image" and should gate
-  **safety-tier selection** the same way it already gates translation
-  presence. `rulesdb/patterns.db` answers "what has been attempted and
-  verified, with what evidence" and should track **arch/config coverage**,
-  because Kconfig has no concept of "verified," only "buildable." See §3.
-- **Current state: single-arch, single-config, confirmed.** No rv32, no
-  big-endian, no committed x86_64 config exist anywhere in this repo today.
-  Building this tracking is greenfield work, not an extension of dormant
-  infrastructure. See §2.
-- **Extend `file_oracle_status`, don't replace it**: add a `target_id`
-  column (FK to a new `translation_targets` table) to the existing
-  `(c_file, population, tier)` key, making it `(c_file, population, tier,
-  target_id)`. See §2 for why this is additive, not a rewrite.
-- **Kernel-version drift**: no existing mechanism detects "this C file
-  changed since last verified" — confirmed absent (only `c2rust_rev`/
-  `corpus_rev` git-revision strings exist, no content hash). Real gap;
-  concrete fix proposed in §4.
-- **Pipeline shape**: arch/endian variants are the SAME c2rust translation
-  attempted under a different `compile_commands.json` (different
-  `-march`/`-mabi`/target-triple flags feeding the SAME AST→Rust logic);
-  safe-vs-unsafe is a GENUINELY DIFFERENT translation output (different
-  rule set, different target abstractions) that happens to run on top of
-  whichever arch/config variant was chosen. These need separate rulesdb
-  rows because they answer different questions, even though only one of
-  them requires re-running c2rust/hand-translation from scratch. See §5.
+**"3 versions" = arch/endian target matrix**: 32-bit × 64-bit × {little, big} = 4 real combos (no 128-bit, no third endianness in the kernel). Targets: riscv64-LE (shipping), riscv32-LE, riscv64-BE, riscv32-BE.
 
----
+**Safety tier** (PLAN.md Phase 2 step 3 / Phase 2.5): `unsafe-baseline` → `safe-lifted` → `optimised` (pure-leaf only). Independent axis.
 
-## 1. "The 3 versions" and the safety-tier axis
+A function's state = matrix cell `(safety_tier, target_config)`, each `not_attempted | attempted | verified(tier N)`.
 
-"3 versions" = the arch/endian target matrix: 32-bit × 64-bit × {little,
-big} endian. Real combination space is 4, not literally 3 (no 128-bit
-word width, no third endianness anywhere in the kernel) — "3" is
-imprecise phrasing for the matrix, not a deliberate exclusion. Track all
-4: riscv64-LE (shipping today), riscv32-LE, riscv64-BE, riscv32-BE.
+## Current state
 
-The safety-tier progression — `unsafe-baseline` → `safe-lifted` →
-`optimised` (pure-leaf only, per Phase 2.5's own gate — this tier
-literally does not apply to most functions, by design) — is a real,
-already-named concept in `PLAN.md`'s Phase 2 step 3 and Phase 2.5, and
-is tracked here too, as a **second, independent axis**, not folded into
-the arch/endian count.
+Zero rv32/big-endian/x86_64 infra exists (`configs/` has one defconfig). `compile_commands.json` generation is vendored kernel tooling; every consuming script hardcodes one tree/`ARCH=riscv` (`dev.py:70,175`, 8 other scripts). This is greenfield bring-up, not extending dormant infra. Upstream precedent for endian-gated Rust: `arch/arm/Kconfig:139` — `select HAVE_RUST if CPU_LITTLE_ENDIAN && CPU_32v7 && !KASAN`. `arch/riscv/Kconfig:405` — `ARCH_RV32I depends on NONPORTABLE` (rv32 is non-default even upstream).
 
-Bundling both axes into one "done" bar is explicitly rejected: it
-conflates two orthogonal questions (translation approach vs. build
-target) into one number, breaking the ability to ask "is this function's
-*safe* version verified on rv32" independently of "is its *unsafe*
-version verified on rv64" — exactly the kind of question this system
-needs to answer. §2 treats them as two independent dimensions.
+## Schema
 
-**Design**: two independent axes.
-
-1. **Safety-tier axis**: `unsafe-baseline` → `safe-lifted` → `optimised`.
-2. **Target-config axis**: an open-ended list of `(arch, bits, endian,
-   defconfig)` tuples, starting at exactly one row (`riscv64-slim-serial`,
-   the only config that exists today) and growing as rv32/big-endian/etc
-   are actually pursued — not pre-populated with speculative rows for
-   configs nobody has built yet (see §2's "greenfield, not dormant"
-   finding — there is nothing to wire up, everything here is new).
-
-A function's full state is a **matrix cell**: (safety-tier, target-config),
-each cell independently `not_attempted | attempted | verified(tier N)`.
-This is what §2's schema change encodes.
-
----
-
-## 2. Current-state reality check — greenfield, not extension of dormant infra
-
-Direct inspection (file listings, full-repo grep, schema read) plus an
-independent subagent sweep, cross-checked, agree on every point:
-
-- **rv32 / any 32-bit infra**: confirmed absent. `configs/` contains exactly
-  two files (`riscv64-slim-serial.defconfig`, `initramfs-init.sh`) — no rv32
-  variant. The only "rv32" mention anywhere in `configs/ scripts/ rulesdb/
-  docs/` is one prose line, `docs/phase2-minimal-target.md:53` ("rv64 vs
-  rv32: Cynthion's ECP5 realistically runs a VexRiscv-class rv32 core; rv64
-  chosen for now... config is regenerable either way") — a noted-for-later
-  open item, not infrastructure. The defconfig itself has no explicit
-  `CONFIG_64BIT`/`CONFIG_32BIT` line at all; it inherits riscv's Kconfig
-  default (`ARCH_RV64I`, `select 64BIT`) implicitly. Upstream riscv Kconfig
-  makes rv32 a second-class, opt-in path in its own right:
-  `linux-riscv/arch/riscv/Kconfig:405` — `config ARCH_RV32I` `depends on
-  NONPORTABLE` (mainline itself gates rv32 behind an explicit
-  "unsupported/non-default" flag).
-- **Big-endian / any other arch**: confirmed absent. Zero hits for
-  `big.endian|bigendian|BIG_ENDIAN` or `mips|powerpc|s390|sparc|armeb`
-  across `configs/ scripts/ rulesdb/ docs/`. Nothing to build on.
-- **x86_64**: never a committed config, exactly as the README's "x86_64 is
-  the lab" framing implies. `docs/phase0-environment.md` describes it in
-  prose only (`defconfig` + `CONFIG_RUST=y`, `olddefconfig` steps written
-  as instructions, not a checked-in fragment). No file in `configs/`
-  targets it. The only "x86_64" hits in scripts are unrelated (busybox
-  binary-architecture mismatch comments in `build_initramfs.py`).
-- **`compile_commands.json` generation**: not project-authored at all — the
-  actual generator is the vendored upstream kernel tool
-  `linux-riscv/scripts/clang-tools/gen_compile_commands.py` (stock
-  kernel.org tooling, present verbatim in both `linux/` and `linux-riscv/`).
-  Every project script that *consumes* it hardcodes a single path,
-  `TREE / "compile_commands.json"`, across at least 8 scripts
-  (`fingerprint.py`, `idiom_census.py`, `import_sparse.py`,
-  `import_cscope.py`, `run_c2rust_baseline.py`, `build_c2rust_pch.py`,
-  `check_c2rust_rule_conformance.py`, `take_progress_snapshot.py`). The
-  only "which tree" knob anywhere is `dev.py`'s `LINUXRS_TREE` env var
-  (default `linux-riscv`), and `dev.py` hardcodes `ARCH=riscv` directly in
-  every `make` invocation (`dev.py:70,175`). There is no `--arch` or
-  `--defconfig` flag on any subcommand, anywhere in this project's tooling.
-- **Kernel upstream precedent for endian-gated Rust support already
-  exists**, independent of this project: `linux-riscv/arch/arm/Kconfig:139`
-  — `select HAVE_RUST if CPU_LITTLE_ENDIAN && CPU_32v7 && !KASAN`. Mainline
-  Rust-for-Linux already treats endianness as a first-class
-  `HAVE_RUST`-gating condition on at least one arch. This is real,
-  load-bearing evidence that the Kconfig layer is the *correct* place to
-  encode "can Rust even be built for this config" — not a novel idea this
-  project would be inventing, but exactly the mechanism upstream already
-  uses for the same kind of question this proposal is asking about (see
-  §3).
-- **rulesdb schema**: `rules` (schema.sql:105), `file_oracle_status`
-  (schema.sql:650), `translated_tus` (schema.sql:143), and
-  `c2rust_rule_conformance` (schema.sql:525) all key on `c_file` (and for
-  `rules`, `rule_id`) with **no arch/config/safety-tier column anywhere**.
-  Every table is implicitly scoped to the one riscv64 config this project
-  has ever built. This is exactly what makes the extension in this
-  section additive rather than a schema rewrite — there is no competing
-  dimension to reconcile, only a dimension to add.
-- **rule 0026 (`arch-override-dead-generic`) is not multi-arch
-  infrastructure** — read in full. It is a single-target (riscv-only)
-  rule for detecting when a generic C function is dead code because
-  `arch/riscv/include/asm/<header>.h` `#define`s the same name and
-  supplies a real riscv implementation (`lib/checksum.c`'s `do_csum`
-  overridden by `arch/riscv/lib/csum.c`). Every validation instance and
-  every constraint in the rule is riscv-specific. This rule would need to
-  be **re-evaluated per additional target arch** if rv32/other arches were
-  added (the override might not exist, or might differ, on a different
-  arch) — it is evidence *for* needing the tracking this plan proposes,
-  not evidence that multi-arch handling already exists.
-
-**Conclusion**: every piece of infrastructure this plan would touch —
-config files, compile_commands generation, schema, Kconfig gates — has
-exactly one instance today. There is no dormant multi-arch scaffolding to
-revive. This changes the practical scope: rv32/big-endian work is new
-build-target bring-up (new defconfig, new `compile_commands.json`, likely
-new c2rust transpile issues never seen because the corpus has never been
-compiled under those flags) BEFORE any tracking-schema question is even
-reachable, not a data-model change over an existing multi-target build.
-
-### Schema extension
-
-Add one new table and one new column, both additive:
-
-```
-translation_targets(
+```sql
+CREATE TABLE translation_targets (
     id INTEGER PRIMARY KEY,
-    arch TEXT NOT NULL,            -- 'riscv', 'riscv32', ... (Kconfig ARCH= value)
+    arch TEXT NOT NULL,            -- Kconfig ARCH= value
     bits INTEGER NOT NULL,         -- 32 | 64
     endian TEXT NOT NULL,          -- 'little' | 'big'
-    defconfig TEXT NOT NULL,       -- path under configs/, e.g. 'riscv64-slim-serial'
-    is_shipping_target INTEGER NOT NULL DEFAULT 0,  -- 1 for the Cynthion path
+    defconfig TEXT NOT NULL,
+    is_shipping_target INTEGER NOT NULL DEFAULT 0,
     added_at TEXT NOT NULL
-)
--- seed row: (riscv, 64, little, riscv64-slim-serial, 1, <today>) — the ONLY
--- row that reflects real, already-built state; every other row is added
--- only when real defconfig/compile_commands work for that target exists,
--- never speculatively pre-populated.
+);
+-- seed: (riscv, 64, little, riscv64-slim-serial, 1, <today>) — only real row.
+-- 3 more rows added only once each has a real defconfig + compile_commands.json:
+-- (riscv, 32, little, ?, 0, ?), (riscv, 64, big, ?, 0, ?), (riscv, 32, big, ?, 0, ?)
+
+ALTER TABLE file_oracle_status ADD COLUMN target_id INTEGER NOT NULL
+    REFERENCES translation_targets(id) DEFAULT 1;
+-- old UNIQUE (c_file, population, tier) -> (c_file, population, tier, target_id)
+-- existing rows backfill to target_id=1 (only config ever checked)
+
+ALTER TABLE rules ADD COLUMN safety_tier TEXT
+    CHECK (safety_tier IN ('unsafe-baseline','safe-lifted','optimised') OR safety_tier IS NULL);
+-- NULL for tier-agnostic rules (fls-family, likely-unlikely, ...); non-NULL
+-- only for 0023/0024/0025 (safe-lift-lock-guard/refcount/aref-ownership)
+
+CREATE TABLE file_safety_tier_status (
+    c_file TEXT NOT NULL,
+    safety_tier TEXT NOT NULL,
+    target_id INTEGER NOT NULL REFERENCES translation_targets(id),
+    oracle_tier INTEGER NOT NULL,  -- PLAN.md's 5-tier oracle, same numbering as file_oracle_status
+    status TEXT NOT NULL,
+    detail TEXT,
+    evidence_ref TEXT,
+    checked_at TEXT NOT NULL,
+    PRIMARY KEY (c_file, safety_tier, target_id, oracle_tier)
+);
+-- separate table, not folded into file_oracle_status: population
+-- (landed_tu/c2rust_corpus) and safety_tier answer different questions --
+-- c2rust only emits unsafe-baseline today, so a shared key would be
+-- mostly-empty cells for every c2rust_corpus row. Join on (c_file, target_id).
 ```
 
-The other 3 rows this table is for, once each is actually built (not
-seeded speculatively, per the row above): `(riscv, 32, little,
-<tbd-defconfig>, 0, <tbd>)`, `(riscv, 64, big, <tbd-defconfig>, 0, <tbd>)`,
-`(riscv, 32, big, <tbd-defconfig>, 0, <tbd>)`. Each requires real,
-separate bring-up work before it's a real row (§2's "greenfield, not
-extension of dormant infra" finding applies to all 3 equally) — a new
-defconfig, a real `compile_commands.json` generated under that config
-(likely surfacing new, never-seen c2rust transpile failures per-target,
-since the corpus has never been compiled under any of these three flag
-sets), and only then does this table's schema become exercised beyond
-its single seed row. `arch/riscv/Kconfig:405`'s `ARCH_RV32I depends on
-NONPORTABLE` (found in §2) is a real, concrete signal that rv32 bring-up
-specifically may need extra care — mainline riscv itself doesn't treat
-rv32 as a fully-supported default path.
+## Kconfig vs rulesdb
 
-`file_oracle_status` gains `target_id INTEGER NOT NULL REFERENCES
-translation_targets(id)`, and its `UNIQUE (c_file, population, tier)`
-constraint becomes `UNIQUE (c_file, population, tier, target_id)`. Every
-existing row backfills to `target_id = 1` (the riscv64-slim-serial seed
-row) — a pure default-value migration, not a data reshape, because every
-row that exists today genuinely was checked only against that one config.
+Kconfig already does build-time gating (proven 5x: `CONFIG_RUST_8250_STARTUP`/`CONFIG_RUST_8250_IRQ`, `drivers/tty/serial/8250/Kconfig:37-72`):
 
-`rules` gains a **nullable** `safety_tier TEXT CHECK (safety_tier IN
-('unsafe-baseline','safe-lifted','optimised') OR safety_tier IS NULL)`
-column — nullable because most existing rules (fls-family, likely-unlikely,
-etc.) are tier-agnostic mechanical transforms that apply regardless of
-which safety tier is being produced; only rules that are *specifically*
-about the safe-lift step (0023/0024/0025 — `safe-lift-lock-guard`,
-`safe-lift-refcount`, `safe-lift-aref-ownership`, already tagged by name if
-not by column) would get a non-null value. This avoids forcing a
-tier classification onto rules where it doesn't apply.
+```kconfig
+config RUST_8250_STARTUP
+	bool "Rust translation of serial8250_do_startup/serial8250_do_shutdown"
+	depends on SERIAL_8250 && RUST
+	default n
+```
 
-A new `file_safety_tier_status` table, structurally parallel to
-`file_oracle_status` (same tier/status/detail/evidence_ref/checked_at
-shape, PLAN.md's oracle tiers still apply *within* each safety-tier
-attempt — a safe-lifted version still needs its own compile/ABI/KUnit/boot
-pass) but keyed on `(c_file, safety_tier, target_id, oracle_tier)` instead
-of `(c_file, population, tier)`. Kept as a **separate table rather than
-folding safety_tier into file_oracle_status's own key**, because
-`population` (`landed_tu` vs `c2rust_corpus`) and `safety_tier`
-(`unsafe-baseline` vs `safe-lifted` vs `optimised`) answer different
-questions — a c2rust-corpus attempt has no meaningful "safe-lifted"
-variant today (c2rust only emits unsafe-baseline output; safe-lifting is
-presently a hand-translation-only step per PLAN Phase 2 step 3) — and
-conflating them into one wide key would create mostly-empty cells for
-every c2rust-corpus row. The two tables join on `(c_file, target_id)`.
+Kconfig has no "verified" concept — only "buildable." rulesdb already has `file_oracle_status`'s highest-tier-passed view. Hybrid: Kconfig gates safety-tier build selection (new `CONFIG_RUST_<SLICE>_SAFE` options, same pattern); rulesdb tracks arch/config + verification evidence. Arch/endian needs no new per-function Kconfig — a kernel image is already arch-specific by construction (`ARCH=` + defconfig), so "does this apply on rv32" is answered by which kernel got built, not a per-function knob.
 
----
+## Multiple candidate translations of one C file
 
-## 3. Kconfig vs rulesdb — hybrid, evidence-based split
+Same C file, several competing Rust candidates (e.g. hand-translated vs c2rust-clean vs a second-pass rewrite) before one is picked canonical. Different axis from safety-tier/target — those assume one candidate per cell; this is N candidates *for* one cell, until pruned to 1.
 
-The proposal asks whether "the linux config system... extended to use a
-data of options" is the right tracking mechanism. Investigated concretely
-against the pattern this project has *already proven in production* five
-times over (8250 Tier B and Tier C slices):
+```sql
+CREATE TABLE translation_candidates (
+    id INTEGER PRIMARY KEY,
+    c_file TEXT NOT NULL,
+    candidate_name TEXT NOT NULL,      -- 'hand', 'c2rust-raw', 'c2rust-v2', ...
+    rs_path TEXT NOT NULL,
+    kconfig_symbol TEXT NOT NULL,      -- 'RUST_KLIST_HAND', 'RUST_KLIST_C2RUST'
+    is_canonical INTEGER NOT NULL DEFAULT 0,
+    added_at TEXT NOT NULL,
+    UNIQUE (c_file, candidate_name)
+);
+-- file_safety_tier_status / file_oracle_status rows key on (c_file, ...) today;
+-- add candidate_id so a candidate keeps its own verification history --
+-- switching the picked candidate must not discard the losing one's evidence.
+ALTER TABLE file_oracle_status ADD COLUMN candidate_id INTEGER
+    REFERENCES translation_candidates(id);
+```
 
-**What real Kconfig already does here, precisely** (`linux-riscv/drivers/
-tty/serial/8250/Kconfig:37-72`): `CONFIG_RUST_8250_STARTUP` and
-`CONFIG_RUST_8250_IRQ` are real, working `depends on SERIAL_8250 && RUST`
-options that gate whether a *specific translated slice* is wired into the
-live `.startup`/`.shutdown`/IRQ call sites, independently of the base
-`CONFIG_RUST` gate that already covers Tier A/B translations in the same
-file. This is exactly "this translation applies under these conditions,"
-already working, already used to A/B two variants (C-path vs Rust-path)
-of the *same* driver against each other via a real config toggle. This is
-strong, direct precedent that Kconfig is a proven mechanism for "can this
-translated slice be built into this exact kernel image, gated on real
-kernel-level dependencies (`SERIAL_8250`, `RUST`, and by extension
-`HAVE_RUST`/`RUSTC_SUPPORTS_RISCV` for arch gating, `CPU_LITTLE_ENDIAN` for
-endian gating per `arch/arm/Kconfig:139`'s existing upstream precedent)."
+Kconfig side — a `choice` block, same mechanism as `RUST_8250_STARTUP`, one symbol per candidate, mutually exclusive:
 
-**What real Kconfig cannot do**, by its own nature: it has no concept of
-"verified" versus "merely compiles," no historical record (Kconfig
-represents *current* buildable state, not "was this checked against a
-KUnit differential three days ago and did it pass"), and no query surface
-beyond "is this option set for this build" — nothing like
-`file_oracle_summary`'s "highest tier passed" view, nothing like
-`c2rust_rule_violations_summary`'s "which rules are broken right now,
-ranked by files affected." `rulesdb/patterns.db` already solves exactly
-this class of problem for the existing 5-tier oracle, and the schema
-extension in §2 is a direct, structurally consistent extension of that
-same mechanism to the new safety-tier/target axes.
+```kconfig
+choice
+	prompt "klist.c Rust translation source"
+	depends on RUST
+	default RUST_KLIST_C2RUST
 
-**Three options evaluated**:
+config RUST_KLIST_HAND
+	bool "hand-translated"
 
-**(a) Extend rulesdb's TOML+SQLite tracking only, no new Kconfig options.**
-Would mean safety-tier/arch selection has no real build-time switch — a
-"safe-lifted, verified-on-rv32" function would still need *some* mechanism
-to actually get built that way, which rulesdb alone doesn't provide (it's
-a record of what happened, not a build-system input). Rejected as
-incomplete: the proposal explicitly wants configs that can be selected and
-built, and rulesdb has no compile-time effect on its own.
+config RUST_KLIST_C2RUST
+	bool "c2rust-generated"
 
-**(b) Extend real kernel Kconfig only, no rulesdb involvement.** Would mean
-every safety-tier/target combination needs its own `CONFIG_RUST_<slice>_
-<TIER>_<ARCH>`-style option, and "what's been attempted and verified, with
-what evidence" would have to be reconstructed by scanning Kconfig files
-and cross-referencing boot logs by hand — exactly the "scattered across
-multiple sources with no single relational answer" problem
-`sync_file_oracle_status.py`'s own module docstring already names as the
-reason `file_oracle_status` was built in the first place (2026-07-18).
-Rejected: this throws away a real, working, already-paid-for piece of
-infrastructure to solve a problem it already solves.
+endchoice
+```
 
-**(c) Hybrid — real Kconfig for build-time selection, rulesdb for the
-queryable historical/verification record. Recommended.** These are not
-competing designs; they answer different questions and the existing
-`CONFIG_RUST_8250_STARTUP` precedent already demonstrates the split in
-practice: the Kconfig option is what makes the Rust path *buildable and
-toggleable*; the boot-transcript comparison, KUnit results, and landing
-doc (`docs/8250-tier-c-startup-shutdown-2026-07-18.md`) are what make it
-*verified*, and that evidence lives in prose + `HISTORY.md` today
-precisely because `file_oracle_status` didn't yet have a slot for
-"function-level, not whole-file, verification" — a gap this plan's
-`file_safety_tier_status` table (§2) closes, using the *same* evidence_ref
-pattern (`file_oracle_status.evidence_ref` already points at "a boot-log
-path, a commit hash, a GitHub issue/comment URL" — reuse verbatim).
+`Makefile` picks the object per selected symbol, same pattern as any other `CONFIG_*`-gated source file — no new build mechanism, just one `choice` per multi-candidate file instead of a plain `bool`. Promoting a candidate to canonical: flip `is_canonical`, change `default` in the `choice` block, leave the losing candidate's row and Kconfig symbol in place (still selectable, still has its evidence) rather than deleting it — matches this project's "never discard, flag `needs_reverification`" stance on drift elsewhere in this doc.
 
-**Naming convention for new Kconfig options**, extending the proven
-pattern: `CONFIG_RUST_<SLICE>` (existing, unsafe-baseline, already the
-default meaning of plain `CONFIG_RUST`-gated code) → `CONFIG_RUST_<SLICE>_
-SAFE` for a safe-lifted variant, wired as an alternative arm (not
-simultaneous — a given kernel image runs one variant of a given function),
-`depends on RUST_<SLICE> `. Arch/config selection does not need new
-per-slice Kconfig options at all — it's already load-bearing at the
-`ARCH=` / `HAVE_RUST` / defconfig level (confirmed real precedent,
-`arch/arm/Kconfig:139`'s endian gate); a given kernel image is already
-arch/config-specific by construction, so "does this apply on rv32" is
-answered by "was this kernel even built with `ARCH=riscv` + `ARCH_RV32I`,"
-not by an additional per-function Kconfig knob. Only the safety-tier
-axis needs new options, because — unlike arch, which is fixed for an
-entire kernel build — safety tier is a per-slice choice within one build
-(mirroring exactly how `CONFIG_RUST_8250_STARTUP` already coexists with
-plain `CONFIG_RUST` inside one driver).
+## Kernel-version drift
 
----
+No content-hash exists anywhere (`c2rust_rev`/`corpus_rev` are git-revision strings, not per-file hashes; `sync_file_oracle_status.py`'s own docstring admits tiers 2/3 have no persisted record at all).
 
-## 4. Surviving kernel version updates — the real, currently-unsolved gap
+```sql
+ALTER TABLE file_oracle_status ADD COLUMN c_source_sha256 TEXT NOT NULL;
+ALTER TABLE file_safety_tier_status ADD COLUMN c_source_sha256 TEXT NOT NULL;
+-- new status value: 'needs_reverification'
+```
 
-Confirmed absent by both direct schema read and independent subagent
-sweep: no column anywhere carries a content hash, and no script diffs a
-translated file's C source against what it looked like at verification
-time. `sync_file_oracle_status.py` tracks recency only via `c2rust_rev`/
-`corpus_rev` **git revision strings** (which revision of the fork/corpus a
-check ran against) and admits directly in its own docstring
-(`sync_file_oracle_status.py:15-21`) that tiers 2 and 3 have "no persisted
-per-file record anywhere in this codebase" at all — this project's own
-tooling already documents that even *current*-kernel state isn't fully
-tracked yet, before any rebase question is introduced. This is a real,
-distinct problem from the safety-tier/arch tracking above, and needs its
-own mechanism:
+On kernel-tag bump: recompute each tracked file's hash. Match → evidence still valid. Mismatch → flag `needs_reverification`, keep old evidence queryable, never silently trust or drop it. Surface as a dashboard queue (extend `docs/status/dashboard.html`'s existing generation, same pattern as `work_items_active`).
 
-**Proposed mechanism**: add `c_source_sha256 TEXT NOT NULL` to both
-`file_oracle_status` and the new `file_safety_tier_status` table — the
-SHA-256 of the exact C source file content at the moment a tier check was
-recorded (not the whole TU's preprocessed form, just the literal file
-bytes; cheap, deterministic, no libclang dependency for the check itself).
-On every kernel-tag bump (`scripts/sync_linux_kernel.py` already exists
-for this — its current job is presumably pulling the new pinned tag, not
-yet drift detection):
+## Pipeline: cheap vs expensive per axis
 
-1. For every `c_file` with existing oracle rows, recompute the current
-   hash of that file at the new tag.
-2. If it matches the stored `c_source_sha256`, the existing verification
-   evidence is still valid — no re-check needed, no row changed.
-3. If it differs, **do not silently keep the old status**: flag the row
-   (`status = 'needs_reverification'`, a new status value alongside the
-   existing `pass | fail | not_attempted | not_applicable`) rather than
-   either trusting stale evidence or deleting history. The row's evidence
-   stays queryable (what did we verify before, against what old hash) —
-   `sync_file_oracle_status.py`'s existing "never guess backward, mark
-   not_attempted rather than assume" discipline (already the documented
-   policy for backfilling tiers 2/3, `sync_file_oracle_status.py:15-21`)
-   extends naturally to "never assume forward" across a rebase too.
-4. A dashboard view (`docs/status/dashboard.html` already exists and is
-   generated from `patterns.db`; extend it, don't build a new one) surfaces
-   "N files need re-verification after the vX.Y bump" as its own queue,
-   analogous to the existing `c2rust_rule_violations_summary` /
-   `work_items_active` "what's actionable right now" views.
-
-This is a bounded, mechanical addition (one column, one new status value,
-one new view, a hash-check step added to whatever script currently handles
-the kernel-tag bump) — not a new subsystem. It directly closes a gap this
-project's own tooling already flagged as unsolved, independent of whether
-the safety-tier/arch tracking in §1-3 is pursued at all.
-
----
-
-## 5. What the pipeline actually needs to run — same translation vs genuinely different translation
-
-Distinguishing, concretely, what varies by *build config* (cheap, same
-underlying translation) from what requires a *genuinely separate*
-translation attempt (real new rulesdb-tracked output):
-
-**Arch/endian/bit-width variants — same translation, different build
-config, IF the C source's behavior doesn't itself branch on the config.**
-`c2rust`/hand-translation both consume a `compile_commands.json` whose
-per-TU entries already carry the exact `-march`/`-mabi`/`-D__riscv_xlen=`
-etc. flags for one arch/config (today, always the one riscv64-slim-serial
-config — confirmed in §2, there's no second one to compare against yet).
-Running the identical translation logic against a `compile_commands.json`
-regenerated for a different `defconfig`/`ARCH=` is mechanically cheap: the
-vendored `gen_compile_commands.py` tool already does this per-tree, so a
-second target just means a second tree checkout + defconfig + that same
-vendored generator run again — no new project code needed for the
-generation step itself. What's NOT cheap or automatic: **this project's
-own first translated TU (`lib/math/gcd.c`, §"Zbb static-key" in
-`docs/phase2-first-translation.md`) is direct, already-proven evidence
-that identical C source can have config-dependent *live* code paths**
-(`arch/riscv/kernel/setup.c` disables `efficient_ffs_key` when the CPU
-lacks the Zbb extension — the QEMU virt target hits the "dead" fallback
-path as its actual live path). This means an arch/config variant is not
-just "recompile the same AST-shape with different flags" in general — the
-oracle (tiers 2-4, KUnit differential and boot) must be **re-run per
-target config**, because a rule validated as correct on one config's live
-path can be silently exercising a different code path (or none at all) on
-another. Rule 0026 (`arch-override-dead-generic`) is the sharper version
-of this same risk: a function's C body might not even be *compiled* for a
-different arch at all (generic code overridden by an arch-specific
-implementation) — this must be re-checked per target arch, not assumed
-stable, and the `file_oracle_status`/`file_safety_tier_status` extension
-in §2 (keyed per `target_id`) is specifically designed to make "verified
-on config X, not yet checked on config Y" a queryable, correct default
-rather than an accidental false-positive carry-forward.
-
-**Safe-vs-unsafe — genuinely different translation output, tracked as a
-separate rulesdb dimension regardless of build config.** This is not a
-compiler-flag difference: PLAN.md's own three-class unsafe policy
-(Intrinsically unsafe / Temporarily unsafe / Safe logic) and Phase 2 step
-3's "attempt a second version lifted onto Rust-for-Linux `kernel` crate
-abstractions (locks→`Guard`, refcounts, `pr_*`)" describe a **different
-translation strategy** — different target types, different rule set
-(0023/0024/0025's `safe-lift-*` rules specifically, versus the mechanical
-rules like 0002/0006/0007 that apply to any tier), producing genuinely
-different Rust source, not the same AST run through a different backend
-flag. c2rust itself has **no safe-lift capability at all today** — it only
-emits Stage-1 literal-unsafe output (confirmed via `docs/python-
-transpiler-rewrite-scoping-2026-07-18.md`'s full audit of
-`c2rust-transpile`'s 31,600 lines: nothing in its scope touches
-`kernel`-crate abstraction selection). This means "safe-lifted" is
-presently a **hand-translation-only** lane (consistent with §2's decision
-to keep `file_safety_tier_status` separate from the `population` axis
-already covering `c2rust_corpus` vs `landed_tu`), and the pipeline
-component that "attempts the safe version" is not a c2rust flag but a
-distinct translation pass invoked per already-landed unsafe-baseline file,
-exactly as Phase 2 step 3 already specifies.
-
-**What this means for "a pipeline that looks at what needs to be done that
-supports all 3"**: the work queue is a genuine cross product, but the two
-axes have very different attempt costs:
-
-| | cheap to attempt (same logic, new flags) | expensive to attempt (new translation work) |
+| | cheap (same logic, new flags) | expensive (new translation work) |
 |---|---|---|
-| **safety tier** | — | unsafe→safe-lifted (Phase 2 step 3), safe-lifted→optimised (Phase 2.5, pure-leaf gated) |
-| **target config** | re-run oracle tiers 2-4 against a new `compile_commands.json` IF the arch/config already has a working defconfig + boots | stand up a brand-new defconfig + first successful boot (§2: **this is where rv32/big-endian work actually starts** — there is no existing defconfig to reuse) |
+| safety tier | — | unsafe→safe-lifted (hand-translation only; c2rust emits unsafe-baseline exclusively, confirmed via `docs/python-transpiler-rewrite-scoping-2026-07-18.md`'s full crate audit) |
+| target config | re-run oracle tiers 2-4 against new `compile_commands.json`, IF a working defconfig+boot exists | stand up a new defconfig + first boot (rv32/BE start here — nothing to reuse) |
 
-A practical work-item generator (extending `sync_work_items.py`'s existing
-`work_items` table, not a new mechanism) would query: for every landed
-`unsafe-baseline` file at `target_id=1` (today's only real target), is
-there a `safe-lifted` attempt recorded? If not, queue it (Phase 2 step 3,
-real work, independent of arch). Separately: is there a second `target_id`
-row at all? If not, standing one up (new defconfig, new boot) is its own
-P-ranked work item, prior to and independent of any per-file translation
-question — exactly matching §2's finding that arch bring-up is
-greenfield, not a schema question.
+Arch variants are NOT always just a recompile: `lib/math/gcd.c`'s Zbb static-key (`docs/phase2-first-translation.md`) shows identical C can exercise a different live path per config. Rule 0026 (`arch-override-dead-generic`) shows a function's body may not even compile for a different arch. Both require re-running oracle tiers 2-4 per target, not assuming carry-forward — this is why `target_id` is part of the key, not a global flag.
 
----
+Work-item generation (extend `sync_work_items.py`): for each `unsafe-baseline` file at `target_id=1`, no `safe-lifted` row → queue Phase 2 step 3 work. No second `target_id` row at all → queue arch bring-up (defconfig + boot), independent of any per-file question.
 
-## What this plan does NOT do
+## Not done here
 
-- Does not modify `rulesdb/schema.sql`, any `rulesdb/rules/*.toml` file, or
-  any Kconfig file — schema/column changes above are proposed DDL, not
-  applied.
-- Does not stand up an rv32 or big-endian defconfig, or attempt any build
-  under one — §2 establishes this is real, separate, greenfield bring-up
-  work, prioritized and scheduled independently of the tracking-schema
-  question this plan answers.
-- Does not implement the safe-lift translation pass itself (Phase 2 step 3
-  remains the owning phase for that work) — this plan defines how its
-  results get tracked, not how the lift is performed.
-- Does not build the hash-based drift-detection script from §4, define its
-  exact CLI, or wire it into `sync_linux_kernel.py` — the column/status/
-  view design is specified; the implementation is a follow-up work item.
+Schema/Kconfig not applied. No rv32/BE defconfig stood up. Safe-lift translation pass not implemented (Phase 2 step 3 owns that). Drift-detection script not written (column/status design only).
 
-## Relationship to the exhaustiveness-checking finding
+## Why safe-lift still needs full oracle re-verification
 
-`docs/python-transpiler-rewrite-scoping-2026-07-18.md`'s finding — that
-this crate's real historical bugs are dominated by unchecked map/graph
-lookups and wildcard-arm matches that already defeat Rust's exhaustiveness
-checking, not missing-enum-variant bugs — bears directly on how much
-weight the safety-tier axis should carry in the tracking design. It means
-the `unsafe-baseline → safe-lifted` step is not primarily a "the compiler
-will catch what's wrong" safety net; the compiler already wasn't catching
-this project's actual bug class even in the existing all-Rust
-`c2rust-transpile` codebase. What safe-lifting actually buys, concretely,
-is captured by PLAN's own three-class unsafe policy: replacing raw
-pointer/locking code with `kernel`-crate types (`Guard`, `Arc`,
-`refcount`) closes the **unchecked-lookup and use-after-free/data-race**
-bug classes the scoping doc found dominant — not by adding exhaustiveness
-checking (already present and already insufficient on its own), but by
-making the specific "dereference a pointer that might not be valid,"
-"read a counter without the lock that protects it" shapes fail to compile
-at all. This is why `file_safety_tier_status` (§2) records safety tier
-**and** oracle tier together per row, rather than treating "safe-lifted"
-as a boolean upgrade flag: a safe-lifted function still needs its own
-independent tier 2-4 verification, because the safety lift changes *which*
-bug classes are structurally prevented, not whether verification is still
-required — consistent with this project's standing "the oracle certifies
-equivalence, never assumed correctness from representation alone" rule
-(README.md, "Translation discipline: faithful, not clever").
+`docs/python-transpiler-rewrite-scoping-2026-07-18.md`: this project's real historical bugs are unchecked map/graph lookups and wildcard-arm matches — Rust's exhaustiveness checking already doesn't catch this project's actual bug class, even inside c2rust-transpile's own all-Rust code. Safe-lifting's real value (PLAN's unsafe-class policy: raw pointers/locking → `Guard`/`Arc`/refcount types) is eliminating use-after-free/data-race shapes structurally, not adding compile-time exhaustiveness. `file_safety_tier_status` records `(safety_tier, oracle_tier)` together, not a boolean "upgraded" flag — a safe-lifted function still needs its own tier 2-4 pass, per README.md's "oracle certifies equivalence, never assumed correctness from representation alone."
