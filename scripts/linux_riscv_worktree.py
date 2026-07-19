@@ -55,6 +55,7 @@ LOG = REPO / "tmp" / "linux_riscv_worktree.log"
 
 LINUX_MAIN = REPO / "linux"
 WORKTREES_DIR = REPO / "linux-riscv-worktrees"
+SEED_CONFIG = REPO / "linux-riscv" / ".config"
 
 
 def sh(cmd, cwd=None, check=True):
@@ -78,10 +79,35 @@ def create(name: str, base: str) -> int:
         logging.error("worktree add failed: %s", r.stderr.strip())
         return 1
     logging.info("created %s on branch %s (from %s)", target, branch, base)
-    print(f"OK: {target}  (branch {branch})")
-    print("NOTE: this worktree has git history only — no build artifacts. "
-          "Build a kernel image in it before boot-testing (see this "
-          "project's dev.py build equivalent, pointed at this tree).")
+
+    # awto-au/linux-rs#33: a bare `git worktree add` carries no .config
+    # (git worktrees share history, never build artifacts). The first
+    # `dev.py config -e ...` + olddefconfig against an empty .config
+    # falls back to Kconfig defaults for EVERYTHING, including
+    # CONFIG_RUST itself — `dev.py build` then reports "BUILD OK" for a
+    # genuinely successful but silently Rust-free vmlinux. Seed a known
+    # CONFIG_RUST=y config so that trap requires an explicit opt-out
+    # (deleting the seeded .config) rather than being the default path.
+    if SEED_CONFIG.exists():
+        import shutil
+        shutil.copy2(SEED_CONFIG, target / ".config")
+        logging.info("seeded .config from %s", SEED_CONFIG)
+        print(f"OK: {target}  (branch {branch}, .config seeded from linux-riscv/.config)")
+    else:
+        logging.warning("no seed .config at %s — new worktree has NONE; "
+                         "the first `dev.py config -e` will fall back to Kconfig "
+                         "defaults, which sets CONFIG_RUST off (see linux-rs#33)", SEED_CONFIG)
+        print(f"OK: {target}  (branch {branch})")
+        print("WARNING: no .config seeded (none found at linux-riscv/.config). "
+              "Copy a known-good CONFIG_RUST=y .config in before the first "
+              "`dev.py config -e` — see linux-rs#33.")
+
+    print("NOTE: this worktree has git history only — no other build artifacts "
+          "(vmlinux, compiled objects). Build a kernel image in it before "
+          "boot-testing (see this project's dev.py build equivalent, pointed "
+          "at this tree). After building, verify Rust actually linked in: "
+          "`llvm-nm vmlinux | grep <an expected *_rs symbol>` — a Rust-free "
+          "build still reports BUILD OK (linux-rs#33).")
     return 0
 
 
