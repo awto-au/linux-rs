@@ -2356,3 +2356,410 @@ a strip-the-line fix, resolved by a C-shim split rather than an
 in-place Rust edit — the first file in the series needing one) and the
 `-1 as usize` literal-syntax break in a `__builtin_object_size`
 dead-branch translation.
+
+## Nineteenth candidate: `lib/fonts/fonts.c`
+
+Worktree `combined-c2rust-boot-20`, branch `agent-combined-c2rust-boot-20`,
+based on `linux-rs/phase2-gcd`. Target: all 6 `EXPORT_SYMBOL_GPL`
+functions (`font_data_import`, `font_data_get`, `font_data_put`,
+`font_data_size`, `font_data_is_equal`, `font_data_export`) plus the 2
+plain-`EXPORT_SYMBOL` functions (`find_font`, `get_default_font`), 90
+statements (`dev.py readiness "lib/*.c"`) — the font-registry
+lookup/dispatcher, not glyph bitmap data. Confirmed by inspection:
+`fonts.c` only holds refcounted-font-data helpers and the
+`find_font()`/`get_default_font()` lookup logic over a
+`static const struct font_desc *fonts[]` array of `extern` pointers;
+the actual glyph bitmaps live in separate per-font TUs
+(`font_8x8.c`, `font_8x16.c`, etc., selected by `lib/fonts/Makefile`'s
+`font-$(CONFIG_FONT_*)` lines) that stay plain C, untouched by this
+run — this worktree's `.config` only enables `CONFIG_FONT_8x16`
+(`CONFIG_FONT_AUTOSELECT=y` default), so the c2rust baseline's
+`fonts[]` array has exactly one entry (`&font_vga_8x16`, an `extern`
+symbol resolved at link time against `font_8x16.o`), matching the real
+kernel build's preprocessor output exactly. c2rust binary verified
+fresh via `dev.py c2rust-build` before starting; baseline transpile
+already present at `tmp/c2rust-baseline/lib_fonts_fonts.c/output/src/fonts.rs`
+(4388 lines), not re-run.
+
+`python3 scripts/dev.py check-register-statics` run first per rule
+0031: 263 files with the fabricated static, 0 live, 263 dead/safe —
+`lib_fonts_fonts.c` in the dead/safe set, corroborated by grep: no
+`get_current()` accessor synthesized anywhere in the TU (this file
+never touches current-task state). Scanned separately for `-1 as
+usize` (issue #38): none present — `check_mul_overflow`/
+`check_add_overflow` already translate via the i128-overflow-check
+idiom, not the old dead-branch literal.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile` untouched — `lib/fonts/Makefile`'s
+`font-y := fonts.o` was already a standalone single-item assignment
+(no bundled-line extraction needed, unlike most prior files), swapped
+for an `ifdef CONFIG_RUST_C2RUST_BOOT_TEST` / `else` selecting
+`fonts_rs.o` vs `fonts.o`.
+
+### Cleanest baseline output of the series — zero `#![feature(...)]`, zero `.init_array`, zero RISC-V asm
+
+No `#![feature(...)]` line at all (no `asm`, `extern_types`,
+`raw_ref_op`, `strict_provenance`, or `label_break_value` — the first
+file in the series with none of these), no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick, no `::libc::` calls, no
+RISC-V inline asm (`amocas`/`amoswap`/`cmpxchg` all absent — this file
+does no atomics). Only 3 known classes recurred, all mechanical:
+
+1. **`#[export]` -> `#[no_mangle]`.** The 6 `EXPORT_SYMBOL_GPL`
+   functions carried `#[export]` (`use ::macros::export;` import);
+   dropped the attribute, added `#[no_mangle]`, deleted the now-unused
+   import — the `rcuref.c`-established two-part fix. `find_font`/
+   `get_default_font` (plain `EXPORT_SYMBOL`) already carried
+   `#[no_mangle]` correctly in the raw output, confirming c2rust's
+   `EXPORT_SYMBOL` vs `EXPORT_SYMBOL_GPL` -> `#[no_mangle]` vs
+   `#[export]` split is consistent across files.
+2. **`kernel::warn_on!(cond) != 0`.** 2 sites (`font_data_get`,
+   `font_data_put`, both guarding `WARN_ON(!REFCOUNT(fd))`), fixed by
+   dropping `!= 0`, same as every prior file with this class.
+3. **Register-variable pseudo-globals.** `riscv_current_is_tp`/
+   `current_stack_pointer` fabricated as usual (`asm/current.h` pulled
+   in transitively via `task_struct`'s header chain, despite this file
+   never calling `get_current()`); grep-confirmed zero references
+   anywhere in the TU beyond the fabricated declarations themselves,
+   deleted outright.
+
+`BitfieldStruct` opaquing: the standard 6-struct set (`task_struct`,
+`mmap_action`, `kobject`, `kernfs_open_file`, `signal_struct`,
+`sched_dl_entity`) recurred, pulled in transitively via the same
+`task_struct` header chain as `riscv_current_is_tp`. Grep-confirmed
+dead-by-value throughout (only ever `*mut task_struct` on the deleted
+fabricated static, `sched_dl_entity`/`mmap_action` embedded by value
+inside `task_struct` only) — same collapse-to-dead-by-construction
+shape `bust_spinlocks.c`/`glob.c`/`seq_buf.c` established. Unlike prior
+files, this baseline had no pre-existing `extern "C" { pub type X; }`
+opaque block to fold into (no `#![feature(extern_types)]` at all), so
+the `opaque_marker!` macro group was declared fresh and each struct's
+full derive+body was replaced in place with a single
+`opaque_marker!(Name);` invocation — the standard idiom, just applied
+to a from-scratch struct body rather than an existing opaque-extern
+block.
+
+One c2rust idiom noted but requiring no fix: `num_fonts` (from C's
+`#define num_fonts ARRAY_SIZE(fonts)`) translates to
+`size_of::<[*const font_desc; N]>() / size_of::<*const font_desc>() +
+size_of::<ZST>()`, where the `ZST` (`C2Rust_Unnamed_82`/`_83`, empty
+`#[repr(C)]` structs) is c2rust's translation of `ARRAY_SIZE`'s
+`__must_be_array()` compile-time type-check tag — `size_of::<ZST>()`
+is always 0, a semantically inert addend. Compiles and links cleanly
+as-is; not a gap, just an unusual-looking artifact worth noting for
+future files using `ARRAY_SIZE`.
+
+### Outcome: clean boot, fewest fix classes of any file so far
+
+- `make ARCH=riscv LLVM=1 lib/fonts/fonts_rs.o` — clean, 0 errors (1875
+  warnings, all missing-doc/FFI-safety lints, pre-existing pattern —
+  the `kmalloc_token_t` zero-sized-struct `improper_ctypes` warnings on
+  2 kmalloc-family extern params are the same cosmetic false positive
+  every prior file's `extern "C"` blocks already carry).
+- `dev.py build` (`LINUXRS_TREE=linux-riscv-worktrees/combined-c2rust-boot-20`)
+  succeeds, `arch/riscv/boot/Image`/`Image.xz` produced. `lib/fonts/
+  built-in.a` confirmed via `llvm-ar t` to contain `fonts_rs.o` and
+  `font_8x16.o` (the untouched plain-C glyph-bitmap TU), not
+  `fonts.o`.
+- `llvm-nm vmlinux`: all 8 functions `T` (`ffffffff8018506a T
+  find_font`, `ffffffff8018509e T font_data_export`, `ffffffff80185150
+  T font_data_get`, `ffffffff8018517c T font_data_import`,
+  `ffffffff8018527a T font_data_is_equal`, `ffffffff801852ca T
+  font_data_put`, `ffffffff8018530e T font_data_size`,
+  `ffffffff80185322 T get_default_font`); `riscv_current_is_tp`/
+  `current_stack_pointer` absent from `vmlinux` entirely (empty grep).
+- `dev.py boot --run-id combined-c2rust-boot-20`: boots clean, **17/17
+  KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 `not ok`),
+  `INIT REACHED (initramfs userspace boot verified)`, no panic/oops/
+  BUG/WARN in the log (only "panic" match is the `panic=-1` boot
+  argument). Archived at
+  `docs/status/boot-logs/20260719T173653+1000-combined-c2rust-boot-20.log`.
+  Boot-history row committed/pushed automatically by `dev.py boot`
+  (`96bf58b`). No dedicated font-registry KUnit suite exists in this
+  kernel config, so `font_data_import`/`find_font`/`get_default_font`'s
+  actual lookup/refcounting logic wasn't runtime-exercised by this run
+  (same caveat as every prior file without a dedicated enabled suite)
+  — this run demonstrates the dispatcher links and boots correctly
+  alongside the untouched plain-C bitmap TU, not that the font-lookup
+  logic itself matches the C reference for known inputs.
+
+Needed the fewest distinct fix classes of any file in the series so
+far (3: `#[export]`, `warn_on! != 0`, register-static deletion, plus
+`BitfieldStruct` opaquing) and zero genuinely new gap classes — every
+class that fired was already in the established playbook, and several
+whole categories that have hit most prior files (feature-gate
+stripping, `.init_array`, RISC-V inline-asm, `::libc::`) didn't fire at
+all here. Confirms the task's working hypothesis directly: `fonts.c` is
+pure registry/dispatcher logic with no embedded bitmap data of its own
+— the actual glyph arrays live in separate, still-plain-C translation
+units this run left untouched, and the dispatcher itself needed only
+mechanical, already-cataloged fixes to link and boot alongside them.
+
+## Seventeenth candidate: `lib/kfifo.c`
+
+Worktree `combined-c2rust-boot-19`, branch `agent-combined-c2rust-boot-19`,
+based on `linux-rs/phase2-gcd`. Target: lock-free circular-buffer FIFO,
+264 statements, largest file of the series by a wide margin (previous
+largest was `seq_buf.c` at 119). c2rust binary rebuilt via `dev.py
+c2rust-build` immediately before starting (rev `1f8c61cf2`, newer than
+`6065eaf19` cited in the `seq_buf.c` section — confirms fresh master,
+no repeat of the stale-worker-binary false alarm from awtoau/c2rust#26).
+Fresh transpile via `investigate_c2rust_failure.py --rerun`:
+`outcome=clean`, byte-identical (`diff -q`) to the pre-existing
+`tmp/c2rust-baseline/lib_kfifo.c/` output.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n), independent of every other worktree's copy.
+`lib/Makefile`: `kfifo.o` pulled out of the bundled `obj-y +=
+debug_locks.o random32.o ... bsearch.o lwq.o kfifo.o ...` line, swapped
+for a conditional `kfifo_rs.o`/`kfifo.o` pair under the new config, same
+shape as `bust_spinlocks.c`/`debug_locks.c`'s split out of the same
+bundled line. Also enabled `CONFIG_KFIFO_KUNIT_TEST=y` (off by default,
+gated on `KUNIT_ALL_TESTS` which is off in this project's `.config`) to
+actually exercise the translated logic at runtime, not just link it —
+`lib/tests/kfifo_kunit.c` is a real dedicated KUnit suite calling
+`kfifo_put`/`kfifo_in`/`kfifo_out`/`kfifo_peek`/`kfifo_alloc` through the
+public macro layer.
+
+`python3 scripts/dev.py check-register-statics` run first per rule
+0031: 0 live corpus-wide (265 dead, 0 live) — confirms issue #22's fix
+eliminated every previously-live case as the brief predicted; no
+regression. `lib_kfifo.c` in the dead/safe set, corroborated by grep (0
+`get_current()` accessors in the TU). Both fabricated statics deleted
+outright. Grep for `-1 as usize`: zero hits — confirms issue #38's fix
+covers this TU too (its one `__builtin_object_size` dead branch,
+inherited via `check_copy_size()`, already emits
+`(1 as usize).wrapping_neg()`), no regression.
+
+**Index/wraparound arithmetic — the file-specific risk flagged going
+in — was already fully correct in the raw c2rust output.** Read every
+one of the 17 `EXPORT_SYMBOL`'d functions plus their `kfifo_copy_in`/
+`kfifo_copy_out`/`kfifo_copy_from_user`/`kfifo_copy_to_user`/
+`setup_sgl`/`__kfifo_peek_n`/`__kfifo_poke_n` helpers end to end:
+every `fifo->in`/`fifo->out` `+=`/`-=`/comparison (the deliberately
+wrapping-past-`UINT_MAX` counters `kfifo_unused()`'s header comment and
+`include/linux/kfifo.h`'s mask-based indexing rely on) is already
+`wrapping_add`/`wrapping_sub` in the generated Rust, including the
+record-mode (`_r` suffix) functions' `len + recsize` additions. This is
+rule 0009 (`is_unsigned_integral_type()` → `wrapping_*`) doing exactly
+what it's for — `in`/`out`/`mask`/`size`/`len`/`recsize` are all
+`unsigned int` or `size_t` in the C source, so every site lands on the
+already-covered unsigned path, not the signed gap scoped in
+`docs/overflow-wraparound-detection-scoping-2026-07-19.md`. No
+`refcount_t`/`__refcount_add`/`__refcount_sub_and_test` pattern present
+either (`grep` confirms zero — this TU doesn't pull in `refcount.h`'s
+counter logic). **Not the same bug class as #36/#39 recurring, and not
+a new class** — simply a file where every arithmetic site happened to
+already be unsigned-typed, so the existing fix fully covers it.
+Confirmed at runtime too: booted clean with `KFIFO_KUNIT_TEST=y`, all
+10 `kfifo` KUnit cases pass, zero panics.
+
+Two known gap classes recurred: `kernel::warn_on!(bytes > ...) != 0` in
+`check_copy_size()` (the one `warn_on!` call site in this TU), fixed by
+dropping `!= 0`, same as `rcuref.c`/`errseq.c`/`seq_buf.c`; the
+resulting unused `use ::kernel::warn_on;` import (macro invoked fully
+qualified as `kernel::warn_on!`) dropped, same dead-import class
+`debug_locks.c`/`seq_buf.c` established. 7 dead `BitfieldStruct`-derived
+structs pulled in transitively via `task_struct`'s header chain
+(`task_struct`, `mmap_action`, `kobject`, `kernfs_open_file`,
+`percpu_ref_data`, `signal_struct`, `sched_dl_entity` — same set
+`test_sort.c` hit plus `kobject`/`kernfs_open_file`) — grep-confirmed
+zero references to any of the 7 inside this TU's actual function bodies
+(`kfifo_unused` through `__kfifo_dma_out_prepare_r`), whole chain dead
+by construction same as `bust_spinlocks.c`/`test_sort.c` established,
+all 7 converted to the standard `opaque_marker!` idiom in one macro
+invocation. No `#[export]`/`::macros::export` (already plain
+`#[no_mangle]` on all 17 functions, matching the newer-generation
+pattern `test_sort.c`/`seq_buf.c` also showed). No `#![feature(...)]`
+line. `__riscv_has_extension_likely`'s asm-goto arch-extension fallback
+(issue #34) present in `variable__fls`/`variable_fls` (pulled in via
+`fls_long`/`__ilog2_u32` from `roundup_pow_of_two()`) and already
+correctly resolved — no `asm goto` gap, matching the already-fixed
+pattern.
+
+### Outcome: clean boot + full KUnit suite pass, seventeenth file to clear the bar, largest file of the series so far
+
+- `make ARCH=riscv LLVM=1 lib/kfifo_rs.o` — clean, 0 errors (2015
+  warnings, all missing-doc lints, pre-existing pattern).
+- `dev.py build` succeeds, `arch/riscv/boot/Image` produced.
+  `lib/kfifo.o` correctly never built (no `.kfifo.o.cmd` present in this
+  worktree).
+- `llvm-nm vmlinux`: all 17 `EXPORT_SYMBOL`'d functions `T` (defined),
+  e.g. `ffffffff8015fee4 T __kfifo_alloc_node`,
+  `ffffffff80160320 T __kfifo_in`, `ffffffff801605ee T __kfifo_out`.
+  `riscv_current_is_tp`/`current_stack_pointer` absent from `vmlinux`
+  entirely (0 occurrences).
+- `dev.py boot --run-id combined-c2rust-boot-19`: boots clean, **18/18
+  KUnit suites pass** (one more suite than the series' usual 17 — the
+  newly-enabled `kfifo` suite at position 15, `# kfifo: pass:10 fail:0
+  skip:0 total:10`), 0 `not ok`, `INIT REACHED (initramfs userspace boot
+  verified)`, no panic/oops/BUG/WARN in the log (only `panic=-1` boot
+  cmdline match). Archived at
+  `docs/status/boot-logs/20260719T173632+1000-combined-c2rust-boot-19.log`.
+  Boot-history row committed/pushed automatically by `dev.py boot`
+  (`b288b2a`). Unlike every prior file except `test_sort.c`, this run's
+  KUnit pass count is real functional coverage of the translated logic
+  itself (`kfifo_put`/`kfifo_in`/`kfifo_out`/`kfifo_peek`/`kfifo_alloc`
+  exercising `__kfifo_in`/`__kfifo_out`/`__kfifo_alloc_node`/
+  `kfifo_copy_in`/`kfifo_copy_out`/`kfifo_unused` and their wraparound
+  index arithmetic directly), not just link-and-boot — deepest
+  runtime verification of any file in the series so far.
+
+Largest file of the series (264 statements, 2.2x `seq_buf.c`) but the
+smallest *fix* scope relative to size: every gap was a recurrence of an
+already-documented class (dead-import, `warn_on! != 0`, `BitfieldStruct`
+opaquing, register-static deletion), zero new gap classes, and the
+file-specific risk flagged going in (signed/unsigned wraparound on the
+`in`/`out` index counters) turned out to be a non-issue on inspection —
+every site was already unsigned and already `wrapping_*`. Confirms rule
+0009's unsigned-wrap coverage scales cleanly to the densest
+pointer/index-arithmetic file attempted yet, and that a 2x+ jump in
+statement count doesn't necessarily mean a proportional jump in
+hand-fixing — this file needed less *novel* work than several smaller
+files earlier in the series (`seq_buf.c`, `errseq.c`) despite being
+the largest.
+
+## Eighteenth candidate: `lib/sys_info.c`
+
+Worktree `combined-c2rust-boot-18`, branch `agent-combined-c2rust-boot-18`,
+based on `linux-rs/phase2-gcd`. Target: `sys_info_parse_param`,
+`sysctl_sys_info_handler`, `sys_info` (3 externally-declared functions
+via `include/linux/sys_info.h`, called from `kernel/panic.c`,
+`kernel/hung_task.c`, `kernel/watchdog.c` — no `EXPORT_SYMBOL` anywhere
+in the file, direct build-time linkage only), 59 statements (`dev.py
+readiness "lib/*.c"`), a kernel-state-dump utility. c2rust binary
+rebuilt via `dev.py c2rust-build` immediately before starting (fresh,
+newer than all tracked sources). Fresh transpile via
+`investigate_c2rust_failure.py --rerun`: byte-identical (`diff -q`) to
+the pre-existing `tmp/c2rust-baseline/lib_sys_info.c/` output — no
+re-transpile needed. Transpile's own compile-commands step logs 2
+`-Werror=incompatible-pointer-types-discards-qualifiers` diagnostics on
+`char *delim = ""` / `delim = ","` in `sys_info_read_handler` (C's
+implicit `const char *` -> `char *` narrowing on string literals,
+harmless and pre-existing in the C source itself), transpile still
+succeeds and produces full output.
+
+`python3 scripts/dev.py check-register-statics` run first per rule
+0031: `lib_sys_info.c` not in the 0-file live set (0/263 corpus-wide,
+confirming the #22 fix's corpus-wide effect holds one file further).
+Corroborated by grep: no `get_current()` accessor defined or called
+anywhere in the TU — the "no accessor synthesized at all" branch,
+same as `bucket_locks.c`/`debug_locks.c`/`seq_buf.c`. Both
+`riscv_current_is_tp`/`current_stack_pointer` declaration-only, deleted
+outright.
+
+Checked for the refcount.h overflow-detection pattern (issue #39,
+`wrapping_add`/`wrapping_sub`): `refcount_t`/`refcount_struct` appear
+only as struct field type declarations pulled in transitively via
+`task_struct` and friends (itself dead, see below) — this file performs
+no refcounting of its own, no `__refcount_add`/`refcount_dec_and_test`
+call chain present, class doesn't apply here. Checked for `-1 as
+usize` (issue #38): 0 occurrences, consistent with the corpus-wide
+50-file fix.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n), independent of every other worktree's copy.
+`lib/Makefile`: `sys_info.o` pulled out of the bundled `lib-y` line,
+swapped for `sys_info_rs.o` under the config. Raw transpile copied to
+`lib/sys_info_rs.rs` verbatim as the starting point.
+
+Cleanest structural shape of the series alongside `bust_spinlocks.c`/
+`debug_locks.c`/`test_sort.c`: no `#![feature(...)]` line at all
+(not even a leftover one), `unsafe {}` already wrapping every function
+body, no `.init_array`/`__UNIQUE_ID_addressable_*` constructor trick,
+no `#[export]`/`::macros::export` (nothing to convert — the C source
+never used `EXPORT_SYMBOL` at all, so c2rust emitted `#[no_mangle]`
+directly on all 3 externally-called functions with zero licensing
+judgement call needed), no `warn_on! != 0`, no `c_variadic`/`VaList`,
+no RISC-V inline-asm gaps touching this file's own logic. One gap
+already known: the same 7 dead `BitfieldStruct`-derived structs
+`test_sort.c` hit (`task_struct`, `mmap_action`, `kobject`,
+`kernfs_open_file`, `percpu_ref_data`, `signal_struct`,
+`sched_dl_entity`), pulled in transitively via `task_struct`'s header
+chain — grep-confirmed zero references anywhere in the 4 real
+(`#[no_mangle]`) function bodies or their 3 internal-linkage helpers
+(`sys_info_write_handler`, `sys_info_read_handler`,
+`sys_info_sysctl_init`). `sched_dl_entity` embeds by-value inside
+`task_struct` (itself dead); `mmap_action` embeds by-value inside
+`vm_area_desc`, itself only ever `*mut` — same "whole chain dead"
+collapse as every prior occurrence. All 7 converted to the standard
+zero-field `opaque_marker!` idiom in one macro invocation.
+
+### New gap class: `__init`'s `__section(".init.text")` silently dropped, only `__cold` survives translation
+
+The `.o` built clean, but `modpost` failed the full kernel link:
+`WARNING: modpost: vmlinux: section mismatch in reference:
+sys_info_sysctl_init+0x22 (section: .text.unlikely.) ->
+__register_sysctl_init (section: .init.text)`, escalated to a hard
+`ERROR: modpost: Section mismatches detected` (this tree's modpost
+config is not `CONFIG_SECTION_MISMATCH_WARN_ONLY=y`, so this is fatal,
+not cosmetic) — first `modpost`-stage failure in the series; every
+prior gap was either a `rustc` compile error or a runtime/boot-time
+bug.
+
+Root cause: the C source's `sys_info_sysctl_init` is `static int
+__init sys_info_sysctl_init(void)`, and `__init` expands
+(`include/linux/init.h`) to `__section(".init.text") __cold
+__latent_entropy`. c2rust translated `__cold` to `#[cold]` correctly,
+but dropped the `__section(".init.text")` component entirely — the
+function landed in Rust's own default placement for `#[cold]` functions
+(`.text.unlikely.`) instead of the section the macro actually
+specifies. The function is only ever reached indirectly, through the
+`.initcall4.init`-section function-pointer array c2rust *did* place
+correctly (`__initcall__kmod_sys_info__327_136_sys_info_sysctl_init4`),
+and it calls `__register_sysctl_init`, itself genuinely `__init`
+(`.init.text`, freed after boot) — a cross-section reference from
+`.text.unlikely.` (never freed) into `.init.text` (freed) is exactly
+the dangling-reference shape `modpost`'s section-mismatch checker
+exists to catch, and it caught a real one here, not a false positive.
+Fixed by adding `#[link_section = ".init.text"]` back alongside the
+existing `#[cold]`, restoring the section GCC's macro expansion always
+gave this function. First file in the series where `__init`'s
+*section* half (as opposed to its more commonly-checked `__cold`/
+inlining-hint half) was the thing c2rust's attribute translation
+missed — worth watching for on any future file whose C source declares
+a `static … __init` function that survives into the translated output
+rather than being fully dead-code-eliminated.
+
+### Outcome: clean boot, seventeenth file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/sys_info_rs.o` — clean, 0 errors (2078
+  warnings, all missing-doc lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds after the
+  `__init` section fix, `arch/riscv/boot/Image` produced. `lib/sys_info.o`
+  confirmed absent from the entire tree; `sys_info_rs.o` confirmed
+  present in `lib/lib.a` (the `lib-y` archive `sys_info_rs.o` builds
+  into, not `lib/built-in.a` directly — `lib-y` objects archive one
+  level down from `obj-y`).
+- `llvm-objdump -h lib/sys_info_rs.o`: confirms `sys_info_sysctl_init`
+  actually sits in `.init.text` post-fix (`4 .init.text 00000034 ...`),
+  not `.text.unlikely.`.
+- `llvm-nm`: `sys_info`, `sys_info_parse_param`,
+  `sysctl_sys_info_handler` all `T` in `vmlinux`
+  (`ffffffff801e4982 T sys_info`, `ffffffff801e49ee T
+  sys_info_parse_param`, `ffffffff801e4a74 T sysctl_sys_info_handler`).
+  `riscv_current_is_tp`/`current_stack_pointer` absent from `vmlinux`
+  entirely (0 occurrences via grep).
+- `dev.py boot --run-id combined-c2rust-boot-18`: boots clean, **17/17
+  KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 `not ok`),
+  `INIT REACHED (initramfs userspace boot verified)`, no panic/oops/
+  BUG/WARN in the log (only "panic" string match is the `panic=-1`
+  boot command-line argument). Archived at
+  `docs/status/boot-logs/20260719T173641+1000-combined-c2rust-boot-18.log`.
+  Boot-history row committed/pushed automatically by `dev.py boot`
+  (`71cfba4`). No dedicated `sys_info` KUnit suite in this config, so
+  this run demonstrates the build/link/boot path is correct, not that
+  `sys_info_read_handler`'s comma-joined-name formatting matches the C
+  reference output byte-for-byte for known inputs.
+
+Seventeenth file to clear the bar, and the first to fail at the
+`modpost` link stage rather than `rustc` compile or QEMU boot — a
+different failure class from anything documented so far in this
+series (`rustc`-stage: features/unsafe-wrapping/dead-structs/naming
+collisions/const-eval; boot-stage: register-variable liveness,
+overflow-panics, variadic-ABI gaps). Confirms `check-register-statics`
+staying at 0 live corpus-wide continues to hold (263 -> still 0 live,
+one file further from the #22 fix's original baseline), and that the
+refcount-overflow and `-1 as usize` classes correctly don't fire on a
+file that doesn't exercise either pattern.
