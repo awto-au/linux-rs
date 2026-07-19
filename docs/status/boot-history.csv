@@ -97,3 +97,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T13:15:21+10:00,combined-c2rust-9,17,0,1,0,docs/status/boot-logs/20260719T131521+1000-combined-c2rust-9.log
 2026-07-19T13:16:00+10:00,combined-c2rust-10-cbaseline,0,0,0,0,docs/status/boot-logs/20260719T131600+1000-combined-c2rust-10-cbaseline.log
 2026-07-19T13:18:20+10:00,combined-c2rust-10-v2,17,0,1,0,docs/status/boot-logs/20260719T131820+1000-combined-c2rust-10-v2.log
+2026-07-19T13:25:03+10:00,devpy-runid-test,17,0,1,0,docs/status/boot-logs/20260719T132503+1000-devpy-runid-test.log
