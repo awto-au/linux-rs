@@ -2357,145 +2357,6 @@ in-place Rust edit — the first file in the series needing one) and the
 `-1 as usize` literal-syntax break in a `__builtin_object_size`
 dead-branch translation.
 
-## Nineteenth candidate: `lib/fonts/fonts.c`
-
-Worktree `combined-c2rust-boot-20`, branch `agent-combined-c2rust-boot-20`,
-based on `linux-rs/phase2-gcd`. Target: all 6 `EXPORT_SYMBOL_GPL`
-functions (`font_data_import`, `font_data_get`, `font_data_put`,
-`font_data_size`, `font_data_is_equal`, `font_data_export`) plus the 2
-plain-`EXPORT_SYMBOL` functions (`find_font`, `get_default_font`), 90
-statements (`dev.py readiness "lib/*.c"`) — the font-registry
-lookup/dispatcher, not glyph bitmap data. Confirmed by inspection:
-`fonts.c` only holds refcounted-font-data helpers and the
-`find_font()`/`get_default_font()` lookup logic over a
-`static const struct font_desc *fonts[]` array of `extern` pointers;
-the actual glyph bitmaps live in separate per-font TUs
-(`font_8x8.c`, `font_8x16.c`, etc., selected by `lib/fonts/Makefile`'s
-`font-$(CONFIG_FONT_*)` lines) that stay plain C, untouched by this
-run — this worktree's `.config` only enables `CONFIG_FONT_8x16`
-(`CONFIG_FONT_AUTOSELECT=y` default), so the c2rust baseline's
-`fonts[]` array has exactly one entry (`&font_vga_8x16`, an `extern`
-symbol resolved at link time against `font_8x16.o`), matching the real
-kernel build's preprocessor output exactly. c2rust binary verified
-fresh via `dev.py c2rust-build` before starting; baseline transpile
-already present at `tmp/c2rust-baseline/lib_fonts_fonts.c/output/src/fonts.rs`
-(4388 lines), not re-run.
-
-`python3 scripts/dev.py check-register-statics` run first per rule
-0031: 263 files with the fabricated static, 0 live, 263 dead/safe —
-`lib_fonts_fonts.c` in the dead/safe set, corroborated by grep: no
-`get_current()` accessor synthesized anywhere in the TU (this file
-never touches current-task state). Scanned separately for `-1 as
-usize` (issue #38): none present — `check_mul_overflow`/
-`check_add_overflow` already translate via the i128-overflow-check
-idiom, not the old dead-branch literal.
-
-Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
-RUST`, default n). `lib/Makefile` untouched — `lib/fonts/Makefile`'s
-`font-y := fonts.o` was already a standalone single-item assignment
-(no bundled-line extraction needed, unlike most prior files), swapped
-for an `ifdef CONFIG_RUST_C2RUST_BOOT_TEST` / `else` selecting
-`fonts_rs.o` vs `fonts.o`.
-
-### Cleanest baseline output of the series — zero `#![feature(...)]`, zero `.init_array`, zero RISC-V asm
-
-No `#![feature(...)]` line at all (no `asm`, `extern_types`,
-`raw_ref_op`, `strict_provenance`, or `label_break_value` — the first
-file in the series with none of these), no `.init_array`/
-`__UNIQUE_ID_addressable_*` constructor trick, no `::libc::` calls, no
-RISC-V inline asm (`amocas`/`amoswap`/`cmpxchg` all absent — this file
-does no atomics). Only 3 known classes recurred, all mechanical:
-
-1. **`#[export]` -> `#[no_mangle]`.** The 6 `EXPORT_SYMBOL_GPL`
-   functions carried `#[export]` (`use ::macros::export;` import);
-   dropped the attribute, added `#[no_mangle]`, deleted the now-unused
-   import — the `rcuref.c`-established two-part fix. `find_font`/
-   `get_default_font` (plain `EXPORT_SYMBOL`) already carried
-   `#[no_mangle]` correctly in the raw output, confirming c2rust's
-   `EXPORT_SYMBOL` vs `EXPORT_SYMBOL_GPL` -> `#[no_mangle]` vs
-   `#[export]` split is consistent across files.
-2. **`kernel::warn_on!(cond) != 0`.** 2 sites (`font_data_get`,
-   `font_data_put`, both guarding `WARN_ON(!REFCOUNT(fd))`), fixed by
-   dropping `!= 0`, same as every prior file with this class.
-3. **Register-variable pseudo-globals.** `riscv_current_is_tp`/
-   `current_stack_pointer` fabricated as usual (`asm/current.h` pulled
-   in transitively via `task_struct`'s header chain, despite this file
-   never calling `get_current()`); grep-confirmed zero references
-   anywhere in the TU beyond the fabricated declarations themselves,
-   deleted outright.
-
-`BitfieldStruct` opaquing: the standard 6-struct set (`task_struct`,
-`mmap_action`, `kobject`, `kernfs_open_file`, `signal_struct`,
-`sched_dl_entity`) recurred, pulled in transitively via the same
-`task_struct` header chain as `riscv_current_is_tp`. Grep-confirmed
-dead-by-value throughout (only ever `*mut task_struct` on the deleted
-fabricated static, `sched_dl_entity`/`mmap_action` embedded by value
-inside `task_struct` only) — same collapse-to-dead-by-construction
-shape `bust_spinlocks.c`/`glob.c`/`seq_buf.c` established. Unlike prior
-files, this baseline had no pre-existing `extern "C" { pub type X; }`
-opaque block to fold into (no `#![feature(extern_types)]` at all), so
-the `opaque_marker!` macro group was declared fresh and each struct's
-full derive+body was replaced in place with a single
-`opaque_marker!(Name);` invocation — the standard idiom, just applied
-to a from-scratch struct body rather than an existing opaque-extern
-block.
-
-One c2rust idiom noted but requiring no fix: `num_fonts` (from C's
-`#define num_fonts ARRAY_SIZE(fonts)`) translates to
-`size_of::<[*const font_desc; N]>() / size_of::<*const font_desc>() +
-size_of::<ZST>()`, where the `ZST` (`C2Rust_Unnamed_82`/`_83`, empty
-`#[repr(C)]` structs) is c2rust's translation of `ARRAY_SIZE`'s
-`__must_be_array()` compile-time type-check tag — `size_of::<ZST>()`
-is always 0, a semantically inert addend. Compiles and links cleanly
-as-is; not a gap, just an unusual-looking artifact worth noting for
-future files using `ARRAY_SIZE`.
-
-### Outcome: clean boot, fewest fix classes of any file so far
-
-- `make ARCH=riscv LLVM=1 lib/fonts/fonts_rs.o` — clean, 0 errors (1875
-  warnings, all missing-doc/FFI-safety lints, pre-existing pattern —
-  the `kmalloc_token_t` zero-sized-struct `improper_ctypes` warnings on
-  2 kmalloc-family extern params are the same cosmetic false positive
-  every prior file's `extern "C"` blocks already carry).
-- `dev.py build` (`LINUXRS_TREE=linux-riscv-worktrees/combined-c2rust-boot-20`)
-  succeeds, `arch/riscv/boot/Image`/`Image.xz` produced. `lib/fonts/
-  built-in.a` confirmed via `llvm-ar t` to contain `fonts_rs.o` and
-  `font_8x16.o` (the untouched plain-C glyph-bitmap TU), not
-  `fonts.o`.
-- `llvm-nm vmlinux`: all 8 functions `T` (`ffffffff8018506a T
-  find_font`, `ffffffff8018509e T font_data_export`, `ffffffff80185150
-  T font_data_get`, `ffffffff8018517c T font_data_import`,
-  `ffffffff8018527a T font_data_is_equal`, `ffffffff801852ca T
-  font_data_put`, `ffffffff8018530e T font_data_size`,
-  `ffffffff80185322 T get_default_font`); `riscv_current_is_tp`/
-  `current_stack_pointer` absent from `vmlinux` entirely (empty grep).
-- `dev.py boot --run-id combined-c2rust-boot-20`: boots clean, **17/17
-  KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 `not ok`),
-  `INIT REACHED (initramfs userspace boot verified)`, no panic/oops/
-  BUG/WARN in the log (only "panic" match is the `panic=-1` boot
-  argument). Archived at
-  `docs/status/boot-logs/20260719T173653+1000-combined-c2rust-boot-20.log`.
-  Boot-history row committed/pushed automatically by `dev.py boot`
-  (`96bf58b`). No dedicated font-registry KUnit suite exists in this
-  kernel config, so `font_data_import`/`find_font`/`get_default_font`'s
-  actual lookup/refcounting logic wasn't runtime-exercised by this run
-  (same caveat as every prior file without a dedicated enabled suite)
-  — this run demonstrates the dispatcher links and boots correctly
-  alongside the untouched plain-C bitmap TU, not that the font-lookup
-  logic itself matches the C reference for known inputs.
-
-Needed the fewest distinct fix classes of any file in the series so
-far (3: `#[export]`, `warn_on! != 0`, register-static deletion, plus
-`BitfieldStruct` opaquing) and zero genuinely new gap classes — every
-class that fired was already in the established playbook, and several
-whole categories that have hit most prior files (feature-gate
-stripping, `.init_array`, RISC-V inline-asm, `::libc::`) didn't fire at
-all here. Confirms the task's working hypothesis directly: `fonts.c` is
-pure registry/dispatcher logic with no embedded bitmap data of its own
-— the actual glyph arrays live in separate, still-plain-C translation
-units this run left untouched, and the dispatcher itself needed only
-mechanical, already-cataloged fixes to link and boot alongside them.
-
 ## Seventeenth candidate: `lib/kfifo.c`
 
 Worktree `combined-c2rust-boot-19`, branch `agent-combined-c2rust-boot-19`,
@@ -2763,3 +2624,143 @@ staying at 0 live corpus-wide continues to hold (263 -> still 0 live,
 one file further from the #22 fix's original baseline), and that the
 refcount-overflow and `-1 as usize` classes correctly don't fire on a
 file that doesn't exercise either pattern.
+
+## Nineteenth candidate: `lib/fonts/fonts.c`
+
+Worktree `combined-c2rust-boot-20`, branch `agent-combined-c2rust-boot-20`,
+based on `linux-rs/phase2-gcd`. Target: all 6 `EXPORT_SYMBOL_GPL`
+functions (`font_data_import`, `font_data_get`, `font_data_put`,
+`font_data_size`, `font_data_is_equal`, `font_data_export`) plus the 2
+plain-`EXPORT_SYMBOL` functions (`find_font`, `get_default_font`), 90
+statements (`dev.py readiness "lib/*.c"`) — the font-registry
+lookup/dispatcher, not glyph bitmap data. Confirmed by inspection:
+`fonts.c` only holds refcounted-font-data helpers and the
+`find_font()`/`get_default_font()` lookup logic over a
+`static const struct font_desc *fonts[]` array of `extern` pointers;
+the actual glyph bitmaps live in separate per-font TUs
+(`font_8x8.c`, `font_8x16.c`, etc., selected by `lib/fonts/Makefile`'s
+`font-$(CONFIG_FONT_*)` lines) that stay plain C, untouched by this
+run — this worktree's `.config` only enables `CONFIG_FONT_8x16`
+(`CONFIG_FONT_AUTOSELECT=y` default), so the c2rust baseline's
+`fonts[]` array has exactly one entry (`&font_vga_8x16`, an `extern`
+symbol resolved at link time against `font_8x16.o`), matching the real
+kernel build's preprocessor output exactly. c2rust binary verified
+fresh via `dev.py c2rust-build` before starting; baseline transpile
+already present at `tmp/c2rust-baseline/lib_fonts_fonts.c/output/src/fonts.rs`
+(4388 lines), not re-run.
+
+`python3 scripts/dev.py check-register-statics` run first per rule
+0031: 263 files with the fabricated static, 0 live, 263 dead/safe —
+`lib_fonts_fonts.c` in the dead/safe set, corroborated by grep: no
+`get_current()` accessor synthesized anywhere in the TU (this file
+never touches current-task state). Scanned separately for `-1 as
+usize` (issue #38): none present — `check_mul_overflow`/
+`check_add_overflow` already translate via the i128-overflow-check
+idiom, not the old dead-branch literal.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile` untouched — `lib/fonts/Makefile`'s
+`font-y := fonts.o` was already a standalone single-item assignment
+(no bundled-line extraction needed, unlike most prior files), swapped
+for an `ifdef CONFIG_RUST_C2RUST_BOOT_TEST` / `else` selecting
+`fonts_rs.o` vs `fonts.o`.
+
+### Cleanest baseline output of the series — zero `#![feature(...)]`, zero `.init_array`, zero RISC-V asm
+
+No `#![feature(...)]` line at all (no `asm`, `extern_types`,
+`raw_ref_op`, `strict_provenance`, or `label_break_value` — the first
+file in the series with none of these), no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick, no `::libc::` calls, no
+RISC-V inline asm (`amocas`/`amoswap`/`cmpxchg` all absent — this file
+does no atomics). Only 3 known classes recurred, all mechanical:
+
+1. **`#[export]` -> `#[no_mangle]`.** The 6 `EXPORT_SYMBOL_GPL`
+   functions carried `#[export]` (`use ::macros::export;` import);
+   dropped the attribute, added `#[no_mangle]`, deleted the now-unused
+   import — the `rcuref.c`-established two-part fix. `find_font`/
+   `get_default_font` (plain `EXPORT_SYMBOL`) already carried
+   `#[no_mangle]` correctly in the raw output, confirming c2rust's
+   `EXPORT_SYMBOL` vs `EXPORT_SYMBOL_GPL` -> `#[no_mangle]` vs
+   `#[export]` split is consistent across files.
+2. **`kernel::warn_on!(cond) != 0`.** 2 sites (`font_data_get`,
+   `font_data_put`, both guarding `WARN_ON(!REFCOUNT(fd))`), fixed by
+   dropping `!= 0`, same as every prior file with this class.
+3. **Register-variable pseudo-globals.** `riscv_current_is_tp`/
+   `current_stack_pointer` fabricated as usual (`asm/current.h` pulled
+   in transitively via `task_struct`'s header chain, despite this file
+   never calling `get_current()`); grep-confirmed zero references
+   anywhere in the TU beyond the fabricated declarations themselves,
+   deleted outright.
+
+`BitfieldStruct` opaquing: the standard 6-struct set (`task_struct`,
+`mmap_action`, `kobject`, `kernfs_open_file`, `signal_struct`,
+`sched_dl_entity`) recurred, pulled in transitively via the same
+`task_struct` header chain as `riscv_current_is_tp`. Grep-confirmed
+dead-by-value throughout (only ever `*mut task_struct` on the deleted
+fabricated static, `sched_dl_entity`/`mmap_action` embedded by value
+inside `task_struct` only) — same collapse-to-dead-by-construction
+shape `bust_spinlocks.c`/`glob.c`/`seq_buf.c` established. Unlike prior
+files, this baseline had no pre-existing `extern "C" { pub type X; }`
+opaque block to fold into (no `#![feature(extern_types)]` at all), so
+the `opaque_marker!` macro group was declared fresh and each struct's
+full derive+body was replaced in place with a single
+`opaque_marker!(Name);` invocation — the standard idiom, just applied
+to a from-scratch struct body rather than an existing opaque-extern
+block.
+
+One c2rust idiom noted but requiring no fix: `num_fonts` (from C's
+`#define num_fonts ARRAY_SIZE(fonts)`) translates to
+`size_of::<[*const font_desc; N]>() / size_of::<*const font_desc>() +
+size_of::<ZST>()`, where the `ZST` (`C2Rust_Unnamed_82`/`_83`, empty
+`#[repr(C)]` structs) is c2rust's translation of `ARRAY_SIZE`'s
+`__must_be_array()` compile-time type-check tag — `size_of::<ZST>()`
+is always 0, a semantically inert addend. Compiles and links cleanly
+as-is; not a gap, just an unusual-looking artifact worth noting for
+future files using `ARRAY_SIZE`.
+
+### Outcome: clean boot, fewest fix classes of any file so far
+
+- `make ARCH=riscv LLVM=1 lib/fonts/fonts_rs.o` — clean, 0 errors (1875
+  warnings, all missing-doc/FFI-safety lints, pre-existing pattern —
+  the `kmalloc_token_t` zero-sized-struct `improper_ctypes` warnings on
+  2 kmalloc-family extern params are the same cosmetic false positive
+  every prior file's `extern "C"` blocks already carry).
+- `dev.py build` (`LINUXRS_TREE=linux-riscv-worktrees/combined-c2rust-boot-20`)
+  succeeds, `arch/riscv/boot/Image`/`Image.xz` produced. `lib/fonts/
+  built-in.a` confirmed via `llvm-ar t` to contain `fonts_rs.o` and
+  `font_8x16.o` (the untouched plain-C glyph-bitmap TU), not
+  `fonts.o`.
+- `llvm-nm vmlinux`: all 8 functions `T` (`ffffffff8018506a T
+  find_font`, `ffffffff8018509e T font_data_export`, `ffffffff80185150
+  T font_data_get`, `ffffffff8018517c T font_data_import`,
+  `ffffffff8018527a T font_data_is_equal`, `ffffffff801852ca T
+  font_data_put`, `ffffffff8018530e T font_data_size`,
+  `ffffffff80185322 T get_default_font`); `riscv_current_is_tp`/
+  `current_stack_pointer` absent from `vmlinux` entirely (empty grep).
+- `dev.py boot --run-id combined-c2rust-boot-20`: boots clean, **17/17
+  KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 `not ok`),
+  `INIT REACHED (initramfs userspace boot verified)`, no panic/oops/
+  BUG/WARN in the log (only "panic" match is the `panic=-1` boot
+  argument). Archived at
+  `docs/status/boot-logs/20260719T173653+1000-combined-c2rust-boot-20.log`.
+  Boot-history row committed/pushed automatically by `dev.py boot`
+  (`96bf58b`). No dedicated font-registry KUnit suite exists in this
+  kernel config, so `font_data_import`/`find_font`/`get_default_font`'s
+  actual lookup/refcounting logic wasn't runtime-exercised by this run
+  (same caveat as every prior file without a dedicated enabled suite)
+  — this run demonstrates the dispatcher links and boots correctly
+  alongside the untouched plain-C bitmap TU, not that the font-lookup
+  logic itself matches the C reference for known inputs.
+
+Needed the fewest distinct fix classes of any file in the series so
+far (3: `#[export]`, `warn_on! != 0`, register-static deletion, plus
+`BitfieldStruct` opaquing) and zero genuinely new gap classes — every
+class that fired was already in the established playbook, and several
+whole categories that have hit most prior files (feature-gate
+stripping, `.init_array`, RISC-V inline-asm, `::libc::`) didn't fire at
+all here. Confirms the task's working hypothesis directly: `fonts.c` is
+pure registry/dispatcher logic with no embedded bitmap data of its own
+— the actual glyph arrays live in separate, still-plain-C translation
+units this run left untouched, and the dispatcher itself needed only
+mechanical, already-cataloged fixes to link and boot alongside them.
+
