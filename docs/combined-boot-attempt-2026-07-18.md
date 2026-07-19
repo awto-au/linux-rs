@@ -2764,3 +2764,27 @@ pure registry/dispatcher logic with no embedded bitmap data of its own
 units this run left untouched, and the dispatcher itself needed only
 mechanical, already-cataloged fixes to link and boot alongside them.
 
+## Twentieth candidate: `lib/lz4/lz4_decompress.c`
+
+Worktree `combined-boot-lz4_decompress`, based on `linux-rs/phase2-gcd`.
+Target: all 10 `EXPORT_SYMBOL`/`EXPORT_SYMBOL_GPL` LZ4 decode functions
+(`LZ4_decompress_safe`, `LZ4_decompress_safe_partial`,
+`LZ4_decompress_safe_continue`, `LZ4_decompress_safe_usingDict`,
+`LZ4_decompress_fast`, `LZ4_decompress_fast_continue`,
+`LZ4_decompress_fast_usingDict`, plus 3 internal-linkage helpers), 239
+statements.
+
+**First candidate produced by `scripts/combined_boot_scaffold.py`**
+(mechanical scaffolding: c2rust-freshness check, worktree creation,
+baseline-output copy, Kconfig/Makefile wiring, the 3 mandatory checks,
+build+boot) rather than a hand-run worktree setup — landed with
+**zero hand-fixes needed**, the first fully-clean scaffold-to-boot run
+in the series. Confirms today's earlier c2rust-source fixes (#22, #34,
+#38, #40) are genuinely reducing per-file work, not just shifting it.
+
+Evidence: `llvm-nm vmlinux` shows all `LZ4_decompress_*` symbols `T`
+(defined); `dev.py boot --run-id combined-boot-lz4_decompress`: 17/17
+KUnit suites pass, 0 not ok, INIT REACHED. `lib/lz4/lz4_decompress.o`
+never built. Log:
+`docs/status/boot-logs/20260719T202959+1000-combined-boot-lz4_decompress.log`.
+
