@@ -829,3 +829,64 @@ each one individually" lesson above, extending lesson 4's family of
 to the *deletion-of-a-large-contiguous-block* case, not just the
 individual-struct case `lzo1x_decompress_safe.c` and
 `is_single_threaded.c` already covered.
+
+## Fifth candidate: `lib/timerqueue.c`
+
+Worktree `combined-c2rust-boot-5`, branch `agent-combined-c2rust-boot-5`.
+Target: `timerqueue_add`, `timerqueue_del`, `timerqueue_iterate_next`,
+`timerqueue_linked_add`, all `EXPORT_SYMBOL_GPL`, 98 lines of C.
+c2rust binary at `8bf6855c6` (post-fix). Fresh transpile confirmed via
+`investigate_c2rust_failure.py --rerun`: `outcome=clean`,
+`c2rust_rev=8bf6855c6`, byte-identical to the pre-existing
+`tmp/c2rust-baseline/lib_timerqueue.c/` output.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `timerqueue.o` pulled out of the
+bundled `lib-y` line, swapped for `timerqueue_rs.o` under the config.
+Raw transpile copied to `lib/timerqueue_rs.rs` (1226 lines).
+
+Of the 3 gap classes fixed upstream in `8bf6855c6`: confirmed absent —
+no `extern_types`/`asm` in the feature line, `unsafe {}` already
+wrapping every function body, no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick anywhere in the output.
+
+Fixes actually needed, both from the 2 classes the fix didn't cover:
+- `#[export]` → `#[no_mangle]` on all 4 functions (all 4 source sites
+  are `EXPORT_SYMBOL_GPL`, no mixed-licensing judgement call this
+  file), `use ::macros::export;` import dropped.
+- `c2rust_bitfields::BitfieldStruct` derive on `task_struct` and
+  `sched_dl_entity`: both dead-by-value (grep-confirmed, zero field
+  access anywhere in the TU — `sched_dl_entity` only appears by-value
+  once, embedded inside `task_struct` itself, which is also fully
+  dead). Opaqued both via the standard `opaque_marker!` macro rather
+  than derive-stripped, since neither is load-bearing here.
+
+One item not called out in the 3-class fix: `#![feature(raw_ref_op,
+strict_provenance)]` was still present in the fresh output and still
+disallowed (`rust_allowed_features` in `scripts/Makefile.build` is
+`arbitrary_self_types,asm_goto,generic_arg_infer,used_with_arg`, no
+overlap) — `E0725` until the line was stripped. Not one of the 3 fixed
+classes (those covered `asm`/`extern_types`); `raw_ref_op` and
+`strict_provenance` are a separate leftover in c2rust's default feature
+declaration that the fix didn't touch. Stripped the same way as prior
+files.
+
+Build: `make ARCH=riscv LLVM=1 lib/timerqueue_rs.o` clean, 0 errors
+(381 warnings, all missing-doc lints, pre-existing pattern). `make
+ARCH=riscv LLVM=1 -j32` succeeds, `arch/riscv/boot/Image` and
+`Image.xz` produced. `lib/timerqueue.o` correctly never built.
+
+`llvm-nm`: all 4 symbols `T` in both `lib/timerqueue_rs.o` and
+`vmlinux` (`ffffffff801b13e4 T timerqueue_add`, `ffffffff801b1454 T
+timerqueue_del`, `ffffffff801b149a T timerqueue_iterate_next`,
+`ffffffff801b14ba T timerqueue_linked_add`).
+
+`scripts/boot_qemu.py --run-id combined-c2rust-6`: boots clean, 17/17
+KUnit suites pass (`fail:0` every suite, 0 `not ok`), `initramfs init
+reached, PID 1 alive`, no panic/oops/BUG/WARN in the log. No dedicated
+timerqueue KUnit suite in this config.
+
+Confirms the update note's prediction: this file needed hand-fixing
+only for the 2 gap classes the transpiler fix didn't cover
+(`#[export]`, `BitfieldStruct` derive), plus one previously-undocumented
+leftover-feature-line strip. Zero instances of the 3 now-fixed classes.
