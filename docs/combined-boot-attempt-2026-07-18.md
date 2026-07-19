@@ -3004,3 +3004,137 @@ generic harness for this now — each file's actual function signature
 and init-vs-not status still needs a quick manual check first — but
 worth remembering next time one of these lands.
 
+## Twenty-second candidate: `lib/vdso/datastore.c` — real blocker, not landed
+
+Worktree `combined-c2rust-boot-23`, branch `agent-combined-c2rust-boot-23`,
+based on `linux-rs/phase2-gcd`. 50 statements, vDSO data-page management
+(`vdso_setup_data_pages()`, `vvar_fault()`, `vdso_install_vvar_mapping()`).
+
+### Build-model check (done first, per issue #28 instructions)
+
+Confirmed `lib/vdso/datastore.c` is **not** part of the userspace
+`vdso.so` PIC artifact — that's a separate, genuinely different build
+(`arch/riscv/kernel/vdso/*.c`, `lib/vdso/Makefile.include`,
+`-fPIC -fno-stack-protector`, linked into its own `vdso.so`/`vdso.so.dbg`
+via a dedicated linker script, never part of `vmlinux`).
+`lib/vdso/datastore.c` is wired via a plain sibling `lib/vdso/Makefile`
+(`obj-$(CONFIG_HAVE_GENERIC_VDSO) += datastore.o`, itself pulled in from
+`lib/Makefile`'s `obj-y += ... vdso/ ...`), compiled as a completely
+normal kernel object into `vmlinux`, called from `init/main.c:1086`
+(`vdso_setup_data_pages()`, at `start_kernel()` time) and from
+`arch/riscv/kernel/vdso.c:135` (`vdso_install_vvar_mapping()`, at
+per-process vdso-mapping-setup time). Architecturally a standard
+`lib/*.c` candidate — the "may be built completely differently" concern
+from the issue did not apply to this specific file, only to the actual
+`arch/riscv/kernel/vdso/` PIC code.
+
+### Wiring and fixes applied
+
+Same pattern as every prior file: `CONFIG_RUST_C2RUST_BOOT_TEST` in
+`lib/Kconfig` (independent symbol, this worktree only), `lib/vdso/Makefile`
+swapped `datastore.o` for `datastore_rs.o` under the gate, raw c2rust
+output copied from
+`tmp/c2rust-baseline/lib_vdso_datastore.c/output/src/datastore.rs` into
+`lib/vdso/datastore_rs.rs` (4534 lines raw). c2rust binary verified
+fresh via `dev.py c2rust-build` first.
+
+Notably **lighter fix scope than every prior file** — several of today's
+transpiler fixes (register-variable-static and asm-goto related) already
+show up in this raw output: no `#![feature(...)]` line at all, `&raw`
+syntax used directly (stable), every `unsafe extern "C" fn` body already
+wrapped in a top-level `unsafe { }`. Fixes still needed:
+
+- Dead register-variable statics `riscv_current_is_tp`/`current_stack_pointer`
+  (issue #28 gap class 7) — grep-confirmed zero references in translated
+  code, deleted.
+- 5 dead `BitfieldStruct`-derived structs (`task_struct`, `mmap_action`,
+  `percpu_ref_data`, `signal_struct`, `sched_dl_entity`) — grep-confirmed
+  zero by-value/by-field use anywhere in this TU's real functions,
+  opaqued via the standard `opaque_marker!` idiom. One by-value embedding
+  found during the transitive-chain check (`vm_area_desc.action: mmap_action`)
+  but `vm_area_desc` itself is only ever referenced via `*mut vm_area_desc`
+  (a function-pointer parameter type inside dead `file_operations` header
+  noise) — pointer types don't depend on pointee size, so this chain is
+  inert; confirmed by disassembly, not just grep.
+- RISC-V inline-asm bracket-addressing bug (issue #29's known class,
+  recurred once): `arch_atomic_add`'s `amoadd.w zero, {1}, [{0}]` fixed
+  to `0({0})`.
+- `kernel::warn_on!(...) != 0` → `kernel::warn_on!(...)` (issue's
+  established `rcuref.c` fix: the real macro returns `bool` directly),
+  2 call sites in `get_page()`.
+- The `.init_array`/`c2rust_run_static_initializers` constructor trick,
+  present and deleted per the standard rule — confirmed dead in practice
+  here too: it emulates the C source's `vdso_k_{time,rng,arch}_data`
+  static initializers, but `vdso_setup_data_pages()` unconditionally
+  overwrites all three at real init time before any vvar fault can occur.
+
+All mandatory checks passed: `check-register-statics` 0 live
+corpus-wide, `-1 as usize` absent. `make ARCH=riscv LLVM=1 -j32` succeeds
+cleanly every time (zero errors/warnings attributable to this TU),
+`llvm-nm` confirms `vdso_setup_data_pages`/`vdso_install_vvar_mapping`
+defined (`T`, correctly un-mangled despite no `#[no_mangle]` needed on
+`vvar_fault` since it's `static`/internal-linkage in the C original and
+only ever referenced via a function pointer stored in
+`vdso_vvar_mapping`).
+
+### Real blocker: boots clean at the object/link level, hangs completely at runtime — root cause not isolated
+
+Every individual `.o` compile and full `vmlinux` link succeeded with
+zero errors. Boot with this TU wired in **hangs indefinitely** with
+**zero kernel console output** (not even the "Linux version..." banner
+that normally prints within the first few `start_kernel()` lines) —
+QEMU spins at ~100% CPU indefinitely (killed manually after 30-260s each
+attempt; a normal boot in this worktree/config completes in well under
+15s of *guest* time). Confirmed via QEMU's own `-d int,guest_errors`
+exception trace (the kernel's own log is unavailable since console
+output never happens) that the CPU does execute real kernel code well
+past `start_kernel()`'s entry — the trace shows normal early-boot
+OpenSBI CSR-probe traps (identical in both builds), then a
+`store_page_fault` at address `0x0` deep inside `crng_reseed()`
+(`drivers/char/random.c`, an unrelated deferred-work callback, no
+connection to this file) that never recovers.
+
+**Isolated the timing but not the mechanism**, via 3 independent
+diagnostic rebuilds:
+
+1. Same worktree/config/build with the **plain C** `datastore.o`
+   (Kconfig gate off): boots clean, 17/17 KUnit, INIT REACHED, in under
+   a second of guest time. Rules out the worktree, `.config`, build
+   process, and concurrent-agent host contention as the cause — this is
+   real, caused by the Rust translation.
+2. Replaced `vdso_setup_data_pages()`'s entire body with an immediate,
+   unconditional `panic()` (later: an immediate `_printk()`, non-fatal)
+   as its first statement: **still zero kernel output, still hangs
+   identically.** This proves the corruption/hang happens **before**
+   `vdso_setup_data_pages()` is ever called at all — not a bug in this
+   function's allocator/pointer-arithmetic logic (which was independently
+   hand-verified correct against the C source: GFP flag bit values,
+   `get_order`/`fls64` math, the `page_to_pfn`-equivalent address
+   computation in `lowmem_page_address` — the last one initially
+   suspected for using `offset_from` on two provably-different-allocation
+   raw pointers, a real UB risk, fixed to plain exposed-provenance
+   integer subtraction; disassembly confirmed this was a no-op fix since
+   LLVM did not exploit the UB either way here).
+3. Stubbed `vvar_fault()` (the largest, most pointer-arithmetic-heavy of
+   the 3 functions, never called during boot) down to a 1-line body:
+   **still hangs identically.** Rules out that function's complexity as
+   the trigger too.
+
+Net: the corruption is not localized to any one function's runtime
+logic — every function individually stubbed/panicked still reproduces
+the identical hang, meaning something about this TU's **compiled
+presence in the link** (not its execution) is the actual trigger. Not
+yet identified: whether this is a genuine LLVM/rustc miscompilation
+specific to this file's type/section shape, a `#[link_section]`
+placement interaction (`.init.text`/`.init.data`/`.data..ro_after_init`,
+all copied verbatim from raw c2rust output, all individually confirmed
+correctly named against `include/asm-generic/vmlinux.lds.h`), or
+something else structural. This is a real, reproducible, evidenced
+blocker — not a fake wire-in and not a logic bug fixable by further
+hand-patching the translated Rust source, per the mandatory-checks
+instructions for this file. **Not landed.** `CONFIG_RUST_C2RUST_BOOT_TEST`
+left disabled in this worktree; `lib/vdso/datastore_rs.rs` and the
+Kconfig/Makefile wiring left in place, uncommitted, for whoever
+continues this investigation. Filed as
+[awto-au/linux-rs#36](https://github.com/awto-au/linux-rs/issues/36).
+
