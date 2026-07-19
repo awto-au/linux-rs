@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "fabricated-register-variable-static"
+version = 1
+tier = 1
+category = "process"
+
+[match]
+c = "register unsigned long tp asm(\"tp\") (or asm(\"sp\")) — GCC/Clang's register-variable extension, used by arch/riscv/include/asm/current.h to bind current/current_stack_pointer to a live CPU register, no backing memory, no linker symbol"
+family = "REGVAR:asm-bound-register"
+
+[emit]
+kind = "vanishes-or-inline-asm"
+rust = "c2rust has no representation for a register-bound variable and fabricates a real `#[no_mangle] pub static mut` in .bss instead, always reading back whatever was last written (i.e. always null/0, since nothing ever assigns it). Two valid outcomes, NEVER assume without checking: (1) if the accessor (get_current() for tp, or the raw current_stack_pointer static for sp) is grep-confirmed uncalled/unreferenced anywhere in the TU, delete the fabricated static and its accessor outright as dead code; (2) if the accessor IS called, rewrite it to read the real register directly via inline asm, e.g. `unsafe extern \"C\" fn get_current() -> *mut task_struct { let tp: *mut task_struct; unsafe { core::arch::asm!(\"mv {0}, tp\", out(reg) tp, options(nomem, nostack, preserves_flags)) }; tp }`"
+deviations = ["none once fixed per the correct branch above — the inline-asm read is behaviorally identical to the C register-variable extension it replaces"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "lib/klist.c (issue awto-au/linux-rs#30): get_current() reached via spin_unlock()'s inlined preemption-check path (__preempt_count_dec_and_test -> tif_need_resched -> get_current()) on every klist_add_head/klist_add_tail call — real device-registration traffic during boot. Fabricated static was live, not dead; caused a null-pointer load_page_fault boot hang, root-caused via QEMU -d guest_errors,unimp,int tracing to epc inside klist_add_tail.",
+  "lib/is_single_threaded.c (issue awto-au/linux-rs#31): get_current() called in current_is_single_threaded() (#[no_mangle], exported), dereferencing (*task).mm as its first statement. Guaranteed null-pointer deref the moment the function is called, but LATENT — this project's minimal boot path never calls current_is_single_threaded(), so it passed 'boots clean' with the bug still present. Only found by cross-checking issue #30's fix against all prior landed combined-boot files, not by any automated check.",
+  "lib/group_cpus.c, lib/rcuref.c, lib/timerqueue.c: static declared, no get_current() accessor synthesized in these TUs at all — genuinely dead, confirmed safe.",
+  "lib/lwq.c: get_current() accessor present but grep-confirmed never called anywhere in the TU — dead, confirmed safe.",
+]
+
+[validation]
+instances = ["lib/klist.c (fixed, #30)", "lib/is_single_threaded.c (fixed, #31)"]
+oracle = "tier4"
+negative = ["current_stack_pointer (the sp-bound sibling static) grep-confirmed unreferenced anywhere in a TU — safe to delete without the inline-asm rewrite, since nothing reads it"]
+human_review = false
+
+[status]
+note = "General lesson from #31: grepping the fabricated static's OWN identifier is not sufficient proof of deadness — the static is only ever touched indirectly through its accessor (get_current()), so a textual grep for the static alone misses live-via-accessor cases. Must grep for the accessor function AND check whether it is CALLED anywhere in the TU, not just declared. This is corpus-wide risk: any TU pulling in asm/current.h where current is used (common — most kernel code touches current somewhere) can hit this. Not yet mechanized into a standing dev.py check as of 2026-07-19 — currently relies on being pasted into each combined-boot agent brief by hand, which is exactly the failure mode this rule exists to close. See scripts/check_fabricated_register_statics.py once landed."

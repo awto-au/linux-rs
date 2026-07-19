@@ -19,6 +19,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py c2rust-regress BEFORE AFTER [--file-issue]  # per-decl regression diff between 2 baselined revs
   dev.py c2rust-clippy [--limit N]       # clippy-check c2rust clean outputs -> patterns.db
   dev.py safety-scan [--population P] [--limit N]  # per-function unsafe/safe scan -> patterns.db
+  dev.py check-register-statics          # rule 0031: fabricated current/tp static live-vs-dead scan
   dev.py db                     # rebuild rulesdb/patterns.db (ephemeral, rebuild-not-migrate)
   dev.py q <subcommand> ...     # quick SQL checks against patterns.db (see query_db.py --help)
   dev.py patch N                # format-patch HEAD -> patches/ start-number N
@@ -220,6 +221,15 @@ def main() -> int:
         # 3-5 are set by a future real safe-lift conversion tool, not
         # this scanner. See scan_function_safety.py's module doc.
         sh(["python3", str(S / "scan_function_safety.py"), *rest], quiet_ok=False)
+    elif cmd == "check-register-statics":
+        # rule 0031: c2rust fabricates a #[no_mangle] static standing in
+        # for arch/riscv's register-variable extension (current/tp).
+        # Grepping the static alone doesn't prove it's dead — must check
+        # whether get_current() is actually CALLED (issues #30/#31, both
+        # found by hand before this check existed). Exits nonzero if any
+        # scanned file has a live (called) accessor still reading the
+        # fabricated static.
+        sh(["python3", str(S / "check_fabricated_register_statics.py"), *rest], quiet_ok=False)
     elif cmd == "db":
         sh(["python3", str(S / "build_db.py")], quiet_ok=False)
         sh(["python3", str(S / "import_cscope.py")], quiet_ok=False)

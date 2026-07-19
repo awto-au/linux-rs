@@ -1201,3 +1201,274 @@ too. Also the first file needing a real `LIST_POISON`-style const-eval
 fix and the first hitting a parameter/type namespace collision. Issue
 #29 (bracket addressing + Zacas/Zabha) recurred a fourth time,
 unchanged in shape from `objpool.c`.
+
+## Eighth candidate: `lib/glob.c`
+
+Worktree `combined-c2rust-boot-8`, branch `agent-combined-c2rust-boot-8`,
+based on `linux-rs/phase2-gcd`. Target: `glob_match`, `glob_match_len`
+(both plain `EXPORT_SYMBOL`, non-GPL — matches the file's own SPDX
+`GPL-2.0 OR MIT` dual license), 155 lines of C, pure string matching,
+no register/FFI/hardware dependency. c2rust binary at `6065eaf19`
+(post the `extern_types`/`asm`/`raw_ref_op`/`strict_provenance`/
+unsafe-wrapping/`.init_array` fix series). Baseline transpile at
+`tmp/c2rust-baseline/lib_glob.c/output/src/glob.rs` (3748 lines,
+almost entirely pulled-in `task_struct`-web struct furniture from
+`linux/sched.h`'s transitive include chain — the real TU is 3
+functions) used as-is, no re-transpile needed.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `glob.o`'s `obj-$(CONFIG_GLOB)`
+line swapped for a conditional `glob_rs.o`/`glob.o` pair under the
+config. `CONFIG_GLOB` was already `y` in this boot config (pulled in
+transitively via `lib/kunit/Kconfig`'s `select GLOB`), confirming this
+file is genuinely linked into the combined image already, not a
+config-gated no-op.
+
+Of the 3 gap classes fixed upstream in the c2rust fix series: confirmed
+absent — no `#![feature(...)]` line at all (cleaner than every prior
+file in this series, all of which had at least a leftover entry),
+`unsafe {}` already wrapping every function body, no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick anywhere in the output.
+Also confirmed absent: no `#[export]`/`use ::macros::export` anywhere
+— c2rust's raw output already emitted `#[no_mangle]` plus the correct
+hand-shaped `global_asm!` `.export_symbol` section directly (with an
+empty license field, matching `EXPORT_SYMBOL`'s real macro expansion
+in `include/linux/export.h` byte-for-byte), so the `#[export]` →
+`#[no_mangle]` fix class simply didn't apply here — first file in the
+series needing zero action on either of the 2 gap classes the upstream
+fix series doesn't cover on the export-attribute front.
+
+Only real fix needed: `c2rust_bitfields::BitfieldStruct` derive on 6
+structs (`task_struct`, `mmap_action`, `kobject`, `kernfs_open_file`,
+`signal_struct`, `sched_dl_entity`), all pulled in transitively and
+unused *by value* in this TU (grep-confirmed). Traced the by-value
+dependency graph rather than assuming leaf-node deletion (per the
+lesson from `lzo1x_decompress_safe.c`): `mmap_action` is embedded
+by-value in `vm_area_desc`, `kobject` is embedded by-value in both
+`kset` and `module_kobject`, and `module_kobject` is itself embedded
+by-value in `module` — none of `vm_area_desc`/`kset`/`module` are used
+by-value anywhere else (grep-confirmed, pointer-only). Real leaf set:
+9 types opaqued via the standard `opaque_marker!` idiom (`task_struct`,
+`kobject`, `kernfs_open_file`, `signal_struct`, `sched_dl_entity`,
+`kset`, `module`, `module_kobject`, `vm_area_desc`); `mmap_action`
+itself deleted outright (becomes fully unreferenced — its only use
+anywhere was the one field inside `vm_area_desc` — once that struct is
+opaqued). `mmap_action`'s downstream union/type-alias furniture
+(`C2Rust_Unnamed_21`..`24`, `mmap_action_type` + 5 consts) doesn't
+carry the `BitfieldStruct` derive itself, so left in place as harmless
+dead code under the file's existing `#![allow(dead_code)]`, same as
+every prior file's non-bitfield dead furniture.
+
+Fabricated register-variable statics check (per the issue #30/#31
+finding that these aren't always safe to delete blanket): grepped for
+`get_current` specifically, not just the `riscv_current_is_tp`
+identifier — zero occurrences anywhere in the 3748-line TU, no
+`get_current()` accessor function defined or called at all. Both
+`riscv_current_is_tp` and `current_stack_pointer` appear exactly once
+each (their own fabricated-static declaration line), confirmed
+genuinely dead here, unlike `klist.c`. Deleted both outright, same
+disposition as `lzo1x_decompress_safe.c`/`objpool.c`.
+
+Fresh-worktree gotcha (environment, not a c2rust bug): the newly
+created worktree had no `.config` at all, so the first `dev.py config
+-e RUST_C2RUST_BOOT_TEST` + `olddefconfig` cycle generated one from
+bare Kconfig defaults — silently defaulting `CONFIG_RUST` itself to
+off (`# CONFIG_RUST is not set`) and producing a vmlinux with no Rust
+code linked in at all (wrong, but not loudly wrong — the build still
+said `BUILD OK`). Caught by checking `llvm-nm vmlinux` for
+`glob_match` directly rather than trusting the build's exit code alone
+(the shared `tmp/dev-build.log` this project's tooling writes is also
+unsafe to inspect post-hoc when multiple worktrees are building
+concurrently — it was mid-overwrite by a sibling agent's boot-11 build
+by the time this was checked). Fixed by copying a sibling worktree's
+already-`CONFIG_RUST=y`/`CONFIG_GLOB=y` `.config` in as the base before
+re-running `dev.py config -e`. Worth calling out for future parallel
+combined-boot-N worktrees: verify the target symbol actually appears in
+`vmlinux` after every build, don't trust `BUILD OK` alone, especially
+in a brand-new worktree with no pre-seeded `.config`.
+
+### Outcome: clean boot, cleanest fix scope in the series so far
+
+- `make ARCH=riscv LLVM=1 lib/glob_rs.o` — clean, 0 errors (1721
+  warnings, all missing-doc/unused-var lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` and `Image.xz` produced. `lib/glob.o`
+  correctly never built (no `.glob.o.cmd` present).
+- `llvm-nm`: both exported symbols `T` in both `lib/glob_rs.o` and
+  `vmlinux` (`ffffffff80158ce6 T glob_match`, `ffffffff80158cfe T
+  glob_match_len`), plus `glob_match_str` correctly `t` (local,
+  matching the C original's `static` linkage) as
+  `_RNvCs3OAnprC1gR0_7glob_rs14glob_match_str`. No
+  `riscv_current_is_tp`/`current_stack_pointer` symbols anywhere in
+  `vmlinux` (confirms the deletion left nothing dangling).
+- `scripts/boot_qemu.py --tree linux-riscv-worktrees/combined-c2rust-boot-8
+  --run-id combined-c2rust-9`: boots clean, 17/17 KUnit suites pass
+  (`fail:0` every suite, 0 `not ok`), `initramfs init reached, PID 1
+  alive`, no panic/oops/BUG/WARN in the log. Archived at
+  `docs/status/boot-logs/20260719T131521+1000-combined-c2rust-9.log`.
+  No dedicated glob KUnit suite in this kernel config, so
+  `glob_match`/`glob_match_len`'s pattern-matching logic itself wasn't
+  runtime-exercised by this run — boot-screened only, same caveat as
+  every other file in this series without a dedicated suite.
+
+Eighth file to clear the bar. First file in the series with a
+genuinely minimal fix scope (one gap class only — `BitfieldStruct`
+opaquing — zero feature-line strips, zero `#[export]` handling, zero
+libc/const-eval/namespace-collision fixes), confirming the task's
+prediction that a small pure-logic file with no register/FFI/hardware
+surface would need the least hand-fixing of the series. The only real
+finding was environment-side (fresh-worktree `.config` seeding), not
+transpiler-side. `get_current()`-liveness check (issue #30/#31 class)
+came back negative here, unlike `klist.c` — third confirmation that
+this check must be done per-file via grep, not assumed either way.
+
+## Ninth candidate: `lib/errseq.c`
+
+Worktree `combined-c2rust-boot-11`, branch `agent-combined-c2rust-boot-11`,
+based on `linux-rs/phase2-gcd` (already carries `04312ea1ff7e`, the
+issue #29 `KBUILD_RUSTFLAGS` Zacas/Zabha fix). Target: all 4
+`EXPORT_SYMBOL`'d functions (`errseq_set`, `errseq_sample`,
+`errseq_check`, `errseq_check_and_advance`), 209 lines of C, pure
+atomic-int error-sequence-counter logic using `cmpxchg()`. c2rust binary
+at `6065eaf19` (post the `extern_types`/`asm`/`raw_ref_op`/
+`strict_provenance`/unsafe-wrapping/`.init_array` fix series, plus the
+further merge fix stopping stale `raw_ref_op`/`strict_provenance`
+declarations). Baseline transpile at
+`tmp/c2rust-baseline/lib_errseq.c/output/src/errseq.rs` (1255 lines),
+freshness confirmed via `investigate_c2rust_failure.py --rerun`:
+`outcome=clean`, `c2rust_rev=6065eaf19`, byte-identical rerun.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `errseq.o` pulled out of a bundled
+`obj-y` line shared with `once.o`, `refcount.o`, `rcuref.o`,
+`bucket_locks.o`, etc., swapped for `errseq_rs.o` under the config.
+
+Cleanest baseline output of the series: no `extern_types`/`asm` in the
+feature line, `unsafe {}` already wrapping every function body (only 2
+of 17 `unsafe extern "C" fn`s are genuinely empty and correctly
+unwrapped), no `.init_array`/`__UNIQUE_ID_addressable_*` constructor
+trick, no `#[export]`/`::macros::export` (all 4 functions already carry
+plain `#[no_mangle]`), no `c2rust_bitfields::BitfieldStruct` derive at
+all, no `asm/current.h` pull-in (`get_current`/`riscv_current_is_tp`/
+`current_stack_pointer` grep-confirmed absent — this TU never touches
+`task_struct`), no `::libc::` calls, no `LIST_POISON`. Only the
+leftover-feature-line class recurred: `#![feature(label_break_value)]`,
+stripped.
+
+`kernel::warn_on!` gap class (from `rcuref.c`) recurred: `errseq_set`'s
+`if kernel::warn_on!(cond) != 0 { ... }` fails to typecheck (`E0308`,
+expected bool found integer) since `warn_on!` already returns `cond` as
+a `bool`. Fixed by dropping the trailing `!= 0`, same as `rcuref.c`.
+
+Issue #29 bracket-addressing finding recurred, a fifth confirmation:
+24 occurrences of `[{N}]`/`[{N:}]` across `amocas.{b,h,w,d}.aqrl` and
+their LR/SC fallback templates (both `errseq_set` and
+`errseq_check_and_advance` each cmpxchg a 32-bit `errseq_t`, unrolling
+all 4 width arms per call site). Fixed: `[{N}]`/`[{N:}]` ->
+`0({N})`/`0({N:})` throughout, mechanically via a small Python regex
+pass rather than by hand.
+
+### New gap class: `asm goto(ALTERNATIVE(...))` has no real linkable symbol to fall back to — first file where this actually breaks the link
+
+Unlike every prior file, this is the first candidate where the issue #29
+KBUILD_RUSTFLAGS fix is actually in play — since Zacas/Zabha now have
+real Rust target-feature support, the `amocas` fast-path arms didn't
+need deleting outright the way `rcuref.c`/`lwq.c`/`objpool.c`/`klist.c`
+did. This surfaced a different, previously-hidden problem instead: the
+`riscv_has_extension_unlikely()`/`riscv_has_extension_likely()` runtime
+guards feeding those fast-path `if` conditions themselves depend on
+`__riscv_has_extension_unlikely()`/`__riscv_has_extension_likely()` —
+`static __always_inline` C functions built entirely from `asm
+goto(ALTERNATIVE(...))` (RISC-V's boot-time alternative-patching
+mechanism: patches a `j`/`nop` branch in the `.alternative` section at
+`apply_boot_alternatives()` time, based on detected CPU extensions).
+c2rust's transpile.log already flagged this as untranslatable
+("Falling back to an extern declaration for
+'__riscv_has_extension_unlikely': body failed to translate: Cannot
+translate GNU asm goto (extended asm with label operands)") and emitted
+bare `extern "C" { fn __riscv_has_extension_unlikely(...); ... }`
+declarations instead of a body — but because these are C
+`__always_inline` functions, there is **no real linkable symbol**
+anywhere in the kernel for either name; every C call site is inlined
+away. `lib/objpool_rs.o` carries the identical extern declarations but
+never hit this at link time, because that file's fix deleted the
+`amocas` fast-path wrappers outright (issue #29's original fix, before
+`04312ea1ff7e` landed), which made the `riscv_has_extension_unlikely`
+call sites dead code eliminated before linking — this file is the first
+to actually try keeping the fast path (now that KBUILD_RUSTFLAGS
+supports it), which is what exposed the real problem:
+`ld.lld: error: undefined symbol: __riscv_has_extension_likely` /
+`__riscv_has_extension_unlikely`, referenced from `errseq_check`,
+`errseq_check_and_advance`, and `errseq_set`.
+
+Deleting the fast-path wrappers (the established issue #29 playbook fix)
+was not viable here: `riscv_has_extension_likely(ZBB)` is also called
+from `variable__fls`/`variable_fls` (feeding the `__ilog2_u32`/
+`__ilog2_u64` chain that every one of this file's 4 exported functions
+uses to compute `ERRSEQ_SHIFT` from `MAX_ERRNO` — c2rust translates the
+C `is_power_of_2`/`__builtin_constant_p`-gated compile-time-constant
+`ilog2()` path as a runtime `if false { ... } else { variable_fls(...) }`
+dead branch, so the runtime call survives translation even though the
+real C build resolves it at compile time). This call is genuinely
+reached on every function call, not an optional fast path — so unlike
+the amocas arms, it isn't a deletable-without-behavior-change branch.
+
+Fixed by routing both `riscv_has_extension_unlikely`/`_likely` through
+the real, already-linkable `__riscv_isa_extension_available(NULL, ext)`
+— the exact fallback path `arch/riscv/include/asm/cpufeature-macros.h`'s
+own C source uses when `CONFIG_RISCV_ALTERNATIVE` is off, already
+declared correctly in this TU's `extern "C" { ... }` block (c2rust had
+already emitted a correct declaration for it, just never wired the two
+broken functions to call it). Semantically identical query — same
+true/false answer for the same extension bit; "likely"/"unlikely" was
+only ever a branch-prediction hint for the boot-patched-branch fast
+path, not a correctness difference — just without the
+`CONFIG_RISCV_ALTERNATIVE=y` patched-branch speed-up (a real function
+call instead of a patched inline branch). Removed the now-dead
+`__riscv_has_extension_likely`/`_unlikely` extern declarations
+afterward, leaving only `__riscv_isa_extension_available` in the block.
+
+General lesson for future files: an `extern "C"` declaration c2rust
+emits as a "fallback for an untranslatable body" is not automatically
+safe to leave alone just because it currently compiles — it only
+surfaces as a real problem at the *link* stage, and only if the call
+site actually survives to link time (dead-code elimination via an
+unrelated fix, as happened for `objpool.c`, can mask it entirely). Any
+file pulling in `asm/cpufeature-macros.h`'s `riscv_has_extension_likely`/
+`_unlikely` (directly or via any ISA-extension-gated fast path, not just
+Zacas/Zabha's) is a candidate for this — worth grepping the full
+c2rust-baseline corpus for `Cannot translate GNU asm goto` in
+transpile logs before landing anything else that reaches link stage
+with the guard intact.
+
+### Outcome: clean boot, ninth file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/errseq_rs.o` — clean, 0 errors (73
+  warnings, all missing-doc/dead_code lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` and `Image.xz` produced. `lib/errseq.o`
+  correctly never built into `lib.a`/`vmlinux.a`.
+- `llvm-nm`: all 4 symbols `T` in both `lib/errseq_rs.o` and `vmlinux`
+  (`ffffffff80134516 T errseq_check`, `ffffffff801345b6 T
+  errseq_check_and_advance`, `ffffffff80134706 T errseq_sample`,
+  `ffffffff80134784 T errseq_set`).
+- `scripts/boot_qemu.py --run-id combined-c2rust-11`: boots clean,
+  17/17 KUnit suites pass (`fail:0` every suite, 0 `not ok`),
+  `initramfs init reached, PID 1 alive`, no panic/oops/BUG/WARN in the
+  log. Archived at
+  `docs/status/boot-logs/20260719T131403+1000-combined-c2rust-11.log`.
+  No dedicated errseq KUnit suite in this kernel config, so this run
+  demonstrates linking and booting cleanly, not a runtime correctness
+  check of the error-sequence-counter logic itself against known inputs.
+
+Ninth file to clear the bar, and the first to need real hand-fixing for
+a gap class no prior file's fix scope had exercised: the `asm
+goto(ALTERNATIVE(...))` fallback-extern-with-no-real-symbol problem,
+uncovered specifically because this is the first file where the issue
+#29 KBUILD_RUSTFLAGS fix let a Zacas/Zabha-guarded fast path survive to
+link time instead of being deleted outright. Otherwise the cleanest file
+of the series structurally — no `BitfieldStruct`, no register-variable
+statics, no `.init_array`, no `#[export]` — confirming those classes are
+genuinely conditional on what a TU's C source actually pulls in
+(`EXPORT_SYMBOL`, `task_struct` touchpoints, `asm/current.h`), not
+universal.
