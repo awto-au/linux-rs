@@ -123,3 +123,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T20:47:45+10:00,combined-c2rust-boot-23,0,0,0,0,docs/status/boot-logs/20260719T204745+1000-combined-c2rust-boot-23.log
 2026-07-19T20:48:43+10:00,combined-c2rust-boot-22-bunzip2test,0,0,0,0,docs/status/boot-logs/20260719T204843+1000-combined-c2rust-boot-22-bunzip2test.log
 2026-07-19T20:50:26+10:00,combined-c2rust-boot-22-bunzip2test,18,0,1,0,docs/status/boot-logs/20260719T205026+1000-combined-c2rust-boot-22-bunzip2test.log
+2026-07-19T20:51:28+10:00,combined-c2rust-boot-23-dbg,0,0,0,0,docs/status/boot-logs/20260719T205128+1000-combined-c2rust-boot-23-dbg.log
