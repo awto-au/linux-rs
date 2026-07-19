@@ -1202,6 +1202,144 @@ fix and the first hitting a parameter/type namespace collision. Issue
 #29 (bracket addressing + Zacas/Zabha) recurred a fourth time,
 unchanged in shape from `objpool.c`.
 
+## Eighth candidate: `lib/bucket_locks.c`
+
+Worktree `combined-c2rust-boot-10`, branch `agent-combined-c2rust-boot-10`,
+based on `linux-rs/phase2-gcd` at `04312ea1ff7e` (includes the
+Zacas/Zabha `KBUILD_RUSTFLAGS` fix, issue #29's closing commit).
+Target: `__alloc_bucket_spinlocks`/`free_bucket_spinlocks`, both
+`EXPORT_SYMBOL` (not `_GPL`), 55 lines of C. c2rust binary at
+`6065eaf19`. Fresh transpile via `investigate_c2rust_failure.py
+--rerun`: `outcome=clean`, byte-identical (`diff -q`) to the
+pre-existing `tmp/c2rust-baseline/lib_bucket_locks.c/` output.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `bucket_locks.o` pulled out of the
+bundled `obj-y` line (shared with `once.o refcount.o rcuref.o
+errseq.o`), swapped for `bucket_locks_rs.o` under the config. Raw
+transpile copied to `lib/bucket_locks_rs.rs` (3438 lines).
+
+Of the 3 gap classes fixed upstream in the c2rust fix series: confirmed
+absent — no `#![feature(...)]` line at all (not even a leftover), both
+functions already carried `#[no_mangle]` (not `#[export]`/
+`::macros::export`) directly in the raw output, `unsafe {}` already
+wrapping both function bodies, no `.init_array`/
+`__UNIQUE_ID_addressable_*` constructor trick anywhere. First file in
+this series needing zero `#[export]`-class fixes — cleanest raw output
+so far.
+
+### `BitfieldStruct` derives: 5 structs, all dead-by-value and dead-by-field
+
+Most of any file so far: `task_struct`, `mmap_action`,
+`percpu_ref_data`, `signal_struct`, `sched_dl_entity`. Grep-confirmed
+per struct (not assumed): the file's only 6 functions
+(`__must_check_overflow`, `size_mul`, `spinlock_check`,
+`mem_alloc_profiling_enabled`, `__alloc_bucket_spinlocks`,
+`free_bucket_spinlocks`) touch none of the 5 by value or by field —
+`task_struct` appears only as `*mut task_struct` (13 occurrences, all
+pointer-typed struct fields or the fabricated `riscv_current_is_tp`
+static itself), the other 4 only as pointer fields or, for
+`sched_dl_entity`, embedded by value once inside the also-dead
+`task_struct`. No `container_of`-style offset arithmetic or
+`size_of::<>()` call touches any of the 5 anywhere in the TU (unlike
+`klist.c`'s `task_struct.__state` case). Opaqued all 5 via the standard
+`opaque_marker!` macro. `mmap_action`'s nested anonymous union
+(`C2Rust_Unnamed_17`) becomes unreferenced dead code once `mmap_action`
+is opaqued but needed no separate handling — covered by the file's
+existing `#![allow(dead_code)]`.
+
+### Register-variable pseudo-globals: both dead, and — unusually — no `get_current()` synthesized at all
+
+Per the standing rule (rulesdb `0031-fabricated-register-variable-static`,
+closed issues #30/#31): grepped for a `get_current()` accessor
+specifically, not just the `riscv_current_is_tp`/`current_stack_pointer`
+identifiers themselves, before deleting anything. **No `get_current()`
+function exists anywhere in this TU** — this file's only spinlock
+operation is `spin_lock_init()`, whose non-`CONFIG_DEBUG_SPINLOCK`
+macro expansion (confirmed against this worktree's `.config`:
+`CONFIG_DEBUG_SPINLOCK` unset) is `spinlock_check(_lock);
+*(_lock) = __SPIN_LOCK_UNLOCKED(_lock);` — a raw struct write, no
+`task_struct`/preemption-count touchpoint at all. Unlike `klist.c`
+(hit via `spin_unlock`'s inlined preemption-check path) or `lwq.c`
+(accessor present but grep-confirmed uncalled), this file never
+synthesizes the accessor in the first place: no `preempt_count`,
+`kasan_check_write`, `kcsan_check_access`, or `instrument_atomic_*`
+helper functions appear anywhere in the TU either, confirming
+`spin_lock_init`-only usage doesn't pull in the chain that made
+`klist.c`'s case live. Both `riscv_current_is_tp` (declaration only,
+zero reads) and `current_stack_pointer` (same) deleted outright.
+Independently confirmed via `scripts/check_fabricated_register_statics.py`
+run against the full baseline corpus: `lib_bucket_locks.c` is listed in
+the dead/safe set, not the 163-file live/needs-fix set.
+
+No RISC-V inline-asm gaps this time (no `amocas`/`amoswap`/`amoadd`/
+`cmpxchg`/`xchg` anywhere in the TU — `spin_lock_init` doesn't lower to
+an atomic RMW), the first file in the series not to touch issue #29 at
+all.
+
+### Environment red herring: fresh worktree lacked the project's real `.config`, produced a false-positive hang unrelated to this file
+
+First boot attempt (both the Rust build and, for isolation, a plain-C
+`CONFIG_RUST_C2RUST_BOOT_TEST=n` rebuild in the same worktree) hung
+identically after the OpenSBI banner — no `Linux version` line, no
+KUnit output — which looked exactly like the `klist.c` register-static
+class of bug. `-d guest_errors,unimp,int` tracing showed continuous
+`s_timer`/`supervisor_ecall` traps across a wide range of kernel
+addresses (consistent with a running scheduler, not a genuine stall),
+and the plain-C rebuild reproduced the identical hang, which is
+conclusive: `__alloc_bucket_spinlocks`/`free_bucket_spinlocks` are
+never even called in this kernel's boot path in the first place (their
+only in-tree caller is `net/ipv6/ila/ila_xlat.c`, `CONFIG_ILA` unset),
+so a bug in this file's Rust translation cannot be the cause of a hang
+that also reproduces with `bucket_locks.c`'s original C. Root cause:
+`scripts/linux_riscv_worktree.py create` does not carry over a working
+`.config` (worktrees "share git history but NOT build artifacts" per
+the script's own docstring), and this worktree's `.config` had somehow
+picked up a generic riscv defconfig-shaped config missing
+`CONFIG_BLK_DEV_INITRD`/`CONFIG_KUNIT`/`CONFIG_RUST` and hundreds of
+other options present in `linux-riscv/.config` (the main tree) — not a
+c2rust or bucket_locks.c problem at all. Fixed by copying
+`linux-riscv/.config` into the worktree, `make olddefconfig`, then
+re-applying `RUST_C2RUST_BOOT_TEST=y`. Worth flagging as a setup-step
+gap for future worktrees: `linux_riscv_worktree.py create`'s output
+already warns "this worktree has git history only — no build artifacts
+... build a kernel image in it before boot-testing," but doesn't call
+out that the `.config` specifically needs to be seeded from the main
+tree, not regenerated from the base defconfig file — the two produce
+materially different configs and only one boots this project's
+initramfs.
+
+### Outcome: clean boot
+
+- `make ARCH=riscv LLVM=1 lib/bucket_locks_rs.o` — clean, 0 errors
+  (1656 warnings, all missing-doc lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` produced. `lib/bucket_locks.o` correctly
+  never built once `.config` was fixed.
+- `llvm-nm`: both symbols `T` in both `lib/bucket_locks_rs.o` and
+  `vmlinux` (`ffffffff801345ae T __alloc_bucket_spinlocks`,
+  `ffffffff801345d8 T free_bucket_spinlocks`).
+- `scripts/boot_qemu.py --tree linux-riscv-worktrees/combined-c2rust-boot-10
+  --run-id combined-c2rust-10-v2`: boots clean, 17/17 KUnit suites pass
+  (`fail:0` every suite, 0 `not ok`), `initramfs init reached, PID 1
+  alive`, no panic/oops/BUG/WARN in the log. Archived at
+  `docs/status/boot-logs/20260719T131820+1000-combined-c2rust-10-v2.log`.
+  No dedicated bucket_locks KUnit suite in this config.
+
+Eighth file to clear the bar. Cleanest raw c2rust output of the series
+so far (no `#[export]` fix, no leftover feature line, no RISC-V
+inline-asm gap) — confirms the transpiler fix series continues to hold
+and that a file's actual gap-class exposure depends heavily on what it
+transitively pulls in via headers (this file's `spin_lock_init`-only
+usage avoids the whole preemption-check/atomic-helper chain that drove
+most other files' complexity). The `get_current()`-liveness check
+(rule 0031) produced a clean "genuinely dead, no accessor at all"
+verdict here, distinct from both `klist.c`'s "live, must fix" and
+`lwq.c`'s "accessor present but uncalled" cases — a third distinct
+outcome for the same check, reinforcing that it must be run fresh per
+file rather than assumed from a prior file's result in either
+direction.
+
 ## Eighth candidate: `lib/glob.c`
 
 Worktree `combined-c2rust-boot-8`, branch `agent-combined-c2rust-boot-8`,
