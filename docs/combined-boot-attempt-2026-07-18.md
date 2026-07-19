@@ -1610,3 +1610,87 @@ statics, no `.init_array`, no `#[export]` — confirming those classes are
 genuinely conditional on what a TU's C source actually pulls in
 (`EXPORT_SYMBOL`, `task_struct` touchpoints, `asm/current.h`), not
 universal.
+
+## Eleventh candidate: `lib/uuid.c`
+
+Worktree `combined-c2rust-boot-14`, branch `agent-combined-c2rust-boot-14`,
+based on `linux-rs/phase2-gcd`. Target: all 7 exported symbols
+(`generate_random_uuid`, `generate_random_guid`, `guid_gen`, `uuid_gen`,
+`uuid_is_valid`, `guid_parse`, `uuid_parse`, plus the two data statics
+`guid_null`/`uuid_null`), 135 lines of C, pure UUID/GUID parse-format-
+generate logic with no hardware dependency. Baseline transpile at
+`tmp/c2rust-baseline/lib_uuid.c/output/src/uuid.rs` (224 lines).
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `uuid.o` pulled out of a bundled
+`obj-y` line shared with `iov_iter.o`, `clz_ctz.o`, `bsearch.o`, etc.,
+swapped for `uuid_rs.o` under the config.
+
+`python3 scripts/dev.py check-register-statics` run first per the
+mandatory rule 0031 check: `lib_uuid.c` did not appear in either the
+LIVE or dead list output at all — grep-confirmed separately (0
+occurrences of `get_current`/`riscv_current_is_tp`/
+`current_stack_pointer` anywhere in the baseline `uuid.rs`), consistent
+with the tool's silence. This TU never pulls in `asm/current.h` at all
+(no `task_struct` touchpoint of any kind), so the check doesn't apply
+here.
+
+Cleanest baseline output of the series so far, cleaner even than
+`errseq.c`: no `#![feature(...)]` line at all (not even
+`label_break_value`), `unsafe {}` already wrapping every function body,
+no `.init_array`/`__UNIQUE_ID_addressable_*` constructor trick, no
+`c2rust_bitfields::BitfieldStruct` derive anywhere (no `task_struct`
+pulled in at all — this TU's only external call is `get_random_bytes`),
+no register-variable statics, no `::libc::` calls, no RISC-V inline-asm
+(`amocas`/`amoswap`) at all — the function bodies are straight-line
+byte-array manipulation and a loop over `hex_to_bin`/`isxdigit`, nothing
+atomic or cmpxchg-shaped.
+
+Only one gap class recurred: **`#[export]` on the two
+`EXPORT_SYMBOL_GPL` functions** (`guid_gen`, `uuid_gen`) — the
+established `rcuref.c`/`lwq.c` fix, dropped `#[export]` and
+`use ::macros::export;` (now-unused import), added `#[no_mangle]` in
+its place. The 5 plain `EXPORT_SYMBOL` functions/statics
+(`generate_random_uuid`, `generate_random_guid`, `uuid_is_valid`,
+`guid_parse`, `uuid_parse`, `guid_null`, `uuid_index`, `guid_index`)
+already carried plain `#[no_mangle]` in the raw c2rust output, no fix
+needed — matching `is_single_threaded.c`'s finding that c2rust only
+emits `#[export]`/`::macros::export` for `EXPORT_SYMBOL_GPL`, not plain
+`EXPORT_SYMBOL`. No other manual intervention of any kind.
+
+### Outcome: clean boot, eleventh file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/uuid_rs.o` — clean, 0 errors.
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` produced. `lib/uuid.o` correctly never built
+  (only `lib/uuid_rs.o` present).
+- `llvm-nm`: all 9 symbols defined in both `lib/uuid_rs.o` and
+  `vmlinux` — `T generate_random_guid`, `T generate_random_uuid`,
+  `T guid_gen`, `D guid_index`, `B guid_null`, `T guid_parse`,
+  `T uuid_gen`, `D uuid_index`, `T uuid_is_valid`, `B uuid_null`,
+  `T uuid_parse` (`vmlinux` addresses e.g.
+  `ffffffff8016062e T guid_gen`, `ffffffff8016068a T uuid_gen`) — both
+  confirming `#[no_mangle]` correctly emitted the plain C names rather
+  than a Rust-mangled symbol.
+- `dev.py boot --run-id combined-c2rust-boot-14`: boots clean, 17/17
+  KUnit suites pass (`fail:0` every suite, 0 `not ok`), `initramfs init
+  reached, PID 1 alive` confirms INIT REACHED, no panic/oops/BUG/WARN in
+  the log. Archived at
+  `docs/status/boot-logs/20260719T140406+1000-combined-c2rust-boot-14.log`.
+  Boot-history row committed/pushed automatically by `boot_qemu.py`
+  (`750f3e4`). No dedicated uuid KUnit suite in this kernel config, so
+  this run demonstrates linking and booting cleanly, not a runtime
+  correctness check of the UUID parse/format/generate logic itself
+  against known inputs.
+
+Eleventh file to clear the bar, and the cleanest fix scope of the
+series tied with `glob.c` — a single gap class (`#[export]` on the
+GPL-exported pair), zero feature-line strips, zero unsafe-wrapping
+needed, zero `BitfieldStruct` handling, zero register-variable-static
+handling, zero RISC-V inline-asm gaps. Confirms the pattern
+`is_single_threaded.c` and `glob.c` both established: a small,
+self-contained, hardware-independent pure-logic file needs
+substantially less hand-fixing than one touching atomics, `task_struct`,
+or RISC-V memory-ordering primitives — which gap classes fire seems to
+track directly with what headers/kernel facilities the C source actually
+pulls in, not file size or line count.
