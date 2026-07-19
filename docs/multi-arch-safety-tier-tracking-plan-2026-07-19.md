@@ -1,63 +1,20 @@
-> **Correction (2026-07-19, later same day)**: §1's original resolution of
-> "the 3 versions" (reading (a) — the safety-tier progression) was
-> **wrong, corrected directly**: "3 versions" means the arch/endian target
-> matrix — riscv64-LE (shipping today), riscv32-LE, riscv64-BE, riscv32-BE.
-> Confirmed the real combination count: 32-bit × 64-bit × {little, big}
-> endian = 4 real combinations; no 128-bit word width and no third
-> endianness exists anywhere in the kernel (checked directly: zero
-> `CONFIG_*128BIT` hits across `arch/*/Kconfig`, and every `ENDIAN` Kconfig
-> symbol resolves to little/big — `CPU_ENDIAN_BE32` is a 32-bit-big-endian
-> *variant name*, not a third family). "3" was confirmed to be imprecise
-> phrasing for the full 2×2 matrix, not a deliberate count excluding one
-> combination — **track all 4 target configs**, not 3.
->
-> **What this changes**: the safety-tier axis (§1's rejected-but-still-real
-> reading (a), unsafe-baseline → safe-lifted → optimised) is NOT what "the
-> 3" refers to, but it does NOT go away — it's still real, still tracked,
-> still the correct §2 schema design (a **second, independent axis**
-> alongside the target-config axis, exactly as §1 already proposed for
-> the rejected reading). The schema in §2 (the `translation_targets`
-> table, the `target_id` column on `file_oracle_status`) is UNCHANGED by
-> this correction — it was already designed as an open-ended list of
-> target configs, not hardcoded to a count of 3, so it already
-> accommodates "4 real configs" without modification. Only §1's own
-> *interpretation* of which English phrase maps to which axis was wrong;
-> the mechanism proposed in §2 onward was already correct for either
-> reading, because it never assumed a fixed count.
->
-> The rest of this document (§2's current-state findings, §3's Kconfig
-> hybrid recommendation and its `arch/arm/Kconfig:139`/`arch/riscv/
-> Kconfig:405` precedents, §4's kernel-drift mechanism) is unaffected —
-> re-read with "3 versions = the 4-config target matrix, safety-tier is
-> separate" as the corrected framing.
-
 # Plan: tracking safety tier and arch/endian variants per function/file, and surviving kernel rebases
 
 Status: **planning document, no code written, no schema/Kconfig files modified.**
-This resolves an ambiguous verbal proposal ("get an agent to do a plan for new
-broader approach to handle a move towards a safe version and also 32/64
-little and big endian versions of linux... once an unsafe version of a
-function and then a file is delivered attempts a the 3 versions... the data
-is too track every function in kernel with conversion state... using the
-linux config system but extended to use a data of options") into a concrete
-design, grounded in this project's actual current state as of 2026-07-19 (38
+Grounded in this project's actual current state as of 2026-07-19 (38
 hand-translated TUs, 1 arch, `rulesdb/patterns.db` schema at 680 lines).
 
 ## 0. Bottom line up front
 
-- **"The 3 versions" = the arch/endian target matrix** (corrected
-  2026-07-19, see the note at the top of this document): 32-bit × 64-bit ×
-  {little, big} endian is the real, complete combination space (confirmed:
-  no 128-bit word width, no third endianness anywhere in the kernel) — 4
-  real configs (riscv64-LE shipping today, riscv32-LE, riscv64-BE,
-  riscv32-BE), "3" was imprecise phrasing for this matrix, not a
-  deliberate exclusion of one. §1 below still contains real, useful
-  analysis (interpretation (b) is essentially this corrected reading,
-  just originally ranked second) — read it with the corrected framing.
-  The safety-tier progression (unsafe-baseline → safe-lifted →
+- **"The 3 versions" = the arch/endian target matrix**: 32-bit × 64-bit ×
+  {little, big} endian, the real complete combination space (no 128-bit
+  word width, no third endianness anywhere in the kernel — confirmed:
+  zero `CONFIG_*128BIT` hits across `arch/*/Kconfig`, every `ENDIAN`
+  symbol resolves to little/big). 4 real configs: riscv64-LE (shipping
+  today), riscv32-LE, riscv64-BE, riscv32-BE. See §1.
+- The safety-tier progression (unsafe-baseline → safe-lifted →
   optimised-if-pure, already named in PLAN.md's Phase 2 step 3/Phase 2.5)
-  is real and still tracked, but as the **second, independent axis**, not
-  what "the 3" itself refers to.
+  is real and tracked as a **second, independent axis** — see §1.
 - **Kconfig question: hybrid, not either/or.** Real kernel Kconfig
   (`CONFIG_RUST_<slice>`-style, already proven across 5+ landed 8250 slices)
   answers "what can be built into this exact kernel image" and should gate
@@ -88,80 +45,37 @@ hand-translated TUs, 1 arch, `rulesdb/patterns.db` schema at 680 lines).
 
 ---
 
-## 1. Resolving "attempts a the 3 versions"
+## 1. "The 3 versions" and the safety-tier axis
 
-The raw proposal names two axes in the same breath — "a move towards a safe
-version" and "32/64 little and big endian versions" — then says "attempts a
-the 3 versions," without saying which axis contributes how many of the 3.
-Four candidate readings, evaluated against what this project's own
-documents already commit to:
+"3 versions" = the arch/endian target matrix: 32-bit × 64-bit × {little,
+big} endian. Real combination space is 4, not literally 3 (no 128-bit
+word width, no third endianness anywhere in the kernel) — "3" is
+imprecise phrasing for the matrix, not a deliberate exclusion. Track all
+4: riscv64-LE (shipping today), riscv32-LE, riscv64-BE, riscv32-BE.
 
-**(a) 3 = safety-tier progression per function** (unsafe-baseline →
-safe-lifted → optimised-if-pure), arch/endian handled as a *separate* axis
-layered on top. **Originally adopted here, corrected 2026-07-19 (see the
-top-of-document note) — the actual intended reading is (b) below, not
-this one.** Kept for the record since the safety-tier progression is
-still real and still tracked, just as the second axis, not "the 3"
-itself. Evidence this is what the project already means by a three-tier
-concept even before this proposal (still true, just not what "3
-versions" in the proposal referred to):
-`PLAN.md`'s Phase 2 step 3 ("Safe-version attempt using the kernel crate's
-rules: for each translated file, attempt a second version...") and Phase
-2.5 ("a third variant is permitted... 1. faithful... 2. safe-lifted...
-3. optimised") **already define a three-tier per-function progression in
-exactly these words**, dated 2026-07-16, three days before this proposal.
-The proposal's "once an unsafe version of a function and then a file is
-delivered attempts a the 3 versions" reads naturally as: after the
-faithful/unsafe baseline lands, attempt the next two tiers PLAN.md already
-named. The 32/64-bit and endian language is additional new scope on top of
-an existing three-tier idea, not a redefinition of what "3" counts.
+The safety-tier progression — `unsafe-baseline` → `safe-lifted` →
+`optimised` (pure-leaf only, per Phase 2.5's own gate — this tier
+literally does not apply to most functions, by design) — is a real,
+already-named concept in `PLAN.md`'s Phase 2 step 3 and Phase 2.5, and
+is tracked here too, as a **second, independent axis**, not folded into
+the arch/endian count.
 
-**(b) 3 = {32-bit, 64-bit, one endian variant} as the target-config axis,
-safety separate.** **Corrected 2026-07-19 (see top-of-document note):
-this is the actual intended reading, confirmed directly** — "3 versions"
-means the arch/endian target matrix, not the safety-tier progression.
-The real combination space is 4, not 3 (32-bit × 64-bit × {little, big}
-endian — confirmed no 128-bit width, no third endianness exists anywhere
-in the kernel), so the precise reading is "the target-config matrix,
-imprecisely counted as 3" rather than literally 3 named configs — track
-all 4 (riscv64-LE already shipping, riscv32-LE, riscv64-BE, riscv32-BE),
-not exactly 3. The safety-tier progression (reading (a) above) remains
-real and tracked as the separate, second axis this section's original
-analysis already argued for regardless of which reading of "3" was
-chosen — that part of the original reasoning was right, only the
-"which axis is 'the 3'" call was backwards.
+Bundling both axes into one "done" bar is explicitly rejected: it
+conflates two orthogonal questions (translation approach vs. build
+target) into one number, breaking the ability to ask "is this function's
+*safe* version verified on rv32" independently of "is its *unsafe*
+version verified on rv64" — exactly the kind of question this system
+needs to answer. §2 treats them as two independent dimensions.
 
-**(c) 3 = {unsafe, safe, one specific arch/endian combo} bundled as a single
-"done" bar.** Rejected: this conflates two orthogonal questions (translation
-approach vs. build target) into one number, which breaks down immediately
-once a second arch config is added — is a function now "done" at 4? 6?
-Bundling them loses the ability to ask "is this function's *safe* version
-verified on rv32" independently of "is its *unsafe* version verified on
-rv64," which is exactly the kind of question the proposal's "track every
-function... with conversion state" wants answered. The tracking schema in
-§2 treats these as two independent dimensions specifically to avoid this
-trap.
+**Design**: two independent axes.
 
-**(d) Something else, informed by current project state.** Checked and
-ruled out: this project has zero rv32 infrastructure, zero big-endian
-infrastructure, and no committed x86_64 config (§2) — so there is no
-existing "3rd arch" already in flight that the proposal could be pointing
-at. Nothing in current state suggests a reading other than (a) plus a new
-orthogonal config axis.
-
-**Adopted design**: two independent axes, not one flattened "3":
-
-1. **Safety-tier axis** (what §0/§3/PLAN.md call "the 3 versions"):
-   `unsafe-baseline` → `safe-lifted` → `optimised` (pure-leaf only, per
-   Phase 2.5's own gate — this tier literally does not apply to most
-   functions, by design).
-2. **Target-config axis** (the 32/64/endian part of the proposal): an
-   open-ended list of `(arch, bits, endian, defconfig)` tuples, starting
-   at exactly one row (`riscv64-slim-serial`, the only config that exists
-   today) and growing as rv32/big-endian/etc are actually pursued — NOT
-   pre-populated with speculative rows for configs nobody has built yet
-   (see §2's "greenfield, not dormant" finding — there is nothing to wire
-   up, everything here is new).
+1. **Safety-tier axis**: `unsafe-baseline` → `safe-lifted` → `optimised`.
+2. **Target-config axis**: an open-ended list of `(arch, bits, endian,
+   defconfig)` tuples, starting at exactly one row (`riscv64-slim-serial`,
+   the only config that exists today) and growing as rv32/big-endian/etc
+   are actually pursued — not pre-populated with speculative rows for
+   configs nobody has built yet (see §2's "greenfield, not dormant"
+   finding — there is nothing to wire up, everything here is new).
 
 A function's full state is a **matrix cell**: (safety-tier, target-config),
 each cell independently `not_attempted | attempted | verified(tier N)`.
@@ -268,9 +182,8 @@ translation_targets(
 -- never speculatively pre-populated.
 ```
 
-**The corrected "3 versions" reading (see the top-of-document correction
-note) names the other 3 rows this table is FOR**, once each is actually
-built (not seeded speculatively, per the row above): `(riscv, 32, little,
+The other 3 rows this table is for, once each is actually built (not
+seeded speculatively, per the row above): `(riscv, 32, little,
 <tbd-defconfig>, 0, <tbd>)`, `(riscv, 64, big, <tbd-defconfig>, 0, <tbd>)`,
 `(riscv, 32, big, <tbd-defconfig>, 0, <tbd>)`. Each requires real,
 separate bring-up work before it's a real row (§2's "greenfield, not
