@@ -2182,3 +2182,161 @@ files pull in a new risk category plain utility files don't: C idioms
 that intentionally rely on overflow wraparound for pseudo-random test
 data generation, which c2rust's literal-operator translation turns into
 a hard panic under Rust's default overflow checks.
+
+## Sixteenth candidate: `lib/seq_buf.c`
+
+Worktree `combined-c2rust-boot-17`, branch `agent-combined-c2rust-boot-17`,
+based on `linux-rs/phase2-gcd`. Target: all 5 `EXPORT_SYMBOL_GPL`
+functions (`seq_buf_printf`, `seq_buf_do_printk`, `seq_buf_puts`,
+`seq_buf_putc`, `seq_buf_putmem_hex`), 119 statements (`dev.py readiness
+"lib/*.c"`), the largest file attempted in this series so far —
+string-buffer-append infrastructure used by tracing/`seq_file`. c2rust
+binary at `6065eaf19` (current master at start of this run; rebuilt
+14:43, after master's 12:15 merge, confirmed no newer commit landed
+mid-task). Fresh transpile via `investigate_c2rust_failure.py --rerun`:
+`outcome=clean`, byte-identical (`diff -q`) to the pre-existing
+`tmp/c2rust-baseline/lib_seq_buf.c/` output — no re-transpile needed.
+
+`python3 scripts/dev.py check-register-statics` run first per rule 0031:
+`lib_seq_buf.c` not in the 11-file live set (drivers_base_core.c,
+fs_file.c, fs_select.c, init_do_mounts.c, kernel_fork.c, kernel_pid.c,
+kernel_sched_core.c, lib_strncpy_from_user.c, lib_strnlen_user.c,
+lib_usercopy.c, lib_vsprintf.c), present only in the dead/safe set.
+Corroborated by grep: no `get_current()` accessor defined anywhere in
+the TU — the "no accessor synthesized at all" branch of rule 0031, same
+as `bucket_locks.c`/`debug_locks.c`. `riscv_current_is_tp`/
+`current_stack_pointer` both declaration-only, deleted outright.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `seq_buf.o` pulled out of the bundled
+`lib-y` line, swapped for `seq_buf_rs.o` (plus a second new object, see
+below) under the config.
+
+Known classes confirmed present: `#[export]` -> `#[no_mangle]` on all 5
+functions (`use ::macros::export;` import dropped); 4 dead
+`BitfieldStruct`-derived structs (`task_struct`, `mmap_action`,
+`signal_struct`, `sched_dl_entity`) traced and opaqued — `sched_dl_entity`
+embedded by-value inside the also-pointer-only `task_struct`,
+`mmap_action` embedded by-value inside `vm_area_desc`, itself only ever
+`*mut`, same collapse-to-dead-by-construction shape `bust_spinlocks.c`/
+`glob.c` established; `kernel::warn_on!(cond) != 0` recurred at all 3
+sites where c2rust added the comparison (the other 7 `warn_on!` call
+sites in this file are bare statements with no comparison, already
+correct), fixed by dropping `!= 0`, same as `rcuref.c`/`errseq.c`; unused
+`use ::kernel::warn_on;` import dropped, same dead-import class
+`debug_locks.c` established. No RISC-V inline-asm gaps (no
+`amocas`/`amoswap`/`cmpxchg` anywhere in the TU). No `.init_array` trick.
+
+### New gap class: `c_variadic`/`core::ffi::VaList` — unstable, disallowed, and has no stable substitute for *defining* a variadic function (filed as issue #37)
+
+`seq_buf_printf(struct seq_buf *s, const char *fmt, ...)` is a genuine
+C-variadic function, `EXPORT_SYMBOL_GPL`'d with ~38 real call sites
+across the tree (`kernel/panic.c`, `kernel/trace/trace_seq.c`,
+`lib/alloc_tag.c`, etc.). c2rust translated it, plus `seq_buf_vprintf`'s
+`va_list` parameter and the `vsnprintf()` extern declaration, using
+Rust's `#![feature(c_variadic)]` and `core::ffi::VaList` — both
+unstable, zero overlap with `rust_allowed_features`
+(`E0725`), and additionally rejected outright even with the feature
+line present (`E0658: C-variadic functions are unstable`,
+`E0658: use of unstable library feature c_variadic` x3) since the
+compiler itself refuses these without the disallowed flag. Unlike
+`raw_ref_op`/`extern_types`/`strict_provenance`, there is no stable
+Rust syntax for *defining* a C-variadic function at all — this is a
+hard structural gap, not a strip-the-feature-line fix.
+
+c2rust's own output already contained the actual fix material:
+`pub type __builtin_va_list = *mut ::core::ffi::c_void;` (line 85),
+matching real bindgen's own representation of C's `va_list`
+(`rust/bindings/bindings_generated.rs`: `pub type va_list =
+__builtin_va_list;` / `pub type __builtin_va_list = *mut ffi::c_void;`
+— riscv64's `va_list` is ABI-defined as a single pointer, not a struct
+like x86-64 SysV) — c2rust just didn't use it consistently, emitting
+`core::ffi::VaList` for `seq_buf_vprintf`'s parameter and the
+`vsnprintf` extern instead of its own already-declared
+`__builtin_va_list` alias. Fixed by: (1) retyping `seq_buf_vprintf`'s
+`args` parameter and the `vsnprintf` extern's `args` parameter from
+`core::ffi::VaList` to `__builtin_va_list`, dropping the now-unneeded
+`.as_va_list()` calls; (2) deleting the Rust `seq_buf_printf` function
+and its `global_asm!` `.export_symbol` block entirely; (3) adding a new
+2-object-file `lib/seq_buf_rs_shim.c` carrying just `seq_buf_printf`'s
+real variadic entry point (`va_start`/`va_end`, forwards to
+`seq_buf_vprintf` — mirrors the original C function line-for-line) and
+its `EXPORT_SYMBOL_GPL`; (4) adding an `extern "C" { fn seq_buf_printf(
+..., ...) -> c_int; }` declaration back into `seq_buf_rs.rs`, needed
+because `seq_buf_hex_dump()` itself calls `seq_buf_printf()` at 3 call
+sites — a variadic *call site* needs no unstable feature (same as the
+`_printk(...)` extern call c2rust's own output already declares
+unmodified), only a variadic *definition* does, so this direction of
+the split works with zero feature-gate friction. `lib/Makefile` builds
+both `seq_buf_rs.o` and `seq_buf_rs_shim.o` under
+`CONFIG_RUST_C2RUST_BOOT_TEST`. First file in the series needing a
+second, hand-written non-generated `.c` file alongside the c2rust
+output rather than a pure in-place Rust edit.
+
+### New gap class: `-1 as usize` — invalid syntax from a `__builtin_object_size` dead-branch translation (filed as issue #38, 50 corpus files affected)
+
+`check_copy_size()`'s c2rust-translated `__builtin_object_size()`
+compile-time-constant idiom produced `(if <always-true-const> { -1 as
+usize } else { 0 as usize })` — `-1 as usize` doesn't parse in Rust
+(`E0600`: unary `-` not valid on an unsigned type), unlike C where
+`(size_t)-1` is well-defined two's-complement wraparound. Fixed by
+substituting `usize::MAX`, the bit-identical value C's `(size_t)-1`
+represents — same "always-true dead branch, fix the value not the
+control flow" shape `errseq.c`'s `ilog2`/`variable_fls` finding already
+established, but this is the first file where the dead branch's own
+literal syntax (not a downstream unresolved symbol) was the actual
+break.
+
+### Outcome: clean boot, sixteenth file to clear the bar, largest file of the series so far
+
+- `make ARCH=riscv LLVM=1 lib/seq_buf_rs.o lib/seq_buf_rs_shim.o` —
+  clean, 0 errors (1583 warnings, all missing-doc/FFI-safety-lint noise,
+  pre-existing pattern — the 2 `improper_ctypes` warnings on
+  `lock_class_key`/`arch_spinlock_t` through `d_path`/`seq_write`'s
+  extern params are zero-sized-struct false positives, cosmetic, same
+  shape every prior file's `extern "C"` blocks already carry).
+- `dev.py build` (`LINUXRS_TREE=linux-riscv-worktrees/combined-c2rust-boot-17`)
+  succeeds, `arch/riscv/boot/Image` produced. `lib/seq_buf.o` correctly
+  never built (absent from the tree).
+- `llvm-nm`: all 11 real functions (5 `EXPORT_SYMBOL_GPL` plus 6
+  internal-linkage-but-`#[no_mangle]`'d helpers c2rust already emitted
+  that way) `T` in both the two new `.o`s and `vmlinux`
+  (`ffffffff801e1e6c T seq_buf_printf`, `ffffffff801e18f2 T
+  seq_buf_do_printk`, `ffffffff801e1d50 T seq_buf_puts`,
+  `ffffffff801e1be2 T seq_buf_putc`, `ffffffff801e1c60 T
+  seq_buf_putmem_hex`, plus `seq_buf_vprintf`/`seq_buf_putmem`/
+  `seq_buf_path`/`seq_buf_to_user`/`seq_buf_hex_dump`/
+  `seq_buf_print_seq`). `seq_buf_printf` correctly `U` (undefined) in
+  `lib/seq_buf_rs.o` and `T` (defined) in `lib/seq_buf_rs_shim.o`;
+  `seq_buf_vprintf` the mirror image (`T` in the Rust object, `U` in the
+  shim) — confirms the two-object split links both directions cleanly.
+  `riscv_current_is_tp`/`current_stack_pointer` absent from `vmlinux`
+  entirely (0 occurrences via grep).
+- `dev.py boot --run-id combined-c2rust-boot-17`: boots clean, **17/17
+  KUnit suites pass** (`ORACLE PASS (17 suites)`, 0 `not ok`),
+  `INIT REACHED (initramfs userspace boot verified)`, no panic/oops/
+  BUG/WARN in the log (the only "panic" string match is the
+  `panic=-1` boot command-line argument, not a real panic event).
+  Archived at
+  `docs/status/boot-logs/20260719T150017+1000-combined-c2rust-boot-17.log`.
+  Boot-history row committed/pushed automatically by `dev.py boot`
+  (`a0ecd1d`). `CONFIG_SEQ_BUF_KUNIT_TEST` is not set in this config, so
+  `seq_buf_printf`/`seq_buf_vprintf`'s actual formatting logic wasn't
+  runtime-exercised by this run (same caveat as every prior file
+  without a dedicated enabled suite) — this run demonstrates the
+  variadic-ABI split links and boots correctly, not that the
+  printf-format-string logic itself matches the C reference output for
+  known inputs.
+
+Largest file of the series (119 statements) needed the most distinct
+fix classes of any file so far (6: `#[export]`, `BitfieldStruct`
+opaquing x4-struct chain, `warn_on! != 0`, dead-import cleanup,
+register-static deletion, plus the 2 new ones below) but every
+previously-known class recurred exactly as documented — confirms the
+series' fixes scale to a 2-3x-larger file without needing a
+qualitatively different approach, aside from the two genuinely new
+classes: the `c_variadic`/`VaList` gap (a hard language-level wall, not
+a strip-the-line fix, resolved by a C-shim split rather than an
+in-place Rust edit — the first file in the series needing one) and the
+`-1 as usize` literal-syntax break in a `__builtin_object_size`
+dead-branch translation.
