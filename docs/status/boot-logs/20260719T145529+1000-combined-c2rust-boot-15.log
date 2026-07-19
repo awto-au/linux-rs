@@ -1,0 +1,494 @@
+# qemu-system-riscv64 -M virt -m 256M -nographic -no-reboot -kernel /mnt/2tb/git/linux-rs/linux-riscv-worktrees/combined-c2rust-boot-15/arch/riscv/boot/Image -initrd /mnt/2tb/git/linux-rs/tmp/initramfs/initramfs.cpio.gz -append earlycon=sbi console=ttyS0 panic=-1
+00000.244 
+00000.244 OpenSBI v1.7
+00000.244    ____                    _____ ____ _____
+00000.245   / __ \                  / ____|  _ \_   _|
+00000.245  | |  | |_ __   ___ _ __ | (___ | |_) || |
+00000.245  | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+00000.245  | |__| | |_) |  __/ | | |____) | |_) || |_
+00000.246   \____/| .__/ \___|_| |_|_____/|____/_____|
+00000.246         | |
+00000.246         |_|
+00000.246 
+00000.267 Platform Name               : riscv-virtio,qemu
+00000.268 Platform Features           : medeleg
+00000.268 Platform HART Count         : 1
+00000.268 Platform IPI Device         : aclint-mswi
+00000.268 Platform Timer Device       : aclint-mtimer @ 10000000Hz
+00000.269 Platform Console Device     : uart8250
+00000.269 Platform HSM Device         : ---
+00000.269 Platform PMU Device         : ---
+00000.273 Platform Reboot Device      : syscon-reboot
+00000.274 Platform Shutdown Device    : syscon-poweroff
+00000.274 Platform Suspend Device     : ---
+00000.274 Platform CPPC Device        : ---
+00000.274 Firmware Base               : 0x80000000
+00000.275 Firmware Size               : 317 KB
+00000.275 Firmware RW Offset          : 0x40000
+00000.275 Firmware RW Size            : 61 KB
+00000.275 Firmware Heap Offset        : 0x46000
+00000.276 Firmware Heap Size          : 37 KB (total), 2 KB (reserved), 11 KB (used), 23 KB (free)
+00000.277 Firmware Scratch Size       : 4096 B (total), 1400 B (used), 2696 B (free)
+00000.277 Runtime SBI Version         : 3.0
+00000.277 Standard SBI Extensions     : time,rfnc,ipi,base,hsm,srst,pmu,dbcn,fwft,legacy,dbtr,sse
+00000.278 Experimental SBI Extensions : none
+00000.278 
+00000.278 Domain0 Name                : root
+00000.278 Domain0 Boot HART           : 0
+00000.279 Domain0 HARTs               : 0*
+00000.279 Domain0 Region00            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+00000.280 Domain0 Region01            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+00000.280 Domain0 Region02            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+00000.281 Domain0 Region03            : 0x0000000080040000-0x000000008004ffff M: (R,W) S/U: ()
+00000.282 Domain0 Region04            : 0x0000000080000000-0x000000008003ffff M: (R,X) S/U: ()
+00000.282 Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+00000.283 Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+00000.283 Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+00000.284 Domain0 Next Address        : 0x0000000080200000
+00000.284 Domain0 Next Arg1           : 0x000000008fe00000
+00000.284 Domain0 Next Mode           : S-mode
+00000.284 Domain0 SysReset            : yes
+00000.285 Domain0 SysSuspend          : yes
+00000.285 
+00000.285 Boot HART ID                : 0
+00000.285 Boot HART Domain            : root
+00000.285 Boot HART Priv Version      : v1.12
+00000.286 Boot HART Base ISA          : rv64imafdch
+00000.290 Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+00000.290 Boot HART PMP Count         : 16
+00000.290 Boot HART PMP Granularity   : 2 bits
+00000.290 Boot HART PMP Address Bits  : 54
+00000.290 Boot HART MHPM Info         : 16 (0x0007fff8)
+00000.290 Boot HART Debug Triggers    : 2 triggers
+00000.290 Boot HART MIDELEG           : 0x0000000000001666
+00000.290 Boot HART MEDELEG           : 0x0000000000f4b509
+00001.013 Linux version 7.2.0-rc3+ (dan@selwyn) (clang version 22.1.8 (Fedora 22.1.8-1.fc44), LLD 22.1.8) #1 PREEMPT Sun Jul 19 14:54:42 AEST 2026
+00001.013 random: crng init done
+00001.013 Machine model: riscv-virtio,qemu
+00001.013 SBI specification v3.0 detected
+00001.013 SBI implementation ID=0x1 Version=0x10007
+00001.013 SBI TIME extension detected
+00001.020 SBI IPI extension detected
+00001.020 SBI RFENCE extension detected
+00001.020 SBI SRST extension detected
+00001.021 SBI DBCN extension detected
+00001.021 SBI FWFT extension detected
+00001.021 efi: UEFI not found.
+00001.021 OF: reserved mem: 0x0000000080000000..0x000000008003ffff (256 KiB) nomap non-reusable mmode_resv1@80000000
+00001.021 OF: reserved mem: 0x0000000080040000..0x000000008004ffff (64 KiB) nomap non-reusable mmode_resv0@80040000
+00001.021 riscv: base ISA extensions acdfhim
+00001.021 riscv: ELF capabilities acdfim
+00001.021 Ticket spinlock: enabled
+00001.021 Zone ranges:
+00001.024   DMA32    [mem 0x0000000080000000-0x000000008fffffff]
+00001.024   Normal   empty
+00001.024 Movable zone start for each node
+00001.024 Early memory node ranges
+00001.024   node   0: [mem 0x0000000080000000-0x000000008004ffff]
+00001.024   node   0: [mem 0x0000000080050000-0x000000008fffffff]
+00001.024 Initmem setup node 0 [mem 0x0000000080000000-0x000000008fffffff]
+00001.024 Kernel command line: earlycon=sbi console=ttyS0 panic=-1
+00001.024 printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+00001.024 Dentry cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+00001.024 Inode-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+00001.024 software IO TLB: SWIOTLB bounce buffer size adjusted to 0MB
+00001.031 software IO TLB: area num 1.
+00001.034 software IO TLB: mapped [mem 0x000000008ff49000-0x000000008ff89000] (0MB)
+00001.034 Built 1 zonelists, mobility grouping on.  Total pages: 65536
+00001.034 mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+00001.034 SLUB: HWalign=64, Order=0-1, MinObjects=0, CPUs=1, Nodes=1
+00001.034 NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+00001.034 riscv-intc: 64 local interrupts mapped
+00001.034 clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+00001.034 clocksource: riscv_clocksource: mask: 0xffffffffffffffff max_cycles: 0x24e6a1710, max_idle_ns: 440795202120 ns
+00001.034 sched_clock: 64 bits at 10MHz, resolution 100ns, wraps every 4398046511100ns
+00001.034 riscv-timer: Timer interrupt in S-mode is available via sstc extension
+00001.034 Calibrating delay loop (skipped), value calculated using timer frequency.. 20.00 BogoMIPS (lpj=40000)
+00001.034 pid_max: default: 32768 minimum: 301
+00001.034 Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+00001.034 Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+00001.034 VFS: Finished mounting rootfs on nullfs
+00001.034 riscv: ELF compat mode supported
+00001.034 ASID allocator using 16 bits (65536 entries)
+00001.034 EFI services will not be available.
+00001.034 Memory: 245984K/262144K available (1979K kernel code, 2535K rwdata, 2048K rodata, 2156K init, 220K bss, 15508K reserved, 0K cma-reserved)
+00001.034 devtmpfs: initialized
+00001.043 DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+00001.045 clocksource: Switched to clocksource riscv_clocksource
+00001.045 workingset: timestamp_bits=62 (anon: 57) max_order=16 bucket_order=0 (anon: 0)
+00001.045 io scheduler mq-deadline registered
+00001.045 io scheduler kyber registered
+00001.045 Unpacking initramfs...
+00001.045 riscv-plic: plic@c000000: mapped 96 interrupts with 1 handlers for 2 contexts.
+00001.045 Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+00001.045 Freeing initrd memory: 108K
+00001.045 printk: legacy console [ttyS0] disabled
+00001.045 10000000.serial: ttyS0 at MMIO 0x10000000 (irq = 1, base_baud = 230400) is a 16550A
+00001.045 printk: legacy console [ttyS0] enabled
+00001.060 riscv-pmu-sbi: SBI PMU extension is available
+00001.061 riscv-pmu-sbi: 16 firmware and 18 hardware counters
+00001.063 riscv-pmu-sbi: Perf sampling/filtering is not supported as sscof extension is not available
+00001.089 cpu0: scalar unaligned word access speed is 7.23x byte access speed (fast)
+00001.114 clk: Disabling unused clocks
+00001.115 KTAP version 1
+00001.115 1..17
+00001.115     KTAP version 1
+00001.116     # Subtest: rust_kernel_str
+00001.119     # speed: normal
+00001.119     1..7
+00001.141     # test_cstr_to_str.speed: normal
+00001.146     ok 1 test_cstr_to_str
+00001.153     # test_cstr_to_str_invalid_utf8.speed: normal
+00001.161     ok 2 test_cstr_to_str_invalid_utf8
+00001.161     # test_cstr_display.speed: normal
+00001.166     ok 3 test_cstr_display
+00001.174     # test_cstr_display_all_bytes.speed: normal
+00001.180     ok 4 test_cstr_display_all_bytes
+00001.181     # test_cstr_debug.speed: normal
+00001.186     ok 5 test_cstr_debug
+00001.190     # test_bstr_display.speed: normal
+00001.195     ok 6 test_bstr_display
+00001.197     # test_bstr_debug.speed: normal
+00001.198     ok 7 test_bstr_debug
+00001.204 # rust_kernel_str: pass:7 fail:0 skip:0 total:7
+00001.204 # Totals: pass:7 fail:0 skip:0 total:7
+00001.204 ok 1 rust_kernel_str
+00001.204     KTAP version 1
+00001.204     # Subtest: rust_kernel_kunit
+00001.204     # speed: normal
+00001.204     1..3
+00001.204     # rust_test_kunit_example_test.speed: normal
+00001.207     ok 1 rust_test_kunit_example_test
+00001.208     # rust_test_kunit_in_kunit_test.speed: normal
+00001.211     ok 2 rust_test_kunit_in_kunit_test
+00001.212     # rust_test_kunit_always_disabled_test.speed: normal
+00001.213     ok 3 rust_test_kunit_always_disabled_test # SKIP 
+00001.213 # rust_kernel_kunit: pass:2 fail:0 skip:1 total:3
+00001.214 # Totals: pass:2 fail:0 skip:1 total:3
+00001.214 ok 2 rust_kernel_kunit
+00001.214     KTAP version 1
+00001.215     # Subtest: rust_kernel_bitmap
+00001.215     # speed: normal
+00001.215     1..6
+00001.219     # bitmap_borrow.speed: normal
+00001.220     ok 1 bitmap_borrow
+00001.221     # bitmap_copy.speed: normal
+00001.222     ok 2 bitmap_copy
+00001.222     # bitmap_vec_new.speed: normal
+00001.227     ok 3 bitmap_vec_new
+00001.227     # bitmap_set_clear_find.speed: normal
+00001.230     ok 4 bitmap_set_clear_find
+00001.231 rust_kernel: Bit `index` must be < 128, was 2048
+00001.231 rust_kernel: Bit `index` must be < 128, was 2048
+00001.232 rust_kernel: Bit `index` must be < 128, was 2048
+00001.233 rust_kernel: Bit `index` must be < 128, was 2048
+00001.234     # owned_bitmap_out_of_bounds.speed: normal
+00001.238     ok 5 owned_bitmap_out_of_bounds
+00001.238     # bitmap_copy_and_extend.speed: normal
+00001.239     ok 6 bitmap_copy_and_extend
+00001.239 # rust_kernel_bitmap: pass:6 fail:0 skip:0 total:6
+00001.239 # Totals: pass:6 fail:0 skip:0 total:6
+00001.240 ok 3 rust_kernel_bitmap
+00001.240     KTAP version 1
+00001.243     # Subtest: rust_kernel_bitfield
+00001.243     # speed: normal
+00001.243     1..7
+00001.247     # test_basic_access.speed: normal
+00001.254     ok 1 test_basic_access
+00001.254     # test_infallible_conversion.speed: normal
+00001.254     ok 2 test_infallible_conversion
+00001.254     # test_fallible_conversion.speed: normal
+00001.254     ok 3 test_fallible_conversion
+00001.254     # test_overlapping_fields.speed: normal
+00001.259     ok 4 test_overlapping_fields
+00001.260     # test_unallocated_bits.speed: normal
+00001.263     ok 5 test_unallocated_bits
+00001.266     # test_try_with.speed: normal
+00001.270     ok 6 test_try_with
+00001.270     # test_raw.speed: normal
+00001.270     ok 7 test_raw
+00001.271 # rust_kernel_bitfield: pass:7 fail:0 skip:0 total:7
+00001.271 # Totals: pass:7 fail:0 skip:0 total:7
+00001.271 ok 4 rust_kernel_bitfield
+00001.275     KTAP version 1
+00001.275     # Subtest: rust_kvec
+00001.275     # speed: normal
+00001.275     1..5
+00001.299     # test_kvec_retain.speed: normal
+00001.307     ok 1 test_kvec_retain
+00001.308     # test_kvvec_shrink_to.speed: normal
+00001.315     ok 2 test_kvvec_shrink_to
+00001.315     # test_kvvec_shrink_to_empty.speed: normal
+00001.316     ok 3 test_kvvec_shrink_to_empty
+00001.317     # test_kvvec_shrink_to_no_op.speed: normal
+00001.323     ok 4 test_kvvec_shrink_to_no_op
+00001.329     # test_kvvec_shrink_to_respects_min_capacity.speed: normal
+00001.329     ok 5 test_kvvec_shrink_to_respects_min_capacity
+00001.329 # rust_kvec: pass:5 fail:0 skip:0 total:5
+00001.329 # Totals: pass:5 fail:0 skip:0 total:5
+00001.329 ok 5 rust_kvec
+00001.329     KTAP version 1
+00001.329     # Subtest: rust_allocator
+00001.329     # speed: normal
+00001.329     1..1
+00001.338     # test_alignment.speed: normal
+00001.338     ok 1 test_alignment
+00001.339 ok 6 rust_allocator
+00001.339     KTAP version 1
+00001.343     # Subtest: rust_atomics
+00001.343     # speed: normal
+00001.343     1..8
+00001.347     # atomic_basic_tests.speed: normal
+00001.351     ok 1 atomic_basic_tests
+00001.355     # atomic_acquire_release_tests.speed: normal
+00001.358     ok 2 atomic_acquire_release_tests
+00001.362     # atomic_xchg_tests.speed: normal
+00001.369     ok 3 atomic_xchg_tests
+00001.371     # atomic_cmpxchg_tests.speed: normal
+00001.378     ok 4 atomic_cmpxchg_tests
+00001.378     # atomic_arithmetic_tests.speed: normal
+00001.384     ok 5 atomic_arithmetic_tests
+00001.388     # atomic_bool_tests.speed: normal
+00001.388     ok 6 atomic_bool_tests
+00001.391     # atomic_ptr_tests.speed: normal
+00001.404     ok 7 atomic_ptr_tests
+00001.404     # atomic_flag_tests.speed: normal
+00001.404     ok 8 atomic_flag_tests
+00001.404 # rust_atomics: pass:8 fail:0 skip:0 total:8
+00001.404 # Totals: pass:8 fail:0 skip:0 total:8
+00001.404 ok 7 rust_atomics
+00001.404     KTAP version 1
+00001.404     # Subtest: math-gcd
+00001.404     # module: gcd_kunit
+00001.404     1..1
+00001.404         KTAP version 1
+00001.410         # Subtest: gcd_test
+00001.410         ok 1 GCD of 48 and 18
+00001.410         ok 2 GCD of 18 and 48
+00001.419         ok 3 GCD of 56 and 98
+00001.423         ok 4 Coprime numbers
+00001.427         ok 5 Coprime numbers
+00001.431         ok 6 GCD of 270 and 192
+00001.435         ok 7 GCD with zero
+00001.440         ok 8 GCD with zero reversed
+00001.443         ok 9 GCD of identical numbers
+00001.447         ok 10 GCD of max ulong and 1
+00001.451         ok 11 GCD of max ulong values
+00001.451     # gcd_test: pass:11 fail:0 skip:0 total:11
+00001.451     ok 1 gcd_test
+00001.451 # Totals: pass:11 fail:0 skip:0 total:11
+00001.451 ok 8 math-gcd
+00001.452     KTAP version 1
+00001.452     # Subtest: math-int_log
+00001.454     # module: int_log_kunit
+00001.454     1..2
+00001.454         KTAP version 1
+00001.460         # Subtest: intlog2_test
+00001.460         ok 1 Log base 2 of 0
+00001.460         ok 2 Log base 2 of 1
+00001.467         ok 3 Log base 2 of 2
+00001.471         ok 4 Log base 2 of 3
+00001.472         ok 5 Log base 2 of 4
+00001.475         ok 6 Log base 2 of 8
+00001.479         ok 7 Log base 2 of 16
+00001.483         ok 8 Log base 2 of 32
+00001.487         ok 9 Log base 2 of MAX
+00001.487     # intlog2_test: pass:9 fail:0 skip:0 total:9
+00001.487     ok 1 intlog2_test
+00001.487         KTAP version 1
+00001.491         # Subtest: intlog10_test
+00001.495         ok 1 Log base 10 of 0
+00001.499         ok 2 Log base 10 of 1
+00001.503         ok 3 Log base 10 of 6
+00001.507         ok 4 Log base 10 of 10
+00001.511         ok 5 Log base 10 of 100
+00001.515         ok 6 Log base 10 of 1000
+00001.519         ok 7 Log base 10 of 10000
+00001.525         ok 8 Log base 10 of MAX
+00001.525     # intlog10_test: pass:8 fail:0 skip:0 total:8
+00001.525     ok 2 intlog10_test
+00001.525 # math-int_log: pass:2 fail:0 skip:0 total:2
+00001.526 # Totals: pass:17 fail:0 skip:0 total:17
+00001.526 ok 9 math-int_log
+00001.526     KTAP version 1
+00001.526     # Subtest: math-int_pow
+00001.526     # module: int_pow_kunit
+00001.526     1..1
+00001.526         KTAP version 1
+00001.532         # Subtest: int_pow_test
+00001.532         ok 1 Power of zero
+00001.532         ok 2 Power of one
+00001.539         ok 3 Base zero
+00001.543         ok 4 Base one
+00001.547         ok 5 Two squared
+00001.551         ok 6 Two cubed
+00001.553         ok 7 Five raised to the fifth power
+00001.555         ok 8 Max base
+00001.559         ok 9 Large result
+00001.559     # int_pow_test: pass:9 fail:0 skip:0 total:9
+00001.559     ok 1 int_pow_test
+00001.559 # Totals: pass:9 fail:0 skip:0 total:9
+00001.559 ok 10 math-int_pow
+00001.559     KTAP version 1
+00001.559     # Subtest: math-int_sqrt
+00001.562     # module: int_sqrt_kunit
+00001.562     1..1
+00001.562         KTAP version 1
+00001.564         # Subtest: int_sqrt_test
+00001.570         ok 1 edge case: square root of 0
+00001.578         ok 2 perfect square: square root of 1
+00001.578         ok 3 non-perfect square: square root of 2
+00001.578         ok 4 non-perfect square: square root of 3
+00001.582         ok 5 perfect square: square root of 4
+00001.586         ok 6 non-perfect square: square root of 5
+00001.594         ok 7 non-perfect square: square root of 6
+00001.599         ok 8 non-perfect square: square root of 7
+00001.603         ok 9 non-perfect square: square root of 8
+00001.608         ok 10 perfect square: square root of 9
+00001.608         ok 11 non-perfect square: square root of 15 (N-1 from 16)
+00001.611         ok 12 perfect square: square root of 16
+00001.615         ok 13 non-perfect square: square root of 17 (N+1 from 16)
+00001.626         ok 14 non-perfect square: square root of 80 (N-1 from 81)
+00001.626         ok 15 perfect square: square root of 81
+00001.633         ok 16 non-perfect square: square root of 82 (N+1 from 81)
+00001.639         ok 17 non-perfect square: square root of 255 (N-1 from 256)
+00001.644         ok 18 perfect square: square root of 256
+00001.652         ok 19 non-perfect square: square root of 257 (N+1 from 256)
+00001.658         ok 20 large input: square root of 2147483648
+00001.658         ok 21 edge case: ULONG_MAX for 32-bit
+00001.658     # int_sqrt_test: pass:21 fail:0 skip:0 total:21
+00001.658     ok 1 int_sqrt_test
+00001.658 # Totals: pass:21 fail:0 skip:0 total:21
+00001.658 ok 11 math-int_sqrt
+00001.658     KTAP version 1
+00001.658     # Subtest: rational
+00001.658     # module: rational_kunit
+00001.658     1..1
+00001.658         KTAP version 1
+00001.658         # Subtest: rational_test
+00001.668         ok 1 Exceeds bounds, semi-convergent term > 1/2 last term
+00001.675         ok 2 Exceeds bounds, semi-convergent term < 1/2 last term
+00001.679         ok 3 Closest to zero
+00001.685         ok 4 Closest to smallest non-zero
+00001.691         ok 5 Use convergent
+00001.695         ok 6 Exact answer
+00001.699         ok 7 Semiconvergent, numerator limit
+00001.700         ok 8 Semiconvergent, denominator limit
+00001.700     # rational_test: pass:8 fail:0 skip:0 total:8
+00001.700     ok 1 rational_test
+00001.700 # Totals: pass:8 fail:0 skip:0 total:8
+00001.703 ok 12 rational
+00001.704     KTAP version 1
+00001.704     # Subtest: bitops
+00001.704     # module: bitops_kunit
+00001.704     1..6
+00001.704         KTAP version 1
+00001.707         # Subtest: test_set_bit_clear_bit
+00001.712         ok 1 BITOPS_4
+00001.715         ok 2 BITOPS_7
+00001.719         ok 3 BITOPS_11
+00001.722         ok 4 BITOPS_31
+00001.723         ok 5 BITOPS_88
+00001.728     # test_set_bit_clear_bit: pass:5 fail:0 skip:0 total:5
+00001.728     ok 1 test_set_bit_clear_bit
+00001.728         KTAP version 1
+00001.728         # Subtest: test_change_bit
+00001.728         ok 1 BITOPS_4
+00001.733         ok 2 BITOPS_7
+00001.737         ok 3 BITOPS_11
+00001.740         ok 4 BITOPS_31
+00001.743         ok 5 BITOPS_88
+00001.744     # test_change_bit: pass:5 fail:0 skip:0 total:5
+00001.744     ok 2 test_change_bit
+00001.744         KTAP version 1
+00001.749         # Subtest: test_test_and_set_bit_test_and_clear_bit
+00001.755         ok 1 BITOPS_4
+00001.755         ok 2 BITOPS_7
+00001.755         ok 3 BITOPS_11
+00001.762         ok 4 BITOPS_31
+00001.762         ok 5 BITOPS_88
+00001.763     # test_test_and_set_bit_test_and_clear_bit: pass:5 fail:0 skip:0 total:5
+00001.767     ok 3 test_test_and_set_bit_test_and_clear_bit
+00001.767         KTAP version 1
+00001.771         # Subtest: test_test_and_change_bit
+00001.775         ok 1 BITOPS_4
+00001.776         ok 2 BITOPS_7
+00001.779         ok 3 BITOPS_11
+00001.783         ok 4 BITOPS_31
+00001.784         ok 5 BITOPS_88
+00001.785     # test_test_and_change_bit: pass:5 fail:0 skip:0 total:5
+00001.786     ok 4 test_test_and_change_bit
+00001.787         KTAP version 1
+00001.794         # Subtest: test_get_count_order
+00001.798         ok 1 0x00000003
+00001.799         ok 2 0x00000004
+00001.803         ok 3 0x00001fff
+00001.809         ok 4 0x00002000
+00001.809         ok 5 0x50000000
+00001.809         ok 6 0x80000000
+00001.809         ok 7 0x80003000
+00001.812     # test_get_count_order: pass:7 fail:0 skip:0 total:7
+00001.815     ok 5 test_get_count_order
+00001.816         KTAP version 1
+00001.819         # Subtest: test_get_count_order_long
+00001.823         ok 1 0x0000000300000000
+00001.829         ok 2 0x0000000400000000
+00001.829         ok 3 0x00001fff00000000
+00001.834         ok 4 0x0000200000000000
+00001.837         ok 5 0x5000000000000000
+00001.841         ok 6 0x8000000000000000
+00001.841         ok 7 0x8000300000000000
+00001.841     # test_get_count_order_long: pass:7 fail:0 skip:0 total:7
+00001.847     ok 6 test_get_count_order_long
+00001.847 # bitops: pass:6 fail:0 skip:0 total:6
+00001.847 # Totals: pass:34 fail:0 skip:0 total:34
+00001.847 ok 13 bitops
+00001.847     KTAP version 1
+00001.847     # Subtest: cmdline
+00001.847     # module: cmdline_kunit
+00001.847     1..8
+00001.854     ok 1 cmdline_test_noint
+00001.858     ok 2 cmdline_test_lead_int
+00001.860     ok 3 cmdline_test_tail_int
+00001.861     ok 4 cmdline_test_range
+00001.869     ok 5 cmdline_test_next_arg_quoted_value
+00001.870     ok 6 cmdline_test_next_arg_bare_quote_regression
+00001.878     ok 7 cmdline_test_next_arg_mixed_tokens
+00001.878     ok 8 cmdline_test_memparse
+00001.878 # cmdline: pass:8 fail:0 skip:0 total:8
+00001.878 # Totals: pass:8 fail:0 skip:0 total:8
+00001.878 ok 14 cmdline
+00001.878     KTAP version 1
+00001.878     # Subtest: list_sort
+00001.878     # module: test_list_sort
+00001.878     1..1
+00001.899     ok 1 list_sort_test
+00001.899 ok 15 list_sort
+00001.903     KTAP version 1
+00001.903     # Subtest: lib_sort
+00001.903     # module: test_sort
+00001.903     1..1
+00001.914     ok 1 test_sort
+00001.914 ok 16 lib_sort
+00001.914     KTAP version 1
+00001.916     # Subtest: rust_8250_mem_serial_io
+00001.920     # speed: normal
+00001.921     1..4
+00001.922     # round_trip_no_shift.speed: normal
+00001.929     ok 1 round_trip_no_shift
+00001.930     # regshift_scales_offset.speed: normal
+00001.931     ok 2 regshift_scales_offset
+00001.935     # value_truncated_to_byte.speed: normal
+00001.938     ok 3 value_truncated_to_byte
+00001.939     # independent_registers_no_crosstalk.speed: normal
+00001.940     ok 4 independent_registers_no_crosstalk
+00001.940 # rust_8250_mem_serial_io: pass:4 fail:0 skip:0 total:4
+00001.943 # Totals: pass:4 fail:0 skip:0 total:4
+00001.943 ok 17 rust_8250_mem_serial_io
+00002.070 Freeing unused kernel image (initmem) memory: 2156K
+00002.075 Run /init as init process
+00002.321 linux-rs: initramfs init reached, PID 1 alive
+00002.338 linux-rs: dropping to shell (/ #), 15s idle timeout then poweroff
+00017.358 / # 
+00017.370 linux-rs: no console input within 15s, powering off
+00017.385 reboot: Power down
