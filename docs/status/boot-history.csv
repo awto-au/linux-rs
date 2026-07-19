@@ -99,3 +99,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T13:18:20+10:00,combined-c2rust-10-v2,17,0,1,0,docs/status/boot-logs/20260719T131820+1000-combined-c2rust-10-v2.log
 2026-07-19T13:25:03+10:00,devpy-runid-test,17,0,1,0,docs/status/boot-logs/20260719T132503+1000-devpy-runid-test.log
 2026-07-19T13:38:01+10:00,qemu-extra-regression-check,17,0,1,0,docs/status/boot-logs/20260719T133801+1000-qemu-extra-regression-check.log
+2026-07-19T13:38:29+10:00,block-layer-enable,17,0,1,0,docs/status/boot-logs/20260719T133829+1000-block-layer-enable.log
