@@ -79,3 +79,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T12:04:01+10:00,combined-c2rust-6,17,0,1,0,docs/status/boot-logs/20260719T120401+1000-combined-c2rust-6.log
 2026-07-19T12:06:29+10:00,combined-c2rust-7,17,0,1,0,docs/status/boot-logs/20260719T120629+1000-combined-c2rust-7.log
 2026-07-19T12:36:52+10:00,default,0,0,0,0,docs/status/boot-logs/20260719T123652+1000-default.log
+2026-07-19T12:37:27+10:00,klist-debug,0,0,0,0,docs/status/boot-logs/20260719T123727+1000-klist-debug.log
