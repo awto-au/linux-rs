@@ -1340,7 +1340,7 @@ outcome for the same check, reinforcing that it must be run fresh per
 file rather than assumed from a prior file's result in either
 direction.
 
-## Eighth candidate: `lib/glob.c`
+## Ninth candidate: `lib/glob.c`
 
 Worktree `combined-c2rust-boot-8`, branch `agent-combined-c2rust-boot-8`,
 based on `linux-rs/phase2-gcd`. Target: `glob_match`, `glob_match_len`
@@ -1460,7 +1460,7 @@ transpiler-side. `get_current()`-liveness check (issue #30/#31 class)
 came back negative here, unlike `klist.c` — third confirmation that
 this check must be done per-file via grep, not assumed either way.
 
-## Ninth candidate: `lib/errseq.c`
+## Tenth candidate: `lib/errseq.c`
 
 Worktree `combined-c2rust-boot-11`, branch `agent-combined-c2rust-boot-11`,
 based on `linux-rs/phase2-gcd` (already carries `04312ea1ff7e`, the
