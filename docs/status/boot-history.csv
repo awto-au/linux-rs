@@ -82,3 +82,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-19T12:37:27+10:00,klist-debug,0,0,0,0,docs/status/boot-logs/20260719T123727+1000-klist-debug.log
 2026-07-19T12:40:33+10:00,klist-c-baseline,17,0,1,0,docs/status/boot-logs/20260719T124033+1000-klist-c-baseline.log
 2026-07-19T12:41:34+10:00,klist-clean-rebuild,0,0,0,0,docs/status/boot-logs/20260719T124134+1000-klist-clean-rebuild.log
+2026-07-19T12:45:38+10:00,klist-fresh-rebuild,0,0,0,0,docs/status/boot-logs/20260719T124538+1000-klist-fresh-rebuild.log

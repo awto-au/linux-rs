@@ -1,0 +1,64 @@
+# qemu-system-riscv64 -M virt -m 256M -nographic -no-reboot -kernel /mnt/2tb/git/linux-rs/linux-riscv-worktrees/combined-c2rust-boot-7/arch/riscv/boot/Image -initrd /mnt/2tb/git/linux-rs/tmp/initramfs/initramfs.cpio.gz -append earlycon=sbi console=ttyS0 panic=-1
+00000.037 
+00000.037 OpenSBI v1.7
+00000.037    ____                    _____ ____ _____
+00000.037   / __ \                  / ____|  _ \_   _|
+00000.037  | |  | |_ __   ___ _ __ | (___ | |_) || |
+00000.037  | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+00000.037  | |__| | |_) |  __/ | | |____) | |_) || |_
+00000.037   \____/| .__/ \___|_| |_|_____/|____/_____|
+00000.037         | |
+00000.037         |_|
+00000.037 
+00000.045 Platform Name               : riscv-virtio,qemu
+00000.045 Platform Features           : medeleg
+00000.045 Platform HART Count         : 1
+00000.045 Platform IPI Device         : aclint-mswi
+00000.045 Platform Timer Device       : aclint-mtimer @ 10000000Hz
+00000.045 Platform Console Device     : uart8250
+00000.045 Platform HSM Device         : ---
+00000.045 Platform PMU Device         : ---
+00000.045 Platform Reboot Device      : syscon-reboot
+00000.045 Platform Shutdown Device    : syscon-poweroff
+00000.045 Platform Suspend Device     : ---
+00000.045 Platform CPPC Device        : ---
+00000.045 Firmware Base               : 0x80000000
+00000.045 Firmware Size               : 317 KB
+00000.045 Firmware RW Offset          : 0x40000
+00000.045 Firmware RW Size            : 61 KB
+00000.046 Firmware Heap Offset        : 0x46000
+00000.046 Firmware Heap Size          : 37 KB (total), 2 KB (reserved), 11 KB (used), 23 KB (free)
+00000.046 Firmware Scratch Size       : 4096 B (total), 1400 B (used), 2696 B (free)
+00000.046 Runtime SBI Version         : 3.0
+00000.046 Standard SBI Extensions     : time,rfnc,ipi,base,hsm,srst,pmu,dbcn,fwft,legacy,dbtr,sse
+00000.046 Experimental SBI Extensions : none
+00000.046 
+00000.046 Domain0 Name                : root
+00000.046 Domain0 Boot HART           : 0
+00000.046 Domain0 HARTs               : 0*
+00000.046 Domain0 Region00            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+00000.046 Domain0 Region01            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+00000.047 Domain0 Region02            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+00000.047 Domain0 Region03            : 0x0000000080040000-0x000000008004ffff M: (R,W) S/U: ()
+00000.047 Domain0 Region04            : 0x0000000080000000-0x000000008003ffff M: (R,X) S/U: ()
+00000.047 Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+00000.047 Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+00000.047 Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+00000.047 Domain0 Next Address        : 0x0000000080200000
+00000.047 Domain0 Next Arg1           : 0x000000008fe00000
+00000.047 Domain0 Next Mode           : S-mode
+00000.047 Domain0 SysReset            : yes
+00000.047 Domain0 SysSuspend          : yes
+00000.047 
+00000.047 Boot HART ID                : 0
+00000.047 Boot HART Domain            : root
+00000.047 Boot HART Priv Version      : v1.12
+00000.048 Boot HART Base ISA          : rv64imafdch
+00000.048 Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+00000.048 Boot HART PMP Count         : 16
+00000.048 Boot HART PMP Granularity   : 2 bits
+00000.048 Boot HART PMP Address Bits  : 54
+00000.048 Boot HART MHPM Info         : 16 (0x0007fff8)
+00000.048 Boot HART Debug Triggers    : 2 triggers
+00000.048 Boot HART MIDELEG           : 0x0000000000001666
+00000.048 Boot HART MEDELEG           : 0x0000000000f4b509
