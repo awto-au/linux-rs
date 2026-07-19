@@ -1783,3 +1783,138 @@ source line count: a 26-line file can still drag in a ~4500-line
 `task_struct`-rooted prelude. Also the first file since `lwq.c` to
 exercise rule 0031's "no accessor synthesized" dead branch explicitly
 flagged for a spinlock-adjacent file and confirmed rather than assumed.
+
+## Thirteenth candidate: `lib/debug_locks.c`
+
+Worktree `combined-c2rust-boot-12`, branch `agent-combined-c2rust-boot-12`,
+based on `linux-rs/phase2-gcd` at `04312ea1ff7e` (Zacas/Zabha
+`KBUILD_RUSTFLAGS` fix, issue #29's closing commit). Target:
+`debug_locks_off()` (`EXPORT_SYMBOL_GPL`) plus the two module-level data
+statics it guards, `debug_locks`/`debug_locks_silent` (both also
+`EXPORT_SYMBOL_GPL`), 49 lines of C. c2rust binary at `6065eaf19`. Fresh
+transpile via `investigate_c2rust_failure.py --rerun`: `outcome=clean`,
+`c2rust_rev=6065eaf19`, byte-identical (`diff -q`) to the pre-existing
+`tmp/c2rust-baseline/lib_debug_locks.c/` output.
+
+Mandated `scripts/dev.py check-register-statics` run first, per rule
+0031: `lib_debug_locks.c` listed in the report's Dead section
+(`tmp/fabricated-register-statics-report.md`), not the 190-file live
+set. Corroborated by grep: no `get_current()` function defined or
+called anywhere in the 464-line raw TU — the "no accessor synthesized
+at all" branch of rule 0031, same as `bucket_locks.c`/`errseq.c`, not
+the `klist.c`/`is_single_threaded.c` live-via-accessor case.
+
+Kconfig: `RUST_C2RUST_BOOT_TEST` added to `lib/Kconfig` (`depends on
+RUST`, default n). `lib/Makefile`: `debug_locks.o` pulled out of a
+bundled `obj-y` line shared with `random32.o`, `bust_spinlocks.o`,
+`uuid.o`, `bsearch.o`, `lwq.o`, `rcuref.o`, `errseq.o`,
+`bucket_locks.o`, etc., swapped for `debug_locks_rs.o` under the
+config. Raw transpile copied to `lib/debug_locks_rs.rs` verbatim as the
+starting point.
+
+Cleanest structural shape of the series alongside `bucket_locks.c`/
+`glob.c`: `unsafe {}` already wrapping every function body, no
+`.init_array`/`__UNIQUE_ID_addressable_*` constructor trick, no
+`c2rust_bitfields::BitfieldStruct` derive at all (the raw output's only
+`task_struct` is already a plain zero-field opaque struct — no header
+chain here pulls in the bitfield-carrying version), no `::libc::`
+calls, no `LIST_POISON`, no parameter/type namespace collision.
+
+Fixes actually needed:
+- Leftover `#![feature(label_break_value)]` — stripped, same
+  per-file-varying leftover class every file since `timerqueue.c` has
+  hit some subset of.
+- `#[export]` → `#[no_mangle]` on `debug_locks_off` (its one source
+  site is `EXPORT_SYMBOL_GPL`, no licensing judgement call), unused
+  `use ::macros::export;` import dropped. `debug_locks`/
+  `debug_locks_silent` needed no equivalent fix — c2rust already emits
+  plain data statics with `#[no_mangle]` for `EXPORT_SYMBOL`'d
+  variables (as opposed to functions), correctly paired with their own
+  `global_asm!` `.export_symbol` blocks; the `#[export]` class only
+  ever applies to functions.
+- Unused `use ::kernel::warn_on;` import — dropped (grep-confirmed zero
+  `warn_on!` call sites in this TU; c2rust emits the import
+  unconditionally regardless of use, not itself one of the tracked gap
+  classes, just dead-import cleanup).
+- Register-variable pseudo-globals (`riscv_current_is_tp`,
+  `current_stack_pointer`): both grep-confirmed dead (declaration only,
+  no `get_current()` accessor anywhere in the TU to call them through),
+  matching the mechanized check's verdict above. Deleted outright.
+  `task_struct` (now fully unreferenced with `riscv_current_is_tp`
+  gone) left in place as harmless dead furniture under the file's
+  `#![allow(dead_code)]`, same disposition as every prior file's
+  non-bitfield dead structs.
+- Issue #34's `asm goto(ALTERNATIVE(...))` fallback-extern gap
+  recurred, a second confirmation after `errseq.c`: `__debug_locks_off`'s
+  c2rust-translated `cmpxchg`-style RMW on `debug_locks` unrolls a
+  4-width `match ::core::mem::size_of::<c_int>()` (only the `4 =>` arm
+  is dynamically reachable, but all arms compile and reach link time —
+  the match isn't const-folded away since it isn't provably dead at
+  the MIR level), and the size-1/size-2 arms' Zabha-gated
+  `amoswap.b`/`.h` fast paths guard on `riscv_has_extension_unlikely()`
+  → the untranslatable `__riscv_has_extension_unlikely()` `asm
+  goto(ALTERNATIVE(...))` C function, which c2rust falls back to a
+  bare `extern "C"` declaration for with no real linkable symbol
+  anywhere in the kernel. Fixed identically to `errseq.c`: routed
+  `riscv_has_extension_unlikely()` through the real, already-linkable
+  `__riscv_isa_extension_available(NULL, ext)` (c2rust had already
+  emitted a correct declaration for it, unused until now), removed the
+  now-dead `__riscv_has_extension_unlikely` extern declaration.
+  Confirms issue #34 is not `errseq.c`-specific: any file whose
+  c2rust-translated `cmpxchg()`/`xchg()` keeps a Zacas/Zabha fast-path
+  guard alive to link time (rather than being deleted outright, as the
+  pre-`04312ea1ff7e` files in this series did) will hit it.
+- Issue #29's bracket-addressing finding recurred, a sixth
+  confirmation: 8 occurrences of `[{N}]`/`[{N:}]` across
+  `amoswap.{b,h,w,d}.aqrl` and their LR/SC fallback templates (all 4
+  width arms, same shape `objpool.c`'s `cmpxchg()` hit for `amocas`).
+  Fixed mechanically: `[{N}]`/`[{N:}]` → `0({N})`/`0({N:})` throughout,
+  via the same small Python regex pass `errseq.c`'s fix used. No Zabha
+  fast-path deletion needed this time (unlike the pre-`04312ea1ff7e`
+  files) — `KBUILD_RUSTFLAGS` now supports Zacas/Zabha directly, so the
+  `amoswap.b`/`.h` arms compile as-is once the addressing syntax and
+  the asm-goto fallback above are both fixed.
+
+No new gap class found — every fix here is a recurrence of an already-
+filed/already-documented pattern (rule 0031's dead branch, `#[export]`,
+leftover feature line, issue #29 bracket addressing, issue #34 asm-goto
+fallback).
+
+### Outcome: clean boot, thirteenth file to clear the bar
+
+- `make ARCH=riscv LLVM=1 lib/debug_locks_rs.o` — clean, 0 errors (38
+  warnings, all missing-doc lints, pre-existing pattern).
+- `make ARCH=riscv LLVM=1 -j32` (`dev.py build`) succeeds,
+  `arch/riscv/boot/Image` produced. `lib/debug_locks.o` correctly never
+  built (no `.debug_locks.o.cmd` present).
+- `llvm-nm`: all 3 symbols defined in both `lib/debug_locks_rs.o` and
+  `vmlinux` — `debug_locks` (`D`, `ffffffff808892d8`), `debug_locks_off`
+  (`T`, `ffffffff801606f2`), `debug_locks_silent` (`B`,
+  `ffffffff808c85d0`). `riscv_current_is_tp`/`current_stack_pointer`/
+  `__riscv_has_extension_unlikely` absent from both objects entirely
+  (confirmed via `llvm-nm` grep, empty result both places).
+- `dev.py boot --run-id combined-c2rust-boot-12`: boots clean, 17/17
+  KUnit suites pass (`fail:0` every suite, 0 `not ok`), `initramfs init
+  reached, PID 1 alive` confirms INIT REACHED, no panic/oops/BUG/WARN in
+  the log. Archived at
+  `docs/status/boot-logs/20260719T140731+1000-combined-c2rust-boot-12.log`.
+  Boot-history row committed/pushed automatically by `boot_qemu.py`
+  (`b5a8b28`). No dedicated debug_locks KUnit suite in this kernel
+  config, so this run demonstrates linking and booting cleanly, not a
+  runtime correctness check of the lock-debugging on/off logic itself —
+  and since `debug_locks`/`debug_locks_silent` default to `1`/`0` and
+  nothing in this project's minimal boot path calls `debug_locks_off()`
+  or trips a locking bug, the function's actual behavior isn't
+  exercised by this run either.
+
+Thirteenth file to clear the bar. Smaller than every file in the series
+except `bust_spinlocks.c` (26 lines), but the smallest one with a
+genuinely multi-symbol export surface: 2 data statics plus 1 function,
+all three separately `EXPORT_SYMBOL_GPL`'d and separately verified in
+`vmlinux`. First file to combine issue #34 (asm-goto fallback) with
+issue #29 (bracket addressing) on the *same* underlying RMW without
+needing a Zabha-arm deletion, now that both intermediate gaps are fixed
+independently — the two fixes stack cleanly rather than one subsuming
+the other, confirming both remain distinct, separately-required steps
+going forward for any file exercising this kernel's Zabha-gated
+sub-word atomics.
