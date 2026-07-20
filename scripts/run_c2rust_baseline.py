@@ -64,36 +64,6 @@ C2RUST = os.environ.get("C2RUST_BIN", str(C2RUST_FORK / "target" / "release" / "
 # is added upstream).
 C2RUST_ENABLE_RULE_ARGS = ["--enable-rule=all"]
 
-# Files whose transitively-included header closure is large enough (tens
-# of thousands of top-level declarations pulled in via headers like
-# fs.h/sock.h/scheduler internals) to trigger an O(N x shared-subtree)
-# blowup in c2rust-transpile's Translation::locate_comments — see
-# awtoau/c2rust#4. locate_comments walks every top-level decl with a
-# fresh per-call visited-set, so any AST subtree reachable from many
-# decls (routine for a widely-used kernel type) gets re-walked from
-# scratch once per decl that reaches it, instead of once total. This
-# dominates wall-clock (~14-16s of a ~20s run) independent of the
-# file's own source line count — init/do_mounts.c is 521 lines but
-# costs as much as fs/select.c's 1438, while mm/vmscan.c (8068 lines,
-# the largest file in this corpus) is unaffected because its header
-# closure doesn't pull in the same widely-shared decl graph. None of
-# these files transpile cleanly anyway (outcome is crash/dropped_decls
-# for all of them in the last full run), so skipping them here loses no
-# pass/fail signal, only the time spent reaching a non-answer. Remove
-# entries (or pass --include-slow) once awtoau/c2rust#4 is fixed.
-SLOW_FILES_EXCLUDED = {
-    "fs/select.c",
-    "init/do_mounts.c",
-    "fs/file.c",
-    "kernel/pid.c",
-    "drivers/base/core.c",
-    "kernel/fork.c",
-    "kernel/sched/core.c",
-    "lib/kobject_uevent.c",
-    "kernel/extable.c",
-    "lib/vsprintf.c",
-}
-
 # How many of the most recent distinct c2rust_rev runs to check for
 # outcome stability — see stable_files() below. 3 balances "confident
 # a file genuinely isn't moving" against "don't need years of history
@@ -1102,12 +1072,6 @@ def main():
         help=f"TUs per c2rust subprocess in --batch-mode (default {DEFAULT_BATCH_SIZE}).",
     )
     ap.add_argument(
-        "--include-slow", action="store_true",
-        help="Include SLOW_FILES_EXCLUDED (skipped by default — see "
-             "awtoau/c2rust#4, ~50-75s each with no clean-pass outcome "
-             "anyway) in this run.",
-    )
-    ap.add_argument(
         "--include-stable", action="store_true",
         help=f"Include files whose per-declaration translated status has "
              f"been unchanged across the last {STABILITY_WINDOW_REVS} "
@@ -1160,21 +1124,6 @@ def main():
     for e in entries:
         seen[e["file"]] = e
     entries = sorted(seen.values(), key=lambda e: e["file"])
-
-    if not args.include_slow:
-        kept = []
-        skipped = []
-        for e in entries:
-            rel = str(Path(e["file"]).relative_to(TREE))
-            (skipped if rel in SLOW_FILES_EXCLUDED else kept).append(e)
-        entries = kept
-        if skipped:
-            logging.info(
-                "skipping %d/%d corpus files in SLOW_FILES_EXCLUDED "
-                "(awtoau/c2rust#4, pass --include-slow to run them): %s",
-                len(skipped), len(skipped) + len(entries),
-                ", ".join(sorted(str(Path(e["file"]).relative_to(TREE)) for e in skipped)),
-            )
 
     if not args.include_stable:
         stable = stable_files()
