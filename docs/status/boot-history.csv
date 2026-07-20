@@ -298,3 +298,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-20T20:10:53+10:00,default,17,0,1,0,docs/status/boot-logs/20260720T201053+1000-default.log
 2026-07-20T20:11:01+10:00,default,17,0,1,0,docs/status/boot-logs/20260720T201101+1000-default.log
 2026-07-20T20:11:20+10:00,default,17,0,1,0,docs/status/boot-logs/20260720T201120+1000-default.log
+2026-07-20T20:11:27+10:00,default,17,0,1,0,docs/status/boot-logs/20260720T201127+1000-default.log
