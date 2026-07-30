@@ -90,7 +90,15 @@ def fill_ahead_by(conn, limit=None):
         "SELECT id, full_name, default_branch FROM c2rust_forks WHERE ahead_by IS NULL "
         "ORDER BY stargazers_count DESC, pushed_at DESC"
     ).fetchall()
-    upstream_default = "master"
+    # Real fetch, not a hardcoded guess — if upstream's default branch is
+    # ever renamed, a hardcoded "master" would silently fail every compare
+    # into the same -1 "comparison failed" sentinel used for genuinely
+    # dead/renamed forks, indistinguishable from a real problem.
+    upstream_proc = subprocess.run(
+        ["gh", "api", f"repos/{UPSTREAM}"], capture_output=True, text=True,
+        check=True, timeout=30,
+    )
+    upstream_default = json.loads(upstream_proc.stdout).get("default_branch") or "master"
     n = 0
     errors = 0
     for fork_id, full_name, default_branch in rows:
