@@ -210,9 +210,10 @@ def step_mandatory_checks(worktree: Path, rs_file: Path, log) -> dict:
         log.warning("'-1 as usize' found in %s — should be fully fixed by issue #38, "
                      "this may be a regression, investigate", rs_file)
 
-    init_fns = re.findall(r"fn (\w+)", text)
     has_link_section = "#[link_section" in text
-    results["has_init_marked_fn_heuristic"] = bool(init_fns) and "init" in text.lower()
+    results["has_init_marked_fn_heuristic"] = bool(
+        re.search(r"#\[link_section\s*=\s*\"\.init\.text\"\]|__init\b", text)
+    )
     results["has_link_section_attr"] = has_link_section
     log.info("mandatory checks: %s", results)
     return results
@@ -221,7 +222,7 @@ def step_mandatory_checks(worktree: Path, rs_file: Path, log) -> dict:
 def step_build_boot(worktree_name: str, run_id: str, log) -> bool:
     log.info("=== 5. build + boot ===")
     import os
-    env = dict(**{**__import__("os").environ, "LINUXRS_TREE": f"linux-riscv-worktrees/{worktree_name}"})
+    env = dict(**{**os.environ, "LINUXRS_TREE": f"linux-riscv-worktrees/{worktree_name}"})
     p = subprocess.run(
         ["python3", str(S / "dev.py"), "build"], cwd=REPO, env=env,
         text=True, capture_output=True, timeout=1200,
