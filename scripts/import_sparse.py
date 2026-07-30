@@ -55,7 +55,7 @@ def ensure_sparse_binary(rebuild=False):
     rev = subprocess.run(["git", "-C", str(BUILD_DIR), "log", "-1", "--format=%H %cI"],
                          capture_output=True, text=True).stdout.strip()
     logging.info("building sparse from local mirror, HEAD %s", rev)
-    subprocess.run(["make", "-j", str(__import__("os").cpu_count() or 4)],
+    subprocess.run(["make", "-j", str(os.cpu_count() or 4)],
                    cwd=BUILD_DIR, check=True, capture_output=True, timeout=300)
     ver = subprocess.run([str(sparse_bin), "--version"], capture_output=True,
                          text=True).stdout.strip()

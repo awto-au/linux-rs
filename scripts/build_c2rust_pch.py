@@ -27,6 +27,7 @@ import json
 import logging
 import subprocess
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -86,8 +87,6 @@ def split_command(command):
 def dominant_flag_group(entries):
     """Group deduped .c entries by stable flag set, return
     (flags_tuple, member_file_list) for the largest group."""
-    from collections import defaultdict
-
     groups = defaultdict(list)
     for e in entries:
         _compiler, body, _file_tok = split_command(e["command"])

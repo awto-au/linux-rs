@@ -19,8 +19,11 @@ Log: tmp/check_c2rust_output_compiles.log
 import argparse
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -181,8 +184,6 @@ def find_clean_outputs(c2rust_rev):
     """Authoritative list: c2rust_attempts WHERE outcome='clean' AND
     c2rust_rev=c2rust_rev. Globbing output/ dirs directly would also
     pick up leftover output/ dirs from earlier failed/non-clean attempts."""
-    import sqlite3
-
     # c2rust_attempts is append-only (one row per baseline run, no
     # dedup on c_file+c2rust_rev — see run_c2rust_baseline.py), so
     # re-running the baseline more than once at the same rev leaves
@@ -371,7 +372,6 @@ def main():
         if i % 20 == 0 or i == len(files):
             logging.info("%d/%d checked", i, len(files))
 
-    from collections import Counter
     counts = Counter(results.values())
     logging.info("DONE: %s", dict(counts))
     logging.info("SPDX provenance (rulesdb/rules/0029-spdx-provenance.toml): "
@@ -421,8 +421,6 @@ def main():
     # Persist per-file outcomes to patterns.db so c2rust_regression_check.py
     # can compare compile-pass-rates rev-over-rev (a4, awto-au/linux-rs#15).
     if DB.exists():
-        import sqlite3
-        from datetime import datetime, timezone
         run_at = datetime.now(timezone.utc).isoformat()
         db_conn = sqlite3.connect(str(DB))
         db_conn.execute(

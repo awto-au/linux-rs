@@ -35,8 +35,11 @@ import argparse
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -85,8 +88,6 @@ def find_clean_outputs(c2rust_rev):
     c2rust_attempts WHERE outcome='clean' AND c2rust_rev=c2rust_rev, not a
     directory glob (would also pick up leftover output/ dirs from earlier
     non-clean attempts)."""
-    import sqlite3
-
     conn = sqlite3.connect(str(DB))
     rows = conn.execute(
         "SELECT DISTINCT c_file FROM c2rust_attempts WHERE outcome='clean' AND c2rust_rev=?",
@@ -373,7 +374,6 @@ def main():
         if i % 20 == 0 or i == len(files):
             logging.info("%d/%d checked", i, len(files))
 
-    from collections import Counter
     counts = Counter(results.values())
     total_warnings = sum(len(d) for d in all_diagnostics.values())
     lint_counts = Counter(
@@ -413,8 +413,6 @@ def main():
     # clean files, so "checked but 0 warnings" is distinguishable from
     # "never checked") and c2rust_clippy_outcomes (one row per warning).
     if DB.exists():
-        import sqlite3
-        from datetime import datetime, timezone
         run_at = datetime.now(timezone.utc).isoformat()
         db_conn = sqlite3.connect(str(DB))
         db_conn.execute(

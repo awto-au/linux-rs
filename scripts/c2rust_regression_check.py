@@ -21,6 +21,7 @@ Log: tmp/c2rust_regression_check.log
 """
 import argparse
 import logging
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,6 @@ def main():
         logging.error("no %s", DB)
         return 1
 
-    import sqlite3
     conn = sqlite3.connect(DB)
 
     before = decl_set(conn, args.before_rev)
