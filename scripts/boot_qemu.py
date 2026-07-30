@@ -64,6 +64,7 @@ import argparse
 import csv
 import datetime
 import fcntl
+import logging
 import os
 import shlex
 import shutil
@@ -80,6 +81,11 @@ INITRD = REPO / "tmp" / "initramfs" / "initramfs.cpio.gz"
 BOOT_HISTORY_DIR = REPO / "docs" / "status" / "boot-logs"
 BOOT_HISTORY_CSV = REPO / "docs" / "status" / "boot-history.csv"
 BOOT_HISTORY_LOCK = REPO / "tmp" / ".boot-history.lock"
+# Distinct from the per-run QEMU serial log (tmp/qemu-boot[-<id>].log,
+# a local var inside main() — that one is the raw kernel console
+# output). This is this script's own progress/summary log, matching
+# every other script's tmp/<name>.log convention.
+SUMMARY_LOG = REPO / "tmp" / "boot_qemu.log"
 
 
 def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
@@ -150,17 +156,17 @@ def commit_and_push_history(archived_log: Path, run_id: str | None, n_ok: int,
             subprocess.run(["git", "commit", "-m", msg], cwd=REPO, check=True,
                            capture_output=True, text=True)
             subprocess.run(["git", "push"], cwd=REPO, check=True, capture_output=True, text=True)
-            print("boot-history: committed + pushed")
+            logging.info("boot-history: committed + pushed")
     except (subprocess.CalledProcessError, OSError) as e:
         # OSError (e.g. FileNotFoundError if git isn't on PATH) alongside
         # CalledProcessError — this whole block is meant to degrade to a
         # warning, never propagate, and a bare CalledProcessError catch
         # let non-git-failure OS errors through uncaught.
         detail = getattr(e, "stderr", None)
-        msg = f"WARNING: boot-history auto-commit/push failed: {e}"
+        msg = f"boot-history auto-commit/push failed: {e}"
         if detail:
             msg += "\n" + detail
-        print(msg, file=sys.stderr)
+        logging.warning(msg)
         # Don't fail the whole boot over a push hiccup (e.g. transient
         # network) — the boot's own pass/fail result is what matters most
         # and is already returned/printed by the caller; this is a
@@ -193,14 +199,20 @@ def main() -> int:
                           "omitting it (the default) leaves the argv unchanged.")
     args = ap.parse_args()
 
+    REPO.joinpath("tmp").mkdir(exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(SUMMARY_LOG, mode="w"), logging.StreamHandler(sys.stdout)],
+    )
+
     log_name = f"qemu-boot-{args.run_id}.log" if args.run_id else "qemu-boot.log"
     LOG = REPO / "tmp" / log_name
 
     image = REPO / args.tree / "arch/riscv/boot/Image"
     if not image.exists():
-        print(f"no kernel image at {image}", file=sys.stderr)
+        logging.error("no kernel image at %s", image)
         return 1
-    REPO.joinpath("tmp").mkdir(exist_ok=True)
     initrd = ensure_initramfs()
     # console=ttyS0: registers the QEMU virt board's ns16550a-compatible
     # UART (CONFIG_SERIAL_8250, enabled alongside CONFIG_BLK_DEV_INITRD)
@@ -218,7 +230,9 @@ def main() -> int:
     ]
     if args.qemu_extra:
         cmd += shlex.split(args.qemu_extra)
-    print(f"booting {image}\ninitrd: {initrd}\nlog: {LOG}")
+    logging.info("booting %s", image)
+    logging.info("initrd: %s", initrd)
+    logging.info("log: %s", LOG)
     # Popen + line-by-line streaming (not a single blocking subprocess.run)
     # so each line can be stamped with real elapsed time as it arrives —
     # a post-hoc timestamp after the process exits would collapse the
@@ -252,16 +266,16 @@ def main() -> int:
         elif is_notok:
             n_notok += 1
         if is_ok or is_notok or "# Totals:" in line or "Kernel panic" in line:
-            print(line)
+            logging.info("%s", line)
     init_reached = INIT_REACHED in text
     if init_reached:
-        print(INIT_REACHED)
+        logging.info("%s", INIT_REACHED)
     else:
-        print("WARNING: init-reached milestone not seen in boot log "
-              "(userspace/initramfs coverage did not run this boot)")
+        logging.warning("init-reached milestone not seen in boot log "
+                         "(userspace/initramfs coverage did not run this boot)")
 
     archived = archive_boot(LOG, args.run_id, n_ok, n_notok, init_reached, rc)
-    print(f"archived: {archived.relative_to(REPO)}")
+    logging.info("archived: %s", archived.relative_to(REPO))
 
     return rc
 

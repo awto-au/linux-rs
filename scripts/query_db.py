@@ -18,12 +18,14 @@ Usage:
   query_db.py sql --write "<query>" # raw SQL with write access — deliberate opt-in only
   query_db.py stats                 # summary counts
 """
+import logging
 import sqlite3
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "rulesdb" / "patterns.db"
+LOG = REPO / "tmp" / "query_db.log"
 
 
 def decode_fp(fp):
@@ -44,8 +46,18 @@ def decode_fp(fp):
 
 
 def main() -> int:
+    # This tool's actual product is table-printed query output on stdout
+    # (piped into column -t, cut, etc. by real callers) — only progress/
+    # error messages go through logging (file+stdout, matching every
+    # other script's tmp/<name>.log convention), never the result rows
+    # themselves, which must stay plain and undecorated.
+    REPO.joinpath("tmp").mkdir(exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stderr)],
+    )
     if not DB.exists():
-        print(f"no {DB} — run: python3 scripts/build_db.py", file=sys.stderr)
+        logging.error("no %s — run: python3 scripts/build_db.py", DB)
         return 1
     if len(sys.argv) < 2:
         print(__doc__)
