@@ -53,8 +53,15 @@ def main() -> int:
     )
     entries = load_entries(REPO, tree=args.tree)
     by_rel = {}
+    marker = f"/{args.tree}/"
     for e in entries:
-        rel = e["file"].split(f"/{args.tree}/")[-1]
+        if marker not in e["file"]:
+            logging.warning(
+                "entry file does not contain expected tree marker %r, skipping: %s",
+                marker, e["file"],
+            )
+            continue
+        rel = e["file"].split(marker)[-1]
         by_rel[rel] = e
 
     translated = translated_tus(REPO / args.tree)
