@@ -224,18 +224,26 @@ class Harvester:
 
 
 def process(entry):
+    # See fingerprint.py's process() for why this chdir is genuinely
+    # needed (tu_args() can carry relative -I paths) but must be
+    # restored, not left mutating this pool worker's cwd for its
+    # remaining lifetime.
+    prev_cwd = os.getcwd()
     os.chdir(entry["directory"])
-    src = entry["file"]
-    rel = os.path.relpath(src, entry["directory"])
     try:
-        src_lines = open(src, errors="replace").read().splitlines()
-    except OSError:
-        src_lines = []
-    index = ci.Index.create()
-    try:
-        tu = index.parse(src, args=tu_args(entry))
-    except ci.TranslationUnitLoadError:
-        return rel, None
+        src = entry["file"]
+        rel = os.path.relpath(src, entry["directory"])
+        try:
+            src_lines = open(src, errors="replace").read().splitlines()
+        except OSError:
+            src_lines = []
+        index = ci.Index.create()
+        try:
+            tu = index.parse(src, args=tu_args(entry))
+        except ci.TranslationUnitLoadError:
+            return rel, None
+    finally:
+        os.chdir(prev_cwd)
     h = Harvester(rel, src_lines)
     for fn in tu.cursor.get_children():
         if fn.kind != K.FUNCTION_DECL or not fn.is_definition():

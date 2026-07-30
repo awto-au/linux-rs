@@ -101,15 +101,27 @@ def fingerprint(cursor):
 
 
 def process(entry):
+    # tu_args() can carry relative -I paths meant to resolve against
+    # entry["directory"] (as compile_commands.json intends), so libclang
+    # genuinely needs that cwd during index.parse() — but chdir mutates
+    # this pool worker's process-wide cwd with no restore, a landmine for
+    # any future entry whose directory differs (currently harmless only
+    # because every corpus entry here shares one directory). Save/restore
+    # around the call instead of leaving it changed for the worker's
+    # remaining lifetime.
+    prev_cwd = os.getcwd()
     os.chdir(entry["directory"])
-    src = entry["file"]
-    rel = os.path.relpath(src, entry["directory"])
-    index = ci.Index.create()
-    recs, nerr = [], 0
     try:
-        tu = index.parse(src, args=tu_args(entry))
-    except ci.TranslationUnitLoadError as e:
-        return rel, [], f"parse-failed: {e}"
+        src = entry["file"]
+        rel = os.path.relpath(src, entry["directory"])
+        index = ci.Index.create()
+        recs, nerr = [], 0
+        try:
+            tu = index.parse(src, args=tu_args(entry))
+        except ci.TranslationUnitLoadError as e:
+            return rel, [], f"parse-failed: {e}"
+    finally:
+        os.chdir(prev_cwd)
     nerr = sum(1 for d in tu.diagnostics if d.severity >= ci.Diagnostic.Error)
     for c in tu.cursor.get_children():
         if c.kind != K.FUNCTION_DECL or not c.is_definition():
