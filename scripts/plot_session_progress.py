@@ -25,6 +25,7 @@ Output: docs/status/c2rust-session-progress.png,
         docs/status/c2rust-issue-impact.png (if gh is available)
 Log: tmp/plot_session_progress.log
 """
+import ast
 import json
 import logging
 import re
@@ -81,7 +82,11 @@ def real_compile_check_result():
     m = re.search(r"Results: (\{.*\})", txt)
     if not m:
         return None
-    counts = json.loads(m.group(1).replace("'", '"'))
+    # check_c2rust_output_compiles.py writes f"Results: {dict(counts)}" —
+    # a real Python dict repr, not JSON. Naive quote-replacement breaks if
+    # any key/value ever contains an apostrophe; ast.literal_eval parses
+    # the actual Python literal syntax instead of guessing at it.
+    counts = ast.literal_eval(m.group(1))
     checked_m = re.search(r"Checked: (\d+) files", txt)
     return {
         "ok": counts.get("ok", 0),
@@ -164,7 +169,11 @@ def main() -> int:
 
     # Panel 1: clean vs crash outcome over the day's runs
     ax = axs[0]
-    style_axes(ax, "c2rust transpile outcome per baseline run (2026-07-17/18)")
+    # Derived from the real queried run_ats, not hardcoded — a hardcoded
+    # date silently mislabels the chart on every future re-run.
+    first_date, last_date = run_ats[0][:10], run_ats[-1][:10]
+    date_range = first_date if first_date == last_date else f"{first_date} to {last_date}"
+    style_axes(ax, f"c2rust transpile outcome per baseline run ({date_range})")
     x = range(len(run_ats))
     ax.plot(x, clean_series, "-o", color=BLUE, linewidth=2, markersize=5, label="clean")
     ax.plot(x, crash_series, "-o", color=AMBER, linewidth=2, markersize=5, label="crash")
