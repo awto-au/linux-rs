@@ -50,9 +50,16 @@ from offload_translate import (DISCIPLINE, extract_code,  # noqa: E402
 
 def clippy_check(rust_source: str):
     """clippy-driver on the same standalone file. Returns (clean, text)
-    — clean means no warnings/errors at default lint level. Real temp
-    output path under REPO/tmp/ (never system /tmp — project rule; also
-    avoids the /dev/null spurious-failure bug — see rustc_check)."""
+    — clean means no *error*-level diagnostic (matches
+    check_c2rust_output_clippy.py's clippy_check(): warnings are real
+    signal to report, not a hard failure — a substring scan for
+    "warning:" in human-readable stderr treats every clippy style nit as
+    a hard failure, which can send a clean draft into an unproductive
+    retry loop). Uses --error-format=json so error vs. warning level is
+    read from the structured diagnostic, not guessed from text. Real
+    temp output path under REPO/tmp/ (never system /tmp — project rule;
+    also avoids the /dev/null spurious-failure bug — see rustc_check)."""
+    import json
     import shutil
     import uuid
     scratch = REPO / "tmp" / f"clippy_check_{uuid.uuid4().hex[:8]}"
@@ -63,10 +70,17 @@ def clippy_check(rust_source: str):
         src.write_text(rust_source)
         r = subprocess.run(
             ["clippy-driver", "--edition=2021", "--crate-type", "lib",
-             "-o", str(out), str(src)],
+             "--error-format=json", "-o", str(out), str(src)],
             capture_output=True, text=True, timeout=60,
         )
-        has_errors = "error[" in r.stderr or "error:" in r.stderr or "warning:" in r.stderr
+        has_errors = False
+        for line in r.stderr.splitlines():
+            try:
+                diag = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if diag.get("level") == "error":
+                has_errors = True
         return (r.returncode == 0 and not has_errors), r.stderr
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
