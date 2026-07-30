@@ -2,6 +2,8 @@
 
 **Pattern-learning C→Rust translation of the Linux kernel.**
 
+> **Agents: read [docs/c2rust-file-review-loop.md](docs/c2rust-file-review-loop.md) before touching any per-file c2rust review work.** It is the canonical process — source of truth is GitHub issue state (#47 master, #44 child), not memory or chat history. The only supported entrypoint is `python3 scripts/dev.py c2rust-file-review <c_file>`.
+
 ## End goal
 
 Boot a machine-translated Rust Linux kernel on a **RISC-V soft core running
@@ -152,6 +154,20 @@ above), this project's pipeline relies on:
   built on.
 
 ## Reproduce
+
+### Canonical operator entrypoint
+
+Use `scripts/dev.py` as the single operator entrypoint for routine project
+workflows. Prefer `dev.py` subcommands over calling workflow scripts directly;
+this keeps command surface stable while script internals evolve.
+
+Common c2rust workflows:
+
+- `python3 scripts/dev.py c2rust-file-review ...` for per-file review loop
+  automation (fresh reference output, provenance artifacts, TODO sync/check,
+  optional static/QEMU gating).
+- `python3 scripts/dev.py c2rust-baseline ...` for full-corpus transpile
+  reliability runs (DB-backed outcomes and timing/failure inventory).
 
 Fedora 44-ish with clang/LLVM 22, bindgen, QEMU. Then:
 clone a kernel at **v7.1**, `make LLVM=1 defconfig`, enable `CONFIG_RUST`,
