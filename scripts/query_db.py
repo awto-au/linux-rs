@@ -14,7 +14,8 @@ Usage:
   query_db.py rule <keyword>        # which rule(s) mention <keyword>
   query_db.py callers <fn_name>     # how many functions call <fn_name>, sample
   query_db.py uncovered [N]         # top-N hot statement families with no rule
-  query_db.py sql "<query>"         # raw SQL, table-printed
+  query_db.py sql "<query>"         # raw SQL (read-only connection), table-printed
+  query_db.py sql --write "<query>" # raw SQL with write access — deliberate opt-in only
   query_db.py stats                 # summary counts
 """
 import sqlite3
@@ -49,8 +50,21 @@ def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 1
-    conn = sqlite3.connect(DB)
     cmd, rest = sys.argv[1], sys.argv[2:]
+
+    # "sql" defaults to a real read-only connection (SQLite URI mode=ro) —
+    # this DB is the whole pipeline's shared, rebuildable-but-not-free
+    # state (see build_db.py's PERSISTENT_TABLES restore), and this
+    # module's own docstring frames itself as "quick checks", not a
+    # mutation tool. --write is the deliberate, explicit opt-in for the
+    # rare real need to fix up a row by hand.
+    write = cmd == "sql" and rest and rest[0] == "--write"
+    if write:
+        rest = rest[1:]
+    if cmd == "sql" and not write:
+        conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    else:
+        conn = sqlite3.connect(DB)
 
     if cmd == "rule":
         kw = rest[0] if rest else ""
@@ -99,6 +113,12 @@ def main() -> int:
             print("\t".join(cols))
         for row in cur:
             print("\t".join(str(x) for x in row))
+        if write:
+            # Python's sqlite3 module opens an implicit transaction on the
+            # first DML statement and never auto-commits it — without this,
+            # a --write query silently appears to succeed (no error) but
+            # is rolled back the moment the process exits.
+            conn.commit()
 
     else:
         print(__doc__)
