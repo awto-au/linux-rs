@@ -4,6 +4,8 @@
 
 > **Agents: read [docs/c2rust-file-review-loop.md](docs/c2rust-file-review-loop.md) before touching any per-file c2rust review work.** It is the canonical process — source of truth is GitHub issue state (#47 master, #44 child), not memory or chat history. The only supported entrypoint is `python3 scripts/dev.py c2rust-file-review <c_file>`.
 
+> **Standing policy: `linux-riscv/` tracks upstream `torvalds/linux`, permanently.** Falling behind is a bug to fix, not a steady state to accept — rebasing onto upstream is not an optional decision to revisit each time, it is routine maintenance. See #52 for the current rebase tracking issue and process (prove the existing corpus's baseline first, rebase in an isolated worktree, rebuild the DB, re-verify boot/KUnit, only then promote).
+
 ## End goal
 
 Boot a machine-translated Rust Linux kernel on a **RISC-V soft core running
