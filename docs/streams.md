@@ -23,6 +23,10 @@ section; this list is the scannable index.
    queue has a real fixable bug (small, single-root-cause, mechanical
    shape) — dispatch through the compiler-retry-then-independent-review
    gate as soon as a candidate exists, not just once per session.
+   `scripts/ollama_queue_watch.py` is the discovery half of this order —
+   run it to find which open issue(s) are real, fixable, and not yet
+   claimed; it does not dispatch agents itself, a human/orchestrating
+   agent reads its output and does the actual dispatch.
 2. **Standing worker on stream-2 boot-path integration** (issue-anchored,
    currently awto-au/linux-rs#25 for 8250 Tier C) — continuously wiring
    landed/oracle-verified translated code into the live C boot path, not a
