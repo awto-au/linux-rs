@@ -39,6 +39,11 @@ TMP = REPO / "tmp"
 LOG = TMP / "target_compile_test.log"
 N = "5000"
 SEED = "424242"
+# Same bound as diff_oracle.py's TIMEOUT_S — this script's own
+# run_riscv64_emulated() is exactly the case that model doesn't cover
+# (a qemu-riscv64-static usermode-emulated run can hang with no bound
+# otherwise, unlike a native host-side run).
+TIMEOUT_S = 60
 
 RISCV_GCC = REPO / "tmp" / "initramfs" / "riscv64-linux-musl-cross" / "bin" / "riscv64-linux-musl-gcc"
 QEMU_RISCV64 = "qemu-riscv64-static"
@@ -46,7 +51,11 @@ QEMU_RISCV64 = "qemu-riscv64-static"
 
 def sh(cmd):
     logging.info("$ %s", " ".join(map(str, cmd)))
-    p = subprocess.run(cmd, text=True, capture_output=True)
+    try:
+        p = subprocess.run(cmd, text=True, capture_output=True, timeout=TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        logging.error("TIMED OUT after %ds: %s", TIMEOUT_S, " ".join(map(str, cmd)))
+        raise SystemExit(1)
     if p.returncode != 0:
         logging.error("FAILED (%d):\n%s", p.returncode, p.stdout[-4000:] + p.stderr[-4000:])
         raise SystemExit(1)
@@ -66,9 +75,12 @@ def diff_lines(c_out: str, rs_out: str):
 
 
 def run_host_native(target: str, c_src: Path, rs_src: Path):
-    """Reuses diff_oracle.py's own backend so both verdicts come from one
-    process/run rather than shelling out to a second script and re-parsing
-    its output."""
+    """Same build+run+diff steps as diff_oracle.py's main(), inlined here
+    rather than imported — diff_oracle.py has no importable function to
+    call (its logic lives directly in main()), so this hand-copies the
+    same commands/args instead. Kept identical to diff_oracle.py
+    deliberately; if that script's build flags or N/SEED ever change,
+    update both together."""
     sh(["clang", "-O1", "-o", str(TMP / f"diff_{target}_c"), str(c_src)])
     sh(["rustc", "-O", "--edition=2021", "-o", str(TMP / f"diff_{target}_rs"), str(rs_src)])
     c_out = sh([str(TMP / f"diff_{target}_c"), N, SEED])
