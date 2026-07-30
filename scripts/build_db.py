@@ -240,7 +240,15 @@ def main() -> int:
                 pass  # table doesn't exist yet (first run, or older DB)
         old_conn.close()
 
+    # Remove WAL/SHM sidecars alongside the main file — a crash mid-run
+    # (this DB uses PRAGMA journal_mode=WAL below) leaves them behind, and
+    # a stale -wal can reattach to the freshly recreated DB and later
+    # cause a "database disk image is malformed" (matches the incident
+    # this script already documents at the c2rust_issues_fts rebuild
+    # below).
     DB.unlink(missing_ok=True)
+    DB.with_suffix(DB.suffix + "-wal").unlink(missing_ok=True)
+    DB.with_suffix(DB.suffix + "-shm").unlink(missing_ok=True)
     conn = sqlite3.connect(DB)
     # WAL: readers (dev.py q ..., a query while a rebuild is mid-flight)
     # never block on the writer, and the writer never blocks on readers —
