@@ -64,6 +64,7 @@ import argparse
 import csv
 import datetime
 import fcntl
+import os
 import shlex
 import shutil
 import subprocess
@@ -89,7 +90,12 @@ def archive_boot(log_path: Path, run_id: str | None, n_ok: int, n_notok: int,
     existing per-run-append pattern. Both the log and the CSV row are
     real, tracked git content — see commit_and_push_history()."""
     BOOT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
+    # Sub-second + PID disambiguator: two boots finishing within the same
+    # wall-clock second under the same --run-id would otherwise collide
+    # on this filename and silently clobber a previously-archived log,
+    # contradicting this function's own "never overwritten" guarantee.
+    now = datetime.datetime.now().astimezone()
+    stamp = now.strftime("%Y%m%dT%H%M%S") + f".{now.microsecond:06d}-{os.getpid()}" + now.strftime("%z")
     archived = BOOT_HISTORY_DIR / f"{stamp}-{run_id or 'default'}.log"
     shutil.copyfile(log_path, archived)
 
@@ -145,9 +151,16 @@ def commit_and_push_history(archived_log: Path, run_id: str | None, n_ok: int,
                            capture_output=True, text=True)
             subprocess.run(["git", "push"], cwd=REPO, check=True, capture_output=True, text=True)
             print("boot-history: committed + pushed")
-    except subprocess.CalledProcessError as e:
-        print(f"WARNING: boot-history auto-commit/push failed: {e}\n{e.stderr}",
-              file=sys.stderr)
+    except (subprocess.CalledProcessError, OSError) as e:
+        # OSError (e.g. FileNotFoundError if git isn't on PATH) alongside
+        # CalledProcessError — this whole block is meant to degrade to a
+        # warning, never propagate, and a bare CalledProcessError catch
+        # let non-git-failure OS errors through uncaught.
+        detail = getattr(e, "stderr", None)
+        msg = f"WARNING: boot-history auto-commit/push failed: {e}"
+        if detail:
+            msg += "\n" + detail
+        print(msg, file=sys.stderr)
         # Don't fail the whole boot over a push hiccup (e.g. transient
         # network) — the boot's own pass/fail result is what matters most
         # and is already returned/printed by the caller; this is a
