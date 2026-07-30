@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
+# ARCHIVED 2026-07-30: one-shot safety net for awtoau/c2rust#4 (comment
+# placement fix), which landed and stayed stable. Zero callers. The
+# `*`-continuation heuristic below collides with Rust pointer-deref
+# syntax — a real bug, not just hypothetical — so if this is ever
+# revived for a future comment-handling change, fix that first.
 """Diff c2rust-emitted comment placement between two snapshots of
 tmp/c2rust-baseline/*/output/src/*.rs — the safety net for the
 locate_comments() shared-visited-set fix (awtoau/c2rust#4): that fix

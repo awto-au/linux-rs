@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
+# ARCHIVED 2026-07-30: investigation script for awtoau/c2rust#1 (PCH
+# AST-export divergence), which is closed and root-caused (see
+# docstring below). awtoau/c2rust#2 is cited for shared context only —
+# that's a separate, still-open concurrency-scaling question and does
+# not depend on this script. Zero callers; kept for provenance.
 """Compare c2rust transpile outcomes between plain -include and
 -include-pch for every TU in the dominant compile-flag group (see
 build_c2rust_pch.py), using the PCH that script builds. A PCH is only

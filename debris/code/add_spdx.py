@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
+# ARCHIVED 2026-07-30: one-shot migration for awto-au/linux-rs#1, already
+# completed (every scripts/*.py and rulesdb/rules/*.toml has its header).
+# Zero callers; kept for provenance, not meant to run again.
 """Add SPDX GPL-2.0-only headers to our own tooling (scripts/, rulesdb/)
 where missing — license issue #1 checklist item."""
 import sys

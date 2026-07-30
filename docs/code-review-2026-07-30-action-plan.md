@@ -175,6 +175,16 @@ in `PERSISTENT_TABLES` and documented as hand-curated, but has zero
 column naming (`rust_file` vs. `rs_file`; bare `file` vs. `c_file`) and
 missing indexes on `rule_id` in four `rule_*` child tables.
 
+## Archival convention (added 2026-07-31)
+
+Every script moved to `debris/code/` gets an `# ARCHIVED <date>: ...` header
+added at archive time, naming the issue(s) it relates to (this repo's or
+`awtoau/c2rust`'s) and why it's safe to retire — some of these issues may
+go upstream later, so the reference needs to survive outside this doc, not
+just live in a commit message. Retrofitted onto the three scripts archived
+so far (`add_spdx.py` → `awto-au/linux-rs#1`, `diff_c2rust_comments.py` →
+`awtoau/c2rust#4`, `run_c2rust_pch_compare.py` → `awtoau/c2rust#1`/`#2`).
+
 ## Suggested order of operations
 
 1. **This doc's "needs your call" debris items** — quick decisions,
