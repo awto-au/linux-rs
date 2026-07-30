@@ -44,17 +44,6 @@ C2RUST_SRC = Path(os.environ.get(
     "C2RUST_FORK_DIR", "/mnt/2tb/git/github.com/awtoau/c2rust"))
 
 
-def current_c2rust_rev() -> str:
-    """HEAD of the real awtoau/c2rust checkout — a hardcoded rev here
-    would silently go stale every time the fork advances, checking old
-    DB rows without anyone noticing."""
-    out = subprocess.run(["git", "rev-parse", "--short=9", "HEAD"],
-                         cwd=C2RUST_SRC, capture_output=True, text=True, check=True)
-    return out.stdout.strip()
-
-
-C2RUST_REV = current_c2rust_rev()
-
 HOST_DIR = SUPPORT_DIR / "host"
 TARGET_DIR = SUPPORT_DIR / "target"
 BITFIELDS_DERIVE_SO = HOST_DIR / "libc2rust_bitfields_derive.so"
@@ -230,8 +219,16 @@ def inject_no_std(rs_path, dest_path):
 
 
 def rustc_check(rs_path):
+    """Returns (outcome, stderr) where outcome is 'ok', 'error', 'timeout',
+    or 'vanished' (rs_path was globbed earlier but no longer exists —
+    tmp/c2rust-baseline/ is live state a concurrent `dev.py c2rust-baseline
+    --overwrite-existing` run can be rewriting mid-scan; matches
+    check_c2rust_output_clippy.py's clippy_check())."""
     processed = PROCESSED_DIR / rs_path.relative_to(BASELINE)
-    inject_no_std(rs_path, processed)
+    try:
+        inject_no_std(rs_path, processed)
+    except FileNotFoundError:
+        return "vanished", ""
     # -o /dev/null breaks --emit=metadata crate loading in ways that
     # surface as spurious "can't find crate" errors for *other* --extern
     # crates (confirmed by bisecting: the same command against a trivial
