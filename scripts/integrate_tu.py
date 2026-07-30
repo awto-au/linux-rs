@@ -12,8 +12,9 @@ this performs every mechanical step that used to be done by hand:
   4. olddefconfig + build (LLVM=1, riscv).
   5. Boot via boot_qemu.py; parse KUnit totals; FAIL loudly on any
      'not ok' or missing suite.
-  6. Optionally format-patch the kernel commit into patches/ (--patch N
-     after you commit in the worktree).
+
+After committing in the worktree, format-patch it into patches/ via
+`scripts/dev.py patch N` (a separate step, not a flag on this script).
 
 Usage:
   integrate_tu.py --obj lib/foo.o --header linux/foo.h \
@@ -91,7 +92,17 @@ def patch_bindings(tree: Path, header: str):
         logging.info("bindings_helper already has %s", header)
         return
     lines = text.splitlines(keepends=True)
-    idx = max(i for i, l in enumerate(lines) if l.startswith("#include <linux/"))
+    linux_include_idxs = [i for i, l in enumerate(lines) if l.startswith("#include <linux/")]
+    # No existing #include <linux/...> line to anchor against (e.g. this
+    # is the first one, or header is under a different prefix like
+    # asm/foo.h) — max() over an empty generator raised an unhandled
+    # ValueError here; append after the last #include of any kind
+    # instead, or at file end if there are none.
+    if linux_include_idxs:
+        idx = max(linux_include_idxs)
+    else:
+        include_idxs = [i for i, l in enumerate(lines) if l.startswith("#include")]
+        idx = max(include_idxs) if include_idxs else len(lines) - 1
     for i, l in enumerate(lines):
         if l.startswith("#include <linux/") and l.strip() > inc:
             idx = i
