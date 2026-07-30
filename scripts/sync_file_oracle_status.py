@@ -52,12 +52,12 @@ MANUAL_TIER4_EVIDENCE = [
          detail="serial8250_do_startup/_do_shutdown: 6 boots (3 C-path, "
                  "3 Rust-path), all 15 pairwise diffs byte-identical from "
                  "KTAP onward",
-         evidence_ref="docs/8250-tier-c-startup-shutdown-2026-07-18.md"),
+         evidence_ref="debris/docs/8250-deferred-20260720/8250-tier-c-startup-shutdown-2026-07-18.md"),
     dict(c_file="drivers/tty/serial/8250/8250_port.c",
          detail="serial8250_handle_irq_locked: 8 boots (4 C-path, 4 "
                  "Rust-path), all 28 pairwise diffs byte-identical from "
                  "KTAP onward",
-         evidence_ref="docs/8250-tier-c-irq-2026-07-18.md"),
+         evidence_ref="debris/docs/8250-deferred-20260720/8250-tier-c-irq-2026-07-18.md"),
 ]
 
 
