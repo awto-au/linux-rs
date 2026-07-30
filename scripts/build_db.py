@@ -42,6 +42,29 @@ SCHEMA = REPO / "rulesdb" / "schema.sql"
 DB = REPO / "rulesdb" / "patterns.db"
 LOG = REPO / "tmp" / "build_db.log"
 
+PERSISTENT_TABLES = [
+    "c2rust_attempts",
+    "c2rust_failure_signatures",
+    "c2rust_decl_outcomes",
+    "c2rust_compile_outcomes",
+    "c2rust_clippy_outcomes",
+    "c2rust_clippy_runs",
+    "c2rust_file_review_steps",
+    "c2rust_file_review_state",
+    "c2rust_file_review_tracking",
+    "c2rust_file_test_probe",
+    "c2rust_test_probe_exceptions",
+    "c2rust_forks",
+    "c2rust_issues",
+    "c2rust_fix_patterns",
+    "c2rust_rule_conformance",
+    "file_oracle_status",
+    "function_safety_status",
+    "progress_snapshots",
+    "doc_sources",
+    "work_items",
+]
+
 
 def load_rules(conn):
     n = 0
@@ -203,23 +226,6 @@ def main() -> int:
     # missing from an earlier hand-maintained version of this and got
     # silently wiped for several rebuilds before this was caught
     # (2026-07-17).
-    PERSISTENT_TABLES = [
-        "c2rust_attempts",
-        "c2rust_failure_signatures",
-        "c2rust_decl_outcomes",
-        "c2rust_compile_outcomes",
-        "c2rust_clippy_outcomes",
-        "c2rust_clippy_runs",
-        "c2rust_forks",
-        "c2rust_issues",
-        "c2rust_fix_patterns",
-        "c2rust_rule_conformance",
-        "file_oracle_status",
-        "function_safety_status",
-        "progress_snapshots",
-        "doc_sources",
-        "work_items",
-    ]
     table_backups = {}
     if DB.exists():
         old_conn = sqlite3.connect(DB)

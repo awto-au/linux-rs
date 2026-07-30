@@ -62,6 +62,10 @@ section; this list is the scannable index.
    and move on. Re-check on later touches too (a new RfL PR or LKML thread
    can land after our issue was first filed) — this is a standing habit,
    not a one-time search per issue.
+8. **Per-file provenance/semantic review follows one fixed loop** — use
+   `docs/c2rust-file-review-loop.md` for every file in issue-driven review
+   work (currently #47/#44). No ad-hoc restarts from chat history: file
+   selection, evidence, verdicts, and follow-ups are all issue-anchored.
 
 ## 1. c2rust-breadth
 
@@ -316,6 +320,20 @@ why."
 `docs/kernel-test-harness-research-2026-07-18.md`,
 `docs/tmpfs-rust-scoping-2026-07-18.md`,
 `docs/rust-for-linux-contribution-2026-07-18.md`.
+
+## 7. per-file c-vs-rs review loop
+
+**Goal:** review each translated file against its original C source with a
+repeatable, issue-first process that produces objective artifacts and
+explicit verdicts.
+
+**Canonical process:** `docs/c2rust-file-review-loop.md`.
+**Where the work lives:** issue checklists/comments (currently #47/#44),
+`tmp/*_provenance.diff`, `tmp/c2rust-reference-check/*`.
+**Verification gate:** one-file loop exit criteria from the process doc
+(fresh reference output, saved diff artifact, semantic verdict,
+issue-linked follow-up where needed, TODO policy checks).
+**Current top item:** next unchecked file in issue #44.
 
 **Continuous Rust-for-Linux upstream-contribution substream
 (awto-au/linux-rs#12):** resurvey current Rust-for-Linux docs/issues at

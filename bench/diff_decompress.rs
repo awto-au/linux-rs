@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-//! Tier-2.5 differential oracle: Rust translation side, decompress.
+//! Differential oracle: Rust translation side, decompress.
 //! Faithful copy of lib/decompress_rs.rs's algorithm (kernel-crate
 //! bindings/export/link_section stripped) — same protocol/LCG as
 //! diff_decompress.c. Every decompressor slot is None, matching this

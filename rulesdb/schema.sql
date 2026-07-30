@@ -395,6 +395,104 @@ CREATE TABLE progress_snapshots (
 );
 CREATE INDEX idx_progress_snapshots_taken_at ON progress_snapshots(taken_at);
 
+-- Per-file c2rust review PROCESS tracking. Unlike c2rust_attempts, which is
+-- about raw transpiler outcomes, these tables track the higher-level review
+-- workflow in docs/c2rust-file-review-loop.md: fresh reference, diff artifact,
+-- integrate/qemu, oracle, test probe, TODO sync/check, and the manual semantic
+-- review disposition.
+CREATE TABLE c2rust_file_review_steps (
+    id INTEGER PRIMARY KEY,
+    c_file TEXT NOT NULL,
+    run_at TEXT NOT NULL,          -- ISO 8601, one logical review-run id per file pass
+    step_name TEXT NOT NULL,       -- reference_output | mapping | diff_artifact |
+                                   -- static_checks | integrate | qemu | oracle |
+                                   -- test_probe | semantic_review | todo_sync_check |
+                                   -- issue_update
+    step_status TEXT NOT NULL,     -- pass | fail | skipped | missing | pending-manual |
+                                   -- not-requested | not-mapped | findings
+    detail TEXT,
+    artifact_path TEXT,
+    duration_s REAL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_c2rust_filereview_steps_file ON c2rust_file_review_steps(c_file);
+CREATE INDEX idx_c2rust_filereview_steps_step ON c2rust_file_review_steps(step_name);
+CREATE INDEX idx_c2rust_filereview_steps_runat ON c2rust_file_review_steps(run_at);
+
+CREATE TABLE c2rust_file_review_state (
+    c_file TEXT PRIMARY KEY,
+    latest_run_at TEXT NOT NULL,
+    fresh_output_status TEXT NOT NULL,
+    mapping_status TEXT NOT NULL,
+    diff_status TEXT NOT NULL,
+    static_status TEXT NOT NULL,
+    step1_status TEXT NOT NULL,
+    oracle_status TEXT NOT NULL,
+    test_probe_status TEXT NOT NULL,
+    semantic_review_status TEXT NOT NULL,
+    todo_status TEXT NOT NULL,
+    issue_update_status TEXT NOT NULL,
+    disposition TEXT NOT NULL,     -- pending-semantic-review | pass |
+                                   -- intentional-delta | blocked
+    note TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_c2rust_filereview_state_disposition ON c2rust_file_review_state(disposition);
+
+-- Compact latest-result compatibility table used by the review runner.
+CREATE TABLE c2rust_file_review_tracking (
+    c_file TEXT PRIMARY KEY,
+    step1_status TEXT NOT NULL,
+    step1_detail TEXT,
+    oracle_status TEXT NOT NULL,
+    oracle_target TEXT,
+    issue_note TEXT,
+    updated_at TEXT NOT NULL
+);
+
+-- Results from translating an existing in-tree test TU for the reviewed file.
+CREATE TABLE c2rust_file_test_probe (
+    c_file TEXT PRIMARY KEY,
+    probe_status TEXT NOT NULL,
+    probe_detail TEXT,
+    updated_at TEXT NOT NULL,
+    unsafe_hits INTEGER NOT NULL DEFAULT 0,
+    unsafe_unapproved_hits INTEGER NOT NULL DEFAULT 0,
+    unsafe_exception_hits INTEGER NOT NULL DEFAULT 0
+);
+
+-- Human-approved exceptions are authored state and must survive DB rebuilds.
+CREATE TABLE c2rust_test_probe_exceptions (
+    c_file TEXT NOT NULL,
+    test_tu TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    approved_by TEXT,
+    approved_at TEXT NOT NULL,
+    PRIMARY KEY(c_file, test_tu)
+);
+
+CREATE VIEW c2rust_function_review_state AS
+SELECT
+    f.file AS c_file,
+    f.name,
+    f.line,
+    s.latest_run_at,
+    s.fresh_output_status,
+    s.mapping_status,
+    s.diff_status,
+    s.static_status,
+    s.step1_status,
+    s.oracle_status,
+    s.test_probe_status,
+    s.semantic_review_status,
+    s.todo_status,
+    s.issue_update_status,
+    s.disposition,
+    s.note
+FROM functions f
+LEFT JOIN c2rust_file_review_state s
+  ON s.c_file = f.file OR s.c_file = replace(f.file, 'linux-riscv/', '');
+
 -- Per-TU translation progress: manual (translated_tus) status joined
 -- with the MOST RECENT c2rust_attempts row for that file, so one query
 -- answers "what's done, how (manual/c2rust), and if c2rust failed, why"

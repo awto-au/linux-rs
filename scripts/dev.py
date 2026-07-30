@@ -18,6 +18,7 @@ tmp/<sub>.log and prints only the outcome lines that matter.
   dev.py diff <target>          # tier-2.5 differential oracle (needs bench/diff_<target>.{c,rs})
   dev.py c2rust-build [--fork-dir DIR]   # full workspace build + verify every binary the dispatcher needs is fresh
   dev.py c2rust-baseline [--limit N]     # full-corpus c2rust triage -> patterns.db directly
+    dev.py c2rust-file-review [args...]    # per-file review + integrate_tu + boot/QEMU gates
   dev.py c2rust-regress BEFORE AFTER [--file-issue]  # per-decl regression diff between 2 baselined revs
   dev.py c2rust-clippy [--limit N]       # clippy-check c2rust clean outputs -> patterns.db
   dev.py safety-scan [--population P] [--limit N]  # per-function unsafe/safe scan -> patterns.db
@@ -96,7 +97,11 @@ INIT_REACHED_MARKER = INIT_REACHED
 # here is a gate by construction. A genuinely non-gating (warn-only)
 # check would need its own explicit handling when one is actually added;
 # not built speculatively ahead of a real need.
-PRE_BUILD_CHECKS = ["check_spdx_provenance.py"]
+PRE_BUILD_CHECKS = [
+    "check_spdx_provenance.py",
+    "sync_todo_linux_rs.py",
+    "check_todo_linux_rs.py",
+]
 POST_BOOT_CHECKS = ["report.py"]
 
 
@@ -226,6 +231,11 @@ def main() -> int:
         # count is adaptive (see run_c2rust_baseline.py's
         # adaptive_job_count()), scaling with whatever RAM is free.
         sh(["python3", str(S / "run_c2rust_baseline.py"), *rest], log="c2rust-baseline.log", timeout=1800)
+    elif cmd == "c2rust-file-review":
+        # Canonical entrypoint for per-file c2rust review loop automation.
+        # Keep this as the supported interface in docs; script internals
+        # can evolve without changing operator workflows.
+        sh(["python3", str(S / "run_c2rust_file_review.py"), *rest], log="c2rust-file-review.log")
     elif cmd == "c2rust-regress":
         # Per-declaration regression check between two awtoau/c2rust
         # revisions already baselined (dev.py c2rust-baseline at each

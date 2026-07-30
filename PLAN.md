@@ -173,6 +173,10 @@ path instead of an x86 `lib/` detour.)
    safe-wrapper rules need *before* Phase 3 scales them.
 4. Every manual fix must land as a **rule**, not a file patch — this phase
    forces the DB schema to be real.
+   Landed Rust ports must be recreatable from the original C file,
+   current c2rust, and generic committed scripts/rules/integration glue;
+   file-specific hand edits are a temporary exception at most, and should
+   be treated as missing process automation rather than the normal path.
 
 The old Phase-2 `lib/` targets (sort/CRC, KUnit differential) remain the
 oracle-tier-3 test vehicle — pure functions are still where differential
