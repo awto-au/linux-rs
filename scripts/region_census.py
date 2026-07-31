@@ -37,6 +37,17 @@ from pathlib import Path
 
 import clang.cindex as ci
 
+# The pip `libclang` package tops out at 18.1.1 and bundles its own
+# libclang.so of that vintage, which doesn't recognize warning flags
+# newer kernel Makefiles pass (e.g. -Wno-default-const-init-unsafe,
+# -Wno-unterminated-string-initialization) — combined with the corpus's
+# captured -Werror=unknown-warning-option, every TU parse fails. Point
+# the bindings at the system libclang instead, which tracks the same
+# clang used to capture compile_commands.json in the first place.
+_system_libclang = Path("/lib64/libclang.so")
+if _system_libclang.exists():
+    ci.Config.set_library_file(str(_system_libclang))
+
 REPO = Path(__file__).resolve().parent.parent
 LOG = REPO / "tmp" / "region_census.log"
 OUT = REPO / "tmp" / "region_census.pkl"
