@@ -237,6 +237,17 @@ def main() -> int:
         # Keep this as the supported interface in docs; script internals
         # can evolve without changing operator workflows.
         sh(["python3", str(S / "run_c2rust_file_review.py"), *rest], log="c2rust-file-review.log")
+    elif cmd == "check-split-tu-coverage":
+        # NOT in PRE_BUILD_CHECKS: unlike the other checks there, this one
+        # depends on the CONFIG_RUST=n recovery worktree
+        # (linux-riscv-worktrees/c2rust-recheck-baseline) existing and being
+        # reasonably current — heavier infrastructure than a pure DB/source
+        # read, so making it a hard build-blocking gate risks failing every
+        # routine build whenever that worktree is stale/missing rather than
+        # only when there's a genuine split-TU provenance gap. Run on demand
+        # (see awto-au/linux-rs#49's regression-check ask) or wire into CI
+        # separately once the worktree-freshness question has an answer.
+        sh(["python3", str(S / "check_split_tu_coverage.py"), *rest], log="check-split-tu-coverage.log")
     elif cmd == "c2rust-regress":
         # Per-declaration regression check between two awtoau/c2rust
         # revisions already baselined (dev.py c2rust-baseline at each

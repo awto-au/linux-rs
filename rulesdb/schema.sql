@@ -148,6 +148,31 @@ CREATE TABLE translated_tus (
 );
 CREATE INDEX idx_translated_tus_cfile ON translated_tus(c_file);
 
+-- Explicit provenance for landed .rs files that are NOT a 1:1 translation
+-- of a standalone compile unit — translated_tus assumes exactly that
+-- (c_file is a real TU with its own compile_commands.json entry), which
+-- doesn't hold for split-slice translations (the 4 8250_*.c files:
+-- 8250_helpers.c, 8250_io.c, 8250_irq.c, 8250_startup.c have no
+-- standalone C source at all — their functions are real, verified
+-- extractions from drivers/tty/serial/8250/8250_port.c, see
+-- awto-au/linux-rs#45/#49/#50). This table is the "approved explicit
+-- mapping mechanism for split slices" #49 asked for: real source file +
+-- the specific function names each slice covers, so a split TU's
+-- provenance is a queryable fact, not an assumption re-derived (or
+-- silently forgotten) every time someone looks at it.
+--
+-- Coverage is checked at review time (scripts/check_split_tu_coverage.py)
+-- against a fresh c2rust transpile of source_c_file: every function
+-- named here must exist there with matching logic, or the split TU has
+-- drifted from its real source and needs re-review.
+CREATE TABLE split_tu_provenance (
+    rs_file TEXT PRIMARY KEY,      -- e.g. "drivers/tty/serial/8250/8250_helpers_rs.rs"
+    source_c_file TEXT NOT NULL,   -- the real, standalone C file this is extracted from
+    functions TEXT NOT NULL,       -- JSON array of function names this slice covers
+    rationale TEXT,                -- why this was split out rather than translating source_c_file whole
+    approved_at TEXT NOT NULL      -- ISO 8601 — when this mapping was reviewed/approved, not auto-derived
+);
+
 -- c2rust baseline/triage runs (scripts/run_c2rust_baseline.py): one row
 -- per (c_file, run) so re-running after a c2rust fork fix shows progress
 -- over time rather than overwriting history. outcome is c2rust's own

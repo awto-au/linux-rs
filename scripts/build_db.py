@@ -63,6 +63,7 @@ PERSISTENT_TABLES = [
     "progress_snapshots",
     "doc_sources",
     "work_items",
+    "split_tu_provenance",
 ]
 
 
