@@ -129,36 +129,35 @@ Pick off individually; none are urgent/blocking, all are real.
   `rustc_check()`/`clippy_check()` between `offload_translate.py`/
   `offload_cycle.py`.
 
-## Debris candidates — needs your call
+## Debris candidates — resolved 2026-07-31
 
-Two verification passes agreed the first two below are genuinely dead
-(candidates for archiving, same treatment as `add_spdx.py`); the rest
-were flagged by only one pass and need a real decision, not a guess:
-
-**Confirmed by both passes, not yet archived:**
-- `scripts/ollama_queue_watch.py` — built to serve "Standing Orders #1"
-  in `docs/streams.md`, but that doc never actually names the script,
-  and nothing automated invokes it. *Possibly still-intended standing
-  tooling you run manually* — before archiving, confirm whether you
-  actually run this periodically.
-- `scripts/run_c2rust_pch_compare.py` — standalone investigation script
-  for a historical PCH/Clang-ABI bug (`awtoau/c2rust#1`/`#2`). Zero
-  callers. Worth checking those issues are genuinely closed/stable
-  before archiving.
-
-**Flagged by only one pass — unresolved, pick a side:**
-- `scripts/c2rust_baseline_watch.py` — real, correct, cron-oriented, but
-  never actually wired into cron/systemd/`dev.py`.
-- `scripts/plot_session_progress.py` — has the real hardcoded-date bug
-  above, plus only one historical doc citation, no live caller.
-- `scripts/region_report.py` — zero callers per the original pass; not
-  independently re-confirmed.
-- `scripts/target_compile_test.py` — zero callers per the original pass,
-  plus the un-consolidated `diff_oracle.py` duplication above; not
-  independently re-confirmed.
-- `scripts/compose_census.py` / `scripts/idiom_census.py` — flagged as
-  "completed one-time investigation, findings already captured in docs"
-  by one pass; neither pass called this definitive.
+- `scripts/ollama_queue_watch.py` — **kept.** Confirmed still in active
+  use (Standing Orders #1's discovery half); `docs/streams.md` now
+  explicitly names it.
+- `scripts/run_c2rust_pch_compare.py` — **archived.** `awtoau/c2rust#1`
+  (the bug it diagnoses) is closed; `#2` is unrelated shared context,
+  not a blocker. Archived with an issue-reference header.
+- `scripts/c2rust_baseline_watch.py` — **kept, not archived.**
+  `docs/streams.md` already documents this as a deliberate standing
+  TODO ("not yet wired to a real cron entry... holding off for now...
+  not abandoned") — an intentional decision already recorded, not an
+  oversight.
+- `scripts/plot_session_progress.py` — **kept.** Real, working script;
+  the hardcoded-date and dict-repr-parsing bugs above were fixed
+  (`db3584d`), not archived.
+- `scripts/region_report.py` — **kept.** Ran it for real against a
+  freshly-reloaded census (`rulesdb/patterns.db`'s `functions`/
+  `statement_families`, see #53) — it's the genuine, working report
+  generator `region_census.py`'s own docstring points to, just hadn't
+  been run in a while. Not dead code; a manually-run report tool, same
+  category as `report.py`.
+- `scripts/target_compile_test.py` — **kept.** Real Tier-2.5b riscv64-
+  emulated oracle; bug-fixed (`0fceead`), not archived.
+- `scripts/compose_census.py` / `scripts/idiom_census.py` — **archived.**
+  Both are one-time investigations against the fixed 2026-07-16 corpus
+  snapshot, findings fully captured in `docs/phase1-census-v2-composition.md`
+  / `docs/phase0-evals.md` respectively, zero live callers. Archived
+  with issue-reference headers (see #53).
 
 ## DB schema — no action needed
 
@@ -185,14 +184,24 @@ just live in a commit message. Retrofitted onto the three scripts archived
 so far (`add_spdx.py` → `awto-au/linux-rs#1`, `diff_c2rust_comments.py` →
 `awtoau/c2rust#4`, `run_c2rust_pch_compare.py` → `awtoau/c2rust#1`/`#2`).
 
-## Suggested order of operations
+## Suggested order of operations — all done, 2026-07-31
 
-1. **This doc's "needs your call" debris items** — quick decisions,
-   unblocks a small cleanup.
-2. **`build_db.py`'s WAL/SHM fix** — cheapest, prevents a real recurring
-   failure mode this project has already hit once.
-3. **`boot_qemu.py`'s two bugs** — the log-clobbering one is a real data-
-   loss risk for the `#28`/`#44` review work currently in flight.
-4. **The rest of the per-script bug list** — no urgency, batch whenever
-   convenient.
-5. **The style sweep** — lowest priority, cosmetic/consistency only.
+1. ~~This doc's "needs your call" debris items~~ — done, see above.
+2. ~~`build_db.py`'s WAL/SHM fix~~ — done (`24a7e0d`), verified with a
+   simulated crash-leftover scenario.
+3. ~~`boot_qemu.py`'s two bugs~~ — done (`0a214b8`).
+4. ~~The rest of the per-script bug list~~ — done: `check_c2rust_output_compiles.py`
+   (`026995b`), `combined_boot_scaffold.py` (`27eb81e`), `crawl_c2rust_upstream.py`
+   (`5d41273`), `offload_cycle.py` (`9b5bc3b`), `fingerprint.py`/`region_census.py`
+   (`eb9b6ce`), `plot_session_progress.py` (`db3584d`), `query_db.py`
+   (`2de5437`), `readiness.py` (`f6e2ffd`), `target_compile_test.py`
+   (`0fceead`), `integrate_tu.py` (`df3ece6`).
+5. ~~The style sweep~~ — done: mid-function imports (`101023e`), logging
+   convention (`00a28c0`), duplicated-helper-logic extraction
+   (`6152e81`, `28614dd`, `6d914ca`).
+
+Separately, this review's investigation led to filing and structurally
+fixing a real, more significant finding — the rule-learning track's
+Phase-1 census gate wasn't wired into the queryable DB — see
+[awto-au/linux-rs#53](https://github.com/awto-au/linux-rs/issues/53) and
+`scripts/check_census_gate.py` (`0d413b6`).
