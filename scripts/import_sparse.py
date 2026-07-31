@@ -28,6 +28,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pathutil import normalize_path  # noqa: E402 — see module doc
+
 TREE = REPO / "linux"
 TMP = REPO / "tmp"
 BUILD_DIR = TMP / "sparse-build"
@@ -84,20 +87,6 @@ def extract_checker_flags(command):
             keep.append(a)
         i += 1
     return keep
-
-
-def normalize_path(p):
-    """Match functions.jsonl's convention (relative to linux/, e.g.
-    'arch/x86/boot/printf.c') so sparse_diagnostics rows join cleanly
-    against census rows — sparse's own paths are absolute (REPO/linux/...);
-    a naive REPO-prefix strip alone leaves a stray 'linux/' prefix that
-    would silently break joins against `functions`/`translated_tus`, same
-    class of bug import_cscope.py's identical helper documents (found
-    2026-07-16 there via a skip_atoi spot-check)."""
-    p = p.replace(str(REPO) + "/", "")
-    if p.startswith("linux/"):
-        p = p[len("linux/"):]
-    return p
 
 
 def run_sparse(sparse_bin, entry):

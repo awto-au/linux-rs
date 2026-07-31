@@ -26,6 +26,9 @@ import sqlite3
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pathutil import normalize_path  # noqa: E402 — see module doc
+
 TMP = REPO / "tmp"
 DB = REPO / "rulesdb" / "patterns.db"
 LOG = TMP / "import_cscope.log"
@@ -52,20 +55,6 @@ def build_cscope_db():
 
 
 LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+(\d+)\s+(.*)$")
-
-
-def normalize_path(p):
-    """Match functions.jsonl's convention (relative to linux/, e.g.
-    'arch/x86/boot/printf.c') so cscope rows join cleanly against census
-    rows — cscope's own paths are absolute (REPO/linux/...); a naive
-    REPO-prefix strip alone leaves a stray 'linux/' prefix that silently
-    breaks every join against `functions`/`translated_tus` (found
-    2026-07-16 via a skip_atoi spot-check: half the rows had 'linux/x'
-    paths, half had 'x' paths, for the same file)."""
-    p = p.replace(str(REPO) + "/", "")
-    if p.startswith("linux/"):
-        p = p[len("linux/"):]
-    return p
 
 
 def query(name, mode_flag):
