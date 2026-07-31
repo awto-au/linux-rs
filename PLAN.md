@@ -20,8 +20,14 @@ pattern once, apply it to every structurally-equivalent occurrence. The agent
 per-function code generator. The durable artifact is the **pattern knowledge
 base**, not any single translated file.
 
-This thesis is plausible but **unproven**. Phase 1 exists to test it cheaply
-before building a translator.
+This thesis was plausible but unproven when this plan was written. Phase 1
+existed to test it cheaply before building a translator, and its go/no-go
+gate passed on 2026-07-16 with real corpus data — see
+[docs/phase1-census-v1.md](docs/phase1-census-v1.md) (**GATE: GO**: 199
+statement families covered 50% of 1.44M instances at the time; the
+census has since been re-run and reloaded into `rulesdb/patterns.db`,
+see [awto-au/linux-rs#53](https://github.com/awto-au/linux-rs/issues/53)
+for current figures and the long-tail coverage caveat).
 
 ## Prior art — build on, don't reinvent
 
@@ -150,6 +156,14 @@ breakdown. **Go/no-go gate**: if ordinary code doesn't collapse into
 hundreds-not-tens-of-thousands of families, the thesis fails and we stop
 having spent no translation effort. The census is independently publishable/
 useful even then.
+
+**Result (2026-07-16, GATE: GO):** see
+[docs/phase1-census-v1.md](docs/phase1-census-v1.md) — 199 statement
+families covered 50% of 1.44M instances (hundreds, not tens of
+thousands, matching the gate). The census's raw output was not reloaded
+into the queryable rule DB at the time, which let rule-writing proceed
+without a live link back to real occurrence counts — see
+[awto-au/linux-rs#53](https://github.com/awto-au/linux-rs/issues/53).
 
 ### Phase 2 — the minimal riscv64 boot path (exit: Rust translation running in-tree)
 
