@@ -124,6 +124,21 @@ TEST_TUS_BY_C_FILE = {
     "lib/decompress.c": ["init/initramfs_test.c"],
     "lib/earlycpio.c": ["init/initramfs_test.c"],
 }
+# Keep in sync with c2rust_reference_check.py's TEST_CONFIGS_BY_TU — same
+# test TU -> CONFIG_..._KUNIT_TEST mapping, duplicated here (not imported)
+# to match this file's existing subprocess-not-import convention for that
+# sibling script. Found 2026-07-31: integrate_tu.py step1 previously ran
+# with no --kunit at all, so a file's KUnit suite only actually ran when
+# its CONFIG_TEST_* happened to already be enabled in the baseline
+# .config (true for cmdline/list_sort by luck, false for kstrtox) —
+# "pass (via integrate_tu)" silently meant "booted", not "suite ran".
+TEST_CONFIGS_BY_TU = {
+    "lib/tests/base64_kunit.c": ["CONFIG_BASE64_KUNIT"],
+    "lib/tests/cmdline_kunit.c": ["CONFIG_CMDLINE_KUNIT_TEST"],
+    "lib/tests/test_list_sort.c": ["CONFIG_TEST_LIST_SORT"],
+    "lib/test-kstrtox.c": ["CONFIG_TEST_KSTRTOX"],
+    "init/initramfs_test.c": ["CONFIG_INITRAMFS_TEST"],
+}
 C2RUST_REF_OUT_ROOT = TMP / "c2rust-reference-check"
 UNSAFE_TEST_RE = re.compile(r"\bunsafe\s*(?:\{|fn\b|impl\b|trait\b|extern\b)")
 
@@ -1032,12 +1047,21 @@ def run_one_with_optional_qemu(
     if integrate and result["status"] == "ok":
         integrate_start = time.monotonic()
         obj = obj_for_c_file(c_file)
-        log.info("[%s] step1: integrate_tu start obj=%s", c_file, obj)
+        # Enable this file's own KUnit config(s) if it has a mapped test —
+        # without this, the boot below can succeed and the whole kernel
+        # stay green while this file's specific suite silently never ran
+        # (true of any CONFIG_TEST_* not already on in the baseline
+        # .config; see TEST_CONFIGS_BY_TU's module-doc comment above).
+        kunit_configs: list[str] = []
+        for test_tu in TEST_TUS_BY_C_FILE.get(c_file, []):
+            kunit_configs.extend(TEST_CONFIGS_BY_TU.get(test_tu, []))
+        log.info("[%s] step1: integrate_tu start obj=%s kunit=%s", c_file, obj, kunit_configs)
         p_int = run_cmd_no_raise_in_repo([
             "python3",
             "scripts/integrate_tu.py",
             "--obj",
             obj,
+            *(["--kunit", *kunit_configs] if kunit_configs else []),
         ])
         if p_int.returncode == 0:
             result["integrate"] = f"pass ({obj})"
