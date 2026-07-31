@@ -266,6 +266,48 @@ A file is done only if all are true:
 - TODO marker policy checks pass.
 - Issue comment is posted with evidence and next step.
 
+## Test-transpile safety policy (#51)
+
+When a file has an existing KUnit test mapped in `TEST_TUS_BY_C_FILE`
+(`scripts/run_c2rust_file_review.py`), the loop's `test_probe` step
+transpiles that test TU fresh and counts `unsafe` occurrences
+(`count_unsafe_hits`) in the output. Policy:
+
+- **Default requirement: the transpiled test output should be safe
+  Rust** — zero `unsafe` — same as any other file.
+- **Exception path**: c2rust's own transpile of an *existing, real
+  kernel KUnit test* commonly carries unavoidable `unsafe`
+  scaffolding/FFI surface (the raw transpile output is unsafe-first by
+  the project's own translation discipline — see README's
+  "Translation discipline" section — the test TU is no exception). An
+  approved exception records this is expected and reviewed, not
+  silently accepted.
+- **Exception record** lives in `rulesdb`'s `c2rust_test_probe_exceptions`
+  table: `c_file`, `test_tu`, `rationale` (why unsafe is unavoidable —
+  in practice, "unavoidable c2rust-emitted unsafe scaffolding/FFI
+  surface, scope limited to the test TU"), `approved_by`,
+  `approved_at`. Query current exceptions:
+  `python3 scripts/query_db.py sql "SELECT * FROM c2rust_test_probe_exceptions"`.
+- **Current behavior is flag, not block**: an unapproved `unsafe` hit
+  reports `status=pass, detail="transpile ok with unsafe output (gate
+  disabled): ..."` — real, honest information surfaced in the DB and
+  the review log, but not yet a hard failure. Treat an unapproved
+  `unsafe` hit as something to look at before calling the file done,
+  not as silent noise — if a fresh look confirms it's the same
+  unavoidable-scaffolding class as the existing approved exceptions,
+  add a real exception record (not a rubber stamp — read the actual
+  unsafe usage first); if it looks different, investigate before
+  approving.
+- **Sample exception record** (real, from the current table):
+  ```
+  c_file:      lib/cmdline.c
+  test_tu:     lib/tests/cmdline_kunit.c
+  rationale:   Transpiled KUnit test contains unavoidable c2rust-emitted
+               unsafe scaffolding/FFI surface; scope limited to test TU.
+  approved_by: copilot-batch-seed
+  approved_at: 2026-07-20T10:00:26Z
+  ```
+
 ## Required artifacts per file
 
 - Fresh c2rust output directory under `tmp/c2rust-reference-check/`.
