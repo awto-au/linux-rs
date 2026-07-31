@@ -1006,6 +1006,8 @@ def run_one_with_optional_qemu(
     qemu_test: bool,
     strict_qemu: bool,
     qemu_cmd_template: str,
+    tree: str = "linux-riscv",
+    run_id: str | None = None,
 ) -> dict[str, str]:
     log = logging.getLogger(__name__)
     file_start = time.monotonic()
@@ -1055,12 +1057,18 @@ def run_one_with_optional_qemu(
         kunit_configs: list[str] = []
         for test_tu in TEST_TUS_BY_C_FILE.get(c_file, []):
             kunit_configs.extend(TEST_CONFIGS_BY_TU.get(test_tu, []))
-        log.info("[%s] step1: integrate_tu start obj=%s kunit=%s", c_file, obj, kunit_configs)
+        log.info(
+            "[%s] step1: integrate_tu start obj=%s kunit=%s tree=%s run_id=%s",
+            c_file, obj, kunit_configs, tree, run_id,
+        )
         p_int = run_cmd_no_raise_in_repo([
             "python3",
             "scripts/integrate_tu.py",
             "--obj",
             obj,
+            "--tree",
+            tree,
+            *(["--run-id", run_id] if run_id else []),
             *(["--kunit", *kunit_configs] if kunit_configs else []),
         ])
         if p_int.returncode == 0:
@@ -1398,6 +1406,20 @@ def main() -> int:
         default="python3 scripts/dev.py boot",
         help="shell command used for QEMU test phase; supports {c_file}, {fresh}, {landed}",
     )
+    ap.add_argument(
+        "--tree", default="linux-riscv",
+        help="kernel worktree to build+boot in, e.g. linux-riscv-worktrees/<name> "
+             "(see scripts/linux_riscv_worktree.py create) — pass a distinct --tree "
+             "and --run-id per concurrent invocation to fan out safely; the default "
+             "shared linux-riscv/ tree is not safe for concurrent runs",
+    )
+    ap.add_argument(
+        "--run-id", default=None,
+        help="isolate this run's own boot/integrate logs (see integrate_tu.py "
+             "--run-id) — required alongside a non-default --tree for concurrent "
+             "invocations, since boot_qemu.py's default log path is shared "
+             "regardless of --tree",
+    )
     args = ap.parse_args()
 
     integrate_enabled = not args.no_integrate
@@ -1451,6 +1473,8 @@ def main() -> int:
                 qemu_test=qemu_test_enabled,
                 strict_qemu=args.strict_qemu,
                 qemu_cmd_template=args.qemu_cmd,
+                tree=args.tree,
+                run_id=args.run_id,
             )
             if p_ref.returncode != 0 and r["status"] == "ok":
                 # Defensive: mark uncertain results as blocked when batch ref failed.

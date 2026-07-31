@@ -22,7 +22,7 @@ Usage:
 
 The Rust file must already exist (<dir>/<name>_rs.rs). Translation itself
 stays human/agent work; everything around it is this script.
-Log: tmp/integrate_tu.log
+Log: tmp/integrate_tu.log (or tmp/integrate_tu-<run-id>.log with --run-id)
 """
 import argparse
 import logging
@@ -34,7 +34,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kunit_oracle import TS_PREFIX_RE, verify_kunit_ok  # noqa: E402 — see module doc
-LOG = REPO / "tmp" / "integrate_tu.log"
 
 
 def run(cmd, timeout=1200):
@@ -119,14 +118,21 @@ def main() -> int:
     ap.add_argument("--kunit", nargs="*", default=[], help="CONFIG_..._KUNIT_TEST")
     ap.add_argument("--suite", nargs="*", default=[], help="expected KUnit suite names")
     ap.add_argument("--tree", default="linux-riscv")
+    ap.add_argument("--run-id", default=None,
+                     help="isolate this run's own log (tmp/integrate_tu-<id>.log) and "
+                          "boot_qemu.py's log (tmp/qemu-boot-<id>.log) instead of the "
+                          "shared paths — required for concurrent runs against distinct "
+                          "--tree worktrees, since boot_qemu.py's own default path is "
+                          "shared regardless of --tree")
     ap.add_argument("--skip-build", action="store_true")
     args = ap.parse_args()
 
     REPO.joinpath("tmp").mkdir(exist_ok=True)
+    log_path = REPO / "tmp" / (f"integrate_tu-{args.run_id}.log" if args.run_id else "integrate_tu.log")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stdout)],
+        handlers=[logging.FileHandler(log_path, mode="w"), logging.StreamHandler(sys.stdout)],
     )
     tree = REPO / args.tree
     rs = tree / Path(args.obj).parent / (Path(args.obj).stem + "_rs.rs")
@@ -145,9 +151,13 @@ def main() -> int:
         return 0
     run(["make", "-C", str(tree), "ARCH=riscv", "LLVM=1", "-j32"], timeout=3600)
 
-    out = run(["python3", str(REPO / "scripts/boot_qemu.py"), "--tree", args.tree],
-              timeout=600)
-    boot_log = (REPO / "tmp/qemu-boot.log").read_text(errors="replace")
+    boot_cmd = ["python3", str(REPO / "scripts/boot_qemu.py"), "--tree", args.tree]
+    boot_log_name = "qemu-boot.log"
+    if args.run_id:
+        boot_cmd += ["--run-id", args.run_id]
+        boot_log_name = f"qemu-boot-{args.run_id}.log"
+    out = run(boot_cmd, timeout=600)
+    boot_log = (REPO / "tmp" / boot_log_name).read_text(errors="replace")
     # Shared with dev.py's boot() via kunit_oracle.verify_kunit_ok — see
     # rulesdb/rules/0028-kunit-boot-oracle-gate.toml. --suite adds an
     # extra, integrate_tu.py-specific requirement (a named suite must be
