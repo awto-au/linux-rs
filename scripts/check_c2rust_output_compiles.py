@@ -27,6 +27,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from c2rust_output_check_common import (build_support_crates as _build_support_crates,  # noqa: E402 — see module doc
+                                         find_clean_outputs as _find_clean_outputs, git_rev)
+
 TREE = REPO / "linux-riscv"
 BASELINE = REPO / "tmp" / "c2rust-baseline"
 RUST_DIR = TREE / "rust"
@@ -69,90 +73,8 @@ ASM_CASTS_RLIB = TARGET_DIR / "libc2rust_asm_casts.rlib"
 
 
 def build_support_crates():
-    """Build c2rust-bitfields (+ its derive proc-macro) and c2rust-asm-casts
-    for TARGET, linked against the kernel's own libcore.rmeta. Idempotent —
-    skips crates that already exist and are newer than libcore.rmeta.
-    Returns True on success."""
-    HOST_DIR.mkdir(parents=True, exist_ok=True)
-    TARGET_DIR.mkdir(parents=True, exist_ok=True)
-
-    # BITFIELDS_RLIB/ASM_CASTS_RLIB are --extern-linked against
-    # libcore.rmeta (BITFIELDS_DERIVE_SO is a host proc-macro and isn't),
-    # so a rebuilt kernel tree that regenerates libcore.rmeta with a new
-    # SVH must force these two to rebuild too, or rustc_check() links
-    # every candidate file against a stale rlib and reports a whole-corpus
-    # "found possibly newer version of crate `core`" mismatch as if it
-    # were a per-file compile error.
-    libcore_mtime = (RUST_DIR / "libcore.rmeta").stat().st_mtime
-
-    if not BITFIELDS_DERIVE_SO.exists():
-        cmd = [
-            "rustc", "+nightly",
-            "--edition=2021",
-            "--crate-type", "proc-macro",
-            "--crate-name", "c2rust_bitfields_derive",
-            "-O",
-            "--out-dir", str(HOST_DIR),
-            "-L", str(RUST_DIR),
-            "--extern", "proc_macro",
-            "--extern", "proc_macro2=" + str(RUST_DIR / "libproc_macro2.rlib"),
-            "--extern", "quote=" + str(RUST_DIR / "libquote.rlib"),
-            "--extern", "syn=" + str(RUST_DIR / "libsyn.rlib"),
-            str(C2RUST_SRC / "c2rust-bitfields-derive" / "src" / "lib.rs"),
-        ]
-        p = subprocess.run(cmd, capture_output=True, text=True)
-        if p.returncode != 0:
-            logging.error("failed to build c2rust_bitfields_derive:\n%s", p.stderr)
-            return False
-        logging.info("built %s", BITFIELDS_DERIVE_SO)
-
-    if not BITFIELDS_RLIB.exists() or BITFIELDS_RLIB.stat().st_mtime < libcore_mtime:
-        cmd = [
-            "rustc", "+nightly",
-            "--edition=2021",
-            "--target", TARGET,
-            "--crate-type", "rlib",
-            "--crate-name", "c2rust_bitfields",
-            "--cfg", 'feature="no_std"',
-            "-O",
-            "--sysroot=/dev/null",
-            "-Cpanic=abort",
-            "--out-dir", str(TARGET_DIR),
-            "-L", str(RUST_DIR),
-            "--extern", "core=" + str(RUST_DIR / "libcore.rmeta"),
-            "--extern", "c2rust_bitfields_derive=" + str(BITFIELDS_DERIVE_SO),
-            "-Zunstable-options",
-            str(C2RUST_SRC / "c2rust-bitfields" / "src" / "lib.rs"),
-        ]
-        p = subprocess.run(cmd, capture_output=True, text=True)
-        if p.returncode != 0:
-            logging.error("failed to build c2rust_bitfields:\n%s", p.stderr)
-            return False
-        logging.info("built %s", BITFIELDS_RLIB)
-
-    if not ASM_CASTS_RLIB.exists() or ASM_CASTS_RLIB.stat().st_mtime < libcore_mtime:
-        cmd = [
-            "rustc", "+nightly",
-            "--edition=2021",
-            "--target", TARGET,
-            "--crate-type", "rlib",
-            "--crate-name", "c2rust_asm_casts",
-            "-O",
-            "--sysroot=/dev/null",
-            "-Cpanic=abort",
-            "--out-dir", str(TARGET_DIR),
-            "-L", str(RUST_DIR),
-            "--extern", "core=" + str(RUST_DIR / "libcore.rmeta"),
-            "-Zunstable-options",
-            str(C2RUST_SRC / "c2rust-asm-casts" / "src" / "lib.rs"),
-        ]
-        p = subprocess.run(cmd, capture_output=True, text=True)
-        if p.returncode != 0:
-            logging.error("failed to build c2rust_asm_casts:\n%s", p.stderr)
-            return False
-        logging.info("built %s", ASM_CASTS_RLIB)
-
-    return True
+    return _build_support_crates(RUST_DIR, C2RUST_SRC, TARGET, HOST_DIR, TARGET_DIR,
+                                  BITFIELDS_DERIVE_SO, BITFIELDS_RLIB, ASM_CASTS_RLIB)
 
 # c2rust's raw output uses nightly-only #![feature(...)] attributes
 # (raw_ref_op, extern_types, core_intrinsics, ...) — the kernel tree
@@ -169,48 +91,15 @@ def build_support_crates():
 # record other tooling (rulesdb) treats as authoritative.
 
 
-def git_rev(repo_dir):
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=repo_dir, capture_output=True, text=True, check=True,
-            timeout=30,
-        ).stdout.strip()
-    except Exception:
-        return None
-
-
 def find_clean_outputs(c2rust_rev):
-    """Authoritative list: c2rust_attempts WHERE outcome='clean' AND
-    c2rust_rev=c2rust_rev. Globbing output/ dirs directly would also
-    pick up leftover output/ dirs from earlier failed/non-clean attempts."""
     # c2rust_attempts is append-only (one row per baseline run, no
     # dedup on c_file+c2rust_rev — see run_c2rust_baseline.py), so
     # re-running the baseline more than once at the same rev leaves
-    # multiple identical rows behind. DISTINCT keeps this function's
-    # file list (and the "Checked: N files" figure derived from it)
-    # accurate regardless of how many times the baseline happened to
-    # be (re-)run at this rev.
-    conn = sqlite3.connect(str(DB))
-    rows = conn.execute(
-        "SELECT DISTINCT c_file FROM c2rust_attempts WHERE outcome='clean' AND c2rust_rev=?",
-        (c2rust_rev,),
-    ).fetchall()
-    conn.close()
-
-    files = []
-    missing = []
-    for (c_file,) in rows:
-        slug = c_file.replace("/", "_")
-        matches = sorted((BASELINE / slug / "output" / "src").glob("*.rs"))
-        if not matches:
-            missing.append(c_file)
-            continue
-        files.extend((m, c_file) for m in matches)
-    if missing:
-        logging.warning("%d clean DB rows had no output/src/*.rs on disk: %s",
-                         len(missing), missing[:10])
-    return sorted(files, key=lambda pair: pair[0])
+    # multiple identical rows behind. DISTINCT (in the shared
+    # implementation) keeps this function's file list (and the
+    # "Checked: N files" figure derived from it) accurate regardless of
+    # how many times the baseline happened to be (re-)run at this rev.
+    return _find_clean_outputs(DB, BASELINE, c2rust_rev)
 
 
 def inject_no_std(rs_path, dest_path):
