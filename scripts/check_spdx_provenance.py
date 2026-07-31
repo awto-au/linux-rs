@@ -155,21 +155,22 @@ def check_export_gpl_upgrades(rs_path: Path, c_path: Path) -> list[tuple[str, st
 
 # Files that are not a 1:1 <name>_rs.rs <-> <name>.c same-directory
 # translation. Path keys are relative to the kernel tree root.
+#
+# Provenance for these 4 (Tier A/B/C split slices of 8250_port.c) is
+# resolved: rulesdb's split_tu_provenance table (see #45/#49/#50) records
+# the real, verified function-level mapping, not just the source file.
 EXCEPTIONS = {
     "drivers/tty/serial/8250/8250_helpers_rs.rs": "drivers/tty/serial/8250/8250_port.c",
     # Tier B (mem_serial_in/mem_serial_out) — same source file as the Tier A
-    # helpers above, see debris/docs/8250-deferred-20260720/8250-tier-b-scoping-2026-07-18.md.
-    # Provenance of this split TU is unresolved pending #45/#49/#50.
+    # helpers above, see docs/8250-tier-b-scoping-2026-07-18.md.
     "drivers/tty/serial/8250/8250_io_rs.rs": "drivers/tty/serial/8250/8250_port.c",
     # Tier C (serial8250_do_startup/serial8250_do_shutdown control flow) —
     # same source file as Tier A/B above, see
-    # debris/docs/8250-deferred-20260720/8250-tier-c-startup-shutdown-2026-07-18.md
-    # and awto-au/linux-rs#25/#49/#50. Provenance unresolved.
+    # docs/8250-tier-c-startup-shutdown-2026-07-18.md and awto-au/linux-rs#25.
     "drivers/tty/serial/8250/8250_startup_rs.rs": "drivers/tty/serial/8250/8250_port.c",
     # Tier C (serial8250_handle_irq_locked control flow) — same source file
-    # as Tier A/B/C above, see
-    # debris/docs/8250-deferred-20260720/8250-tier-c-irq-2026-07-18.md and
-    # awto-au/linux-rs#25/#49/#50. Provenance unresolved.
+    # as Tier A/B/C above, see docs/8250-tier-c-irq-2026-07-18.md and
+    # awto-au/linux-rs#25.
     "drivers/tty/serial/8250/8250_irq_rs.rs": "drivers/tty/serial/8250/8250_port.c",
 }
 
