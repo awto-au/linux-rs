@@ -120,7 +120,7 @@ the work-item queue and `awtoau/c2rust` fork timeline. Full milestone log:
 | 2026-07-18 | Kernel-track work items moved from hand-curated DB rows to real GitHub issues — both tracks now sync from real issue trackers, not memory |
 | 2026-07-18 | Boot-log history system: every boot archived, diffable, browsable, auto-committed+pushed |
 | 2026-07-18 | Interactive console milestone: minimal initramfs `/init` drops to a live `sh` prompt, verified genuinely interactive |
-| 2026-07-18 | **Hybrid boot-path milestone: first Rust code in a live device driver** — `8250_port.c`'s `serial8250_compute_lcr()` now calls Rust under `CONFIG_RUST` ([docs/hybrid-boot-milestone-2026-07-18.md](docs/hybrid-boot-milestone-2026-07-18.md)) |
+| 2026-07-18 | Hybrid boot-path milestone: first Rust code in a live device driver, under `CONFIG_RUST` (detail: [awto-au/linux-rs#25](https://github.com/awto-au/linux-rs/issues/25)) |
 | 2026-07-18 | 32 TUs, 16 KUnit suites / 143 vectors green; two-track work-item dashboard added |
 
 ## Layout

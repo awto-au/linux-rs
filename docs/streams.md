@@ -28,7 +28,7 @@ section; this list is the scannable index.
    claimed; it does not dispatch agents itself, a human/orchestrating
    agent reads its output and does the actual dispatch.
 2. **Standing worker on stream-2 boot-path integration** (issue-anchored,
-   currently awto-au/linux-rs#25 for 8250 Tier C) — continuously wiring
+   currently awto-au/linux-rs#25, standing) — continuously wiring
    landed/oracle-verified translated code into the live C boot path, not a
    one-shot task. When the current anchor issue's slice lands, the next
    slice becomes the new work, same issue (kept open) or a follow-up.
@@ -164,31 +164,28 @@ isolation. A file compiling clean in the standalone `rustc` check
 (stream 1's gate) does **not** mean it's wired into the kernel build; this
 stream is specifically about closing that gap.
 
-**Where the work lives:** `docs/<topic>-scoping-<date>.md` docs +
-`linux-riscv/` commits directly (kernel-tree changes, boot-tested).
+**Where the work lives:** `linux-riscv/` commits directly (kernel-tree
+changes, boot-tested); driver-integration specifics live in
+[awto-au/linux-rs#25](https://github.com/awto-au/linux-rs/issues/25), not
+in this repo's docs.
 **Verification gate:** `dev.py check` — 16/16 (or current count) KUnit
 suites, `ORACLE PASS`, `INIT REACHED`, no regression from baseline. This is
 the *hardest* gate in the project: a subtly wrong change here can corrupt
 the very serial output the test harness reads, so changes are staged
 (diff-oracle first, narrow C-ABI-called Rust functions before whole-file
-swaps) — see `docs/serial-8250-translation-scoping-2026-07-18.md` and
-`docs/hybrid-boot-milestone-2026-07-18.md`.
+swaps).
 **Current top item:** query `work_items WHERE track='kernel' AND
-blocks_boot_path=1 AND status='open'`, or check issue #25 (standing,
-8250 Tier C).
+blocks_boot_path=1 AND status='open'`, or check issue #25 (standing).
 
 **What "can't be tested" actually means here (general rule, 2026-07-18):**
 a real QEMU boot on the virt board is a real machine — it has a real
 (emulated) interrupt controller, real MMIO, real timers. Code that touches
 `request_irq`/`synchronize_irq`/register I/O/interrupt context is NOT
 untestable just because no KUnit-reachable in-kernel fake exists for it —
-every boot log already proves the real subsystem works (e.g. `ttyS0 at
-MMIO 0x10000000 (irq = 1, ...)` is a real, successful IRQ registration on
-every single boot). "No KUnit fake exists" and "cannot be verified" are
-different claims — don't conflate them. The default assumption for any
-Tier-C-shaped function should be "testable via a real boot," not
-"untestable" — proven wrong once already (see
-`docs/8250-tier-c-blocker-2026-07-18.md`'s correction note).
+every boot log already proves the real subsystem works. "No KUnit fake
+exists" and "cannot be verified" are different claims — don't conflate
+them. The default assumption for any driver-integration-shaped function
+should be "testable via a real boot," not "untestable."
 
 **What genuinely can't be tested (the real, short list) — document
 additions here as they're found, don't let this become a dumping ground:**
@@ -200,21 +197,13 @@ additions here as they're found, don't let this become a dumping ground:**
   target is a single QEMU instance).
 - Anything requiring a real hardware fault (a real bit-flip, a real power
   loss) rather than a simulated one.
-- Anything gated on hardware this project's board doesn't have (e.g. this
-  is why the 8250 Tier B work only translated `mem_serial_in`/`_out` —
-  QEMU virt's UART is exactly one iotype variant; `io_*`/`hub6_*` are
-  real but genuinely unexercised on THIS target, not untestable in
-  general on a board that has that hardware).
+- Anything gated on hardware this project's board doesn't have.
 
 If a function seems untestable, the right question is "can a real boot
 exercise this," not "is there a KUnit fake" — the latter is a much weaker,
 narrower bar this project should stop defaulting to.
 
-Landed so far: 8250 Tier A (`serial8250_compute_lcr`,
-`fcr_get_rxtrig_bytes`, `bytes_to_fcr_rxtrig` — wired live, issue #3),
-Tier B (`mem_serial_in`/`mem_serial_out` — KUnit-verified against a fake
-register backing, compiled in but not wired, issue #16), Tier C in
-progress (issue #25, standing).
+Driver-integration progress detail: [awto-au/linux-rs#25](https://github.com/awto-au/linux-rs/issues/25) (standing).
 
 ## 3. hybrid-boot-backwards
 
@@ -284,8 +273,7 @@ cheapest real next step, not an arbitrary pick.
 `dev.py check` full boot pass.
 **Current top item:** `dev.py readiness` and take the top row.
 
-Landed so far: 32 TUs (30 original + TU 31 8250-helper + TU 32
-`iomem_copy`).
+Landed so far: 32 TUs.
 
 ## 5. tooling/infra
 

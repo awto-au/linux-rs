@@ -73,26 +73,24 @@ def boot_path_wiring_status():
     this project uses (docs/streams.md stream 2, "c2rust-boot-blocker"):
 
     - "in-place wired": a *.c file has a genuine `#ifdef CONFIG_RUST` (or
-      an independently-scoped sibling gate, e.g. CONFIG_RUST_8250_STARTUP
-      — the fork's own convention of one Kconfig symbol per Tier C slice,
-      see docs/8250-tier-c-startup-shutdown-2026-07-18.md) block whose
-      body calls a `*_rs`-suffixed function — the original C function
-      becomes a thin wrapper into Rust, kept alive in the `#else` arm.
-      This is real code executing at a live, pre-existing C call site (see
-      docs/hybrid-boot-milestone-2026-07-18.md and the *-8250-trigger
-      companion doc for the two known examples). The regex previously
+      an independently-scoped sibling gate, one Kconfig symbol per
+      driver-integration slice — see awto-au/linux-rs#25 for the real
+      example this convention shipped against) block whose body calls a
+      `*_rs`-suffixed function — the original C function becomes a thin
+      wrapper into Rust, kept alive in the `#else` arm. This is real code
+      executing at a live, pre-existing C call site. The regex previously
       matched only the literal CONFIG_RUST token, silently excluding every
-      independently-gated Tier C slice from this metric — found 2026-07-18
-      when Tier C's startup/shutdown wiring didn't appear in the reported
-      count despite nm confirming the symbols are genuinely linked.
+      independently-gated slice from this metric — found 2026-07-18 when
+      one such slice's wiring didn't appear in the reported count despite
+      nm confirming the symbols are genuinely linked.
     - "whole-file lib/ swap": the Makefile points straight at a `*_rs.rs`
       TU, no C wrapper needed (the whole TU IS the Rust file) — includes
-      both files with no sibling *.c at all (drivers/8250_helpers_rs.rs,
-      extracted out of 8250_port.c) and files with a sibling *.c that has
-      no `#ifdef CONFIG_RUST` call-site wrapper (e.g. lib/bitmap.c: real
-      CONFIG_RUST guards exist, but they're `#ifndef` — dropping the C
-      function so the Rust object supplies the symbol directly, not a C
-      call into a `_rs` function).
+      both files with no sibling *.c at all (a driver helper file
+      extracted out of its parent driver's *.c) and files with a sibling
+      *.c that has no `#ifdef CONFIG_RUST` call-site wrapper (e.g.
+      lib/bitmap.c: real CONFIG_RUST guards exist, but they're `#ifndef`
+      — dropping the C function so the Rust object supplies the symbol
+      directly, not a C call into a `_rs` function).
 
     Deliberately regex-based over the raw *.c text rather than a Makefile
     parse: Makefile conditionals are harder to parse correctly than the

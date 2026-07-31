@@ -4,7 +4,6 @@ Status: **research only.** No changes to `linux-riscv/drivers/block/virtio_blk.c
 or `linux-riscv/drivers/virtio/*`. Follow-up to
 `docs/block-layer-enable-2026-07-19.md` (real virtio-blk device boots and is
 visible; C driver only). Same method/rigor as
-`docs/serial-8250-translation-scoping-2026-07-18.md` and
 `docs/tmpfs-rust-scoping-2026-07-18.md`: real function tiers, real grep
 evidence, no speculation presented as fact.
 

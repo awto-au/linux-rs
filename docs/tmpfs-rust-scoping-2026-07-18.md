@@ -9,10 +9,9 @@ scoped task today, and if not, what would need to be true first.
 tree has no VFS filesystem-registration abstractions at all — there is
 nowhere for a Rust tmpfs to attach, regardless of how well the C logic is
 translated. This is a harder gap than any TU landed or scoped so far,
-including the 8250 driver (see
-`docs/serial-8250-translation-scoping-2026-07-18.md`), because 8250 at
-least has a `struct uart_ops`-shaped boundary and a live analog in
-`rust/kernel/`'s conventions; a filesystem has neither.
+including the driver-integration work tracked in awto-au/linux-rs#25,
+because that driver at least has a `struct uart_ops`-shaped boundary and
+a live analog in `rust/kernel/`'s conventions; a filesystem has neither.
 
 ## 1. Confirmed VFS-abstraction gap
 
