@@ -411,3 +411,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-07-31T12:56:20+10:00,rebase-upstream,18,0,1,0,docs/status/boot-logs/20260731T125620.248388-734953+1000-rebase-upstream.log
 2026-07-31T13:09:02+10:00,default,18,0,1,0,docs/status/boot-logs/20260731T130902.190633-845262+1000-default.log
 2026-07-31T13:40:40+10:00,default,19,0,1,0,docs/status/boot-logs/20260731T134040.655587-958007+1000-default.log
+2026-07-31T14:44:17+10:00,vdso-hang-recheck,0,0,0,0,docs/status/boot-logs/20260731T144417.860312-1259401+1000-vdso-hang-recheck.log
