@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
+# ARCHIVED 2026-07-31: one-time Phase-0 sanity check against the
+# 2026-07-16 corpus snapshot, findings fully captured in
+# docs/phase0-evals.md. Zero callers; related to awto-au/linux-rs#53
+# (the census-gate work) but is itself a completed, fixed-snapshot
+# analysis, not standing infrastructure to re-run.
 """Phase 0 evaluation: rough idiom frequency counts over the pinned corpus.
 
 Counts textual occurrences of ~12 kernel idiom markers across exactly the C

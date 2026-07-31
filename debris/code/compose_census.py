@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
+# ARCHIVED 2026-07-31: one-time investigation against the 2026-07-16
+# corpus snapshot, findings fully captured in
+# docs/phase1-census-v2-composition.md. Zero callers; related to
+# awto-au/linux-rs#53 (the census-gate work) but is itself a completed,
+# fixed-snapshot analysis, not standing infrastructure to re-run.
 """Phase 1 v2.1: compositionality of the tail (corrected, matches census v1.1).
 
 Hypothesis (confirmed in v2.0): a singleton statement family is a novel
