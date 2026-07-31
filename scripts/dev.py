@@ -101,6 +101,7 @@ PRE_BUILD_CHECKS = [
     "check_spdx_provenance.py",
     "sync_todo_linux_rs.py",
     "check_todo_linux_rs.py",
+    "check_census_gate.py",
 ]
 POST_BOOT_CHECKS = ["report.py"]
 
