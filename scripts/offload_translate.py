@@ -24,7 +24,6 @@ import logging
 import re
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 try:
@@ -34,10 +33,12 @@ except ImportError:  # py<3.11 fallback not needed here, but fail clearly
     sys.exit(1)
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ollama_client import ollama_generate  # noqa: E402 — see module doc
+
 RULES_DIR = REPO / "rulesdb" / "rules"
 OUT = REPO / "tmp" / "offload"
 LOG = REPO / "tmp" / "offload_translate.log"
-OLLAMA = "http://localhost:11434/api/generate"
 
 DISCIPLINE = """TRANSLATION DISCIPLINE (mandatory, from the project README):
 - Construct-by-construct conversion, NO OPTIMISATION. Output must be
@@ -175,13 +176,8 @@ Output ONLY the translated Rust code (no kernel-crate #[export]/bindings
 plumbing needed — just the function bodies with plain Rust types), no
 explanation before or after."""
 
-    req = urllib.request.Request(
-        OLLAMA,
-        data=json.dumps({"model": args.model, "prompt": prompt, "stream": False}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
     logging.info("requesting draft from %s (%d chars prompt)", args.model, len(prompt))
-    resp = json.loads(urllib.request.urlopen(req, timeout=300).read())
+    resp = ollama_generate(prompt, args.model)
     draft_raw = resp["response"]
     draft = extract_code(draft_raw)
 

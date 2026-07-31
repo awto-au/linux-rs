@@ -20,14 +20,15 @@ import argparse
 import json
 import logging
 import sys
-import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ollama_client import ollama_generate  # noqa: E402 — see module doc
+
 RULES_DIR = REPO / "rulesdb" / "rules"
 OUT = REPO / "tmp" / "offload"
 LOG = REPO / "tmp" / "offload_review.log"
-OLLAMA = "http://localhost:11434/api/generate"
 
 
 def main() -> int:
@@ -96,13 +97,8 @@ exhaustive — check every arithmetic operator, every conditional, every
 early return, not just the constructs the rules mention. End with a
 single line: "OVERALL: PASS" or "OVERALL: FAIL (n bugs)"."""
 
-    req = urllib.request.Request(
-        OLLAMA,
-        data=json.dumps({"model": args.model, "prompt": prompt, "stream": False}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
     logging.info("requesting review from %s (%d chars prompt)", args.model, len(prompt))
-    resp = json.loads(urllib.request.urlopen(req, timeout=300).read())
+    resp = ollama_generate(prompt, args.model)
     review = resp["response"]
 
     usage = {

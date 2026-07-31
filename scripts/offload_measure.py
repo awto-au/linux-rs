@@ -22,8 +22,6 @@ import json
 import logging
 import subprocess
 import sys
-import time
-import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -31,7 +29,6 @@ TREE = REPO / "linux-riscv"
 OUT = REPO / "tmp" / "offload"
 LOG = REPO / "tmp" / "offload_measure.log"
 REPORT = REPO / "tmp" / "offload_measure_report.md"
-OLLAMA = "http://localhost:11434/api/generate"
 MODEL = "qwen2.5-coder:14b"
 
 
@@ -44,18 +41,6 @@ def find_translated_pairs():
         if c.exists():
             pairs.append((c, rs))
     return pairs
-
-
-def ollama_call(prompt, timeout=300):
-    req = urllib.request.Request(
-        OLLAMA,
-        data=json.dumps({"model": MODEL, "prompt": prompt, "stream": False}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    t0 = time.monotonic()
-    resp = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
-    dt = time.monotonic() - t0
-    return resp, dt
 
 
 def run_stage(script, c_file, extra=()):

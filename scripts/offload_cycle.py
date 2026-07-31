@@ -35,17 +35,16 @@ import json
 import logging
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "tmp" / "offload"
 LOG = REPO / "tmp" / "offload_cycle.log"
-OLLAMA = "http://localhost:11434/api/generate"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from offload_translate import (DISCIPLINE, extract_code,  # noqa: E402
                                load_rules, match_rules, rustc_check)
+from ollama_client import ollama_generate  # noqa: E402 — see module doc
 
 
 def clippy_check(rust_source: str):
@@ -84,16 +83,6 @@ def clippy_check(rust_source: str):
         return (r.returncode == 0 and not has_errors), r.stderr
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-
-
-def ollama_generate(prompt, model, timeout=300):
-    req = urllib.request.Request(
-        OLLAMA,
-        data=json.dumps({"model": model, "prompt": prompt, "stream": False}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    resp = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
-    return resp
 
 
 def build_initial_prompt(c_source, c_name, matched):
