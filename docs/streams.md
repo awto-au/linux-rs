@@ -158,11 +158,13 @@ and flags anything not under the managed dir as stray; `remove <name>
 
 ## 2. c2rust-boot-blocker
 
-**Goal:** get real Rust code (hand-translated or c2rust-transpiled) actually
-*executing* in linux-riscv's live boot path — not just compiling in
-isolation. A file compiling clean in the standalone `rustc` check
-(stream 1's gate) does **not** mean it's wired into the kernel build; this
-stream is specifically about closing that gap.
+**Goal:** get real, c2rust-transpiled Rust code actually *executing* in
+linux-riscv's live boot path — not just compiling in isolation. A file
+compiling clean in the standalone `rustc` check (stream 1's gate) does
+**not** mean it's wired into the kernel build; this stream is specifically
+about closing that gap. (Not hand-translated — see stream 4's retirement
+note; this stream's input is c2rust's own output, boot-screened per
+`awto-au/linux-rs#28`.)
 
 **Where the work lives:** `linux-riscv/` commits directly (kernel-tree
 changes, boot-tested); driver-integration specifics live in
@@ -257,23 +259,38 @@ Don't attempt both in one pass.
 the shell prompt, nothing else) — that's the only thing blocking this
 stream right now.
 
-## 4. hand-translation
+## 4. hand-translation — RETIRED, do not use (2026-08-01)
 
-**Goal:** the project's original mission — translate `lib/`-style C files to
-Rust by hand, one TU at a time, each individually oracle-verified and
-boot-verified. High-confidence, slower than the c2rust streams.
+**This stream is the wrong mission and must not be worked.** The project
+builds a transpiler (the `awtoau/c2rust` fork) — it does not hand-port the
+Linux kernel to Rust. A hand-written `*_rs.rs` file is not project output;
+it's a false data point that makes the corpus look more translated than
+the transpiler actually achieved, and the effort spent writing it is spent
+on the wrong deliverable. See `docs/HISTORY.md`'s 2026-08-01 entry and
+[[feedback_no_hand_translation]] for the incident this retirement follows
+(3 files hand-translated under this section's old text before the
+contradiction with the project's own standing rule was caught and all 3
+reverted).
 
-**Where the work lives:** `linux-riscv/lib/*_rs.rs` + `bench/diff_*.{c,rs}`
-pairs + `patches/*.patch`.
-**Where priority comes from:** `dev.py readiness` — ranks untranslated TUs
-by how much of their required vocabulary (called functions, statement
-shapes) is already covered by landed translations, so each new TU is the
-cheapest real next step, not an arbitrary pick.
-**Verification gate:** diff-oracle byte-identical (where feasible) +
-`dev.py check` full boot pass.
-**Current top item:** `dev.py readiness` and take the top row.
+**What used to be here:** "translate `lib/`-style C files to Rust by hand,
+one TU at a time" — this framing is retired, full stop, not narrowed. It
+does not matter how small, pure, or low-risk a function looks (a
+lookup-table switch, a well-tested algorithm) — hand-writing its Rust
+translation is still out of scope, because the point was never "does a
+Rust version of this file exist," it's "can the transpiler produce one."
+Checked directly against real c2rust output for the two most recently
+reverted files (`lib/glob.c`, `lib/zstd/common/error_private.c`,
+`tmp/c2rust-reference-check/`): both transpile completely, including
+`lib/glob.c`'s goto-heavy backtracking (c2rust lowers it to labeled
+loops/breaks correctly) — there was no transpiler gap excusing the hand
+translation in either case, just unchecked assumption that it would be
+too hard for c2rust.
 
-Landed so far: 32 TUs.
+**If a translated Rust version of a specific file is wanted:** that's
+either stream 1 (find/fix why c2rust's raw output isn't good enough — file
+a real issue against the fork) or stream 2 (wire up already-good c2rust
+output as a boot-screening candidate, `awto-au/linux-rs#28`'s process).
+Never a new hand-written stream.
 
 ## 5. tooling/infra
 
