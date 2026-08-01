@@ -427,3 +427,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-08-01T15:19:47+10:00,default,20,0,1,0,docs/status/boot-logs/20260801T151947.938610-1134953+1000-default.log
 2026-08-01T15:52:25+10:00,vdso-const-test,0,0,0,0,docs/status/boot-logs/20260801T155225.246676-1166140+1000-vdso-const-test.log
 2026-08-01T16:18:12+10:00,vdso-ldbfd-test,0,0,0,0,docs/status/boot-logs/20260801T161812.441790-1223176+1000-vdso-ldbfd-test.log
+2026-08-01T16:44:43+10:00,vdso-isolate-test,0,0,0,0,docs/status/boot-logs/20260801T164443.020335-1419761+1000-vdso-isolate-test.log
