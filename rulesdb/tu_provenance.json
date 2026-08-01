@@ -1,0 +1,4 @@
+{
+  "_comment": "Explicit, never-inferred provenance for every translated_tus row. This project builds a transpiler (awtoau/c2rust) -- hand-translation is an accepted, visible BRIDGE, not silent equivalence with transpiler output. Every real *_rs.rs file in linux-riscv/ MUST have an entry here (enforced by scripts/check_tu_provenance.py) before it can land in translated_tus. See awto-au/linux-rs#56.",
+  "entries": {}
+}

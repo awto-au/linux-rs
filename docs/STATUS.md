@@ -1,8 +1,8 @@
-# Status — 2026-08-01T12:43:53+10:00
+# Status — 2026-08-01T12:52:51+10:00
 
 ![status](status/status.png)
 
-- Translated TUs: **41**   ·   KUnit: **19 suites, 220 vectors** green   ·   Rules: **31** (t1 21 / t2 5 / t3 5)
+- Translated TUs: **0** (**0 hand** — bridge, tracked for transpiler replacement · **0 c2rust**)   ·   KUnit: **19 suites, 220 vectors** green   ·   Rules: **31** (t1 21 / t2 5 / t3 5)
 - Wired into live boot path: **0 functions across 0 file(s)** (vs. **0** total TUs landed) — see [docs/streams.md](streams.md)'s stream 2 ("c2rust-boot-blocker") for why this is the harder, more important milestone: a standalone `lib/` swap compiling clean is not the same as real Rust executing at a live, pre-existing C call site.
 
 ## Boot-path integration patterns (live-derived, not hand-maintained)

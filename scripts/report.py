@@ -17,6 +17,7 @@ import datetime
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -61,6 +62,41 @@ def tu_timeline():
             times.append(when)
             cum.append(count)
     return times, cum
+
+
+def hand_translated_files():
+    """Every currently-hand-translated file with its replacement-tracking
+    issue — the itemized backlog, not just a count (Dan, 2026-08-01)."""
+    db = REPO / "rulesdb" / "patterns.db"
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    rows = conn.execute(
+        "SELECT c_file, replacement_issue FROM translated_tus "
+        "WHERE provenance = 'hand' ORDER BY c_file"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def tu_provenance_split():
+    """Real, current hand-vs-transpiled split from translated_tus — never
+    collapse this into a single combined count anywhere it's displayed
+    (Dan, 2026-08-01: hand-translation must be "tracked and not hidden").
+    """
+    db = REPO / "rulesdb" / "patterns.db"
+    if not db.exists():
+        return {"hand": 0, "c2rust": 0, "c2rust+hand-fix": 0, "total": 0}
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    rows = dict(conn.execute(
+        "SELECT provenance, COUNT(*) FROM translated_tus GROUP BY provenance"
+    ).fetchall())
+    conn.close()
+    hand = rows.get("hand", 0)
+    c2rust = rows.get("c2rust", 0)
+    fixed = rows.get("c2rust+hand-fix", 0)
+    return {"hand": hand, "c2rust": c2rust, "c2rust+hand-fix": fixed,
+            "total": hand + c2rust + fixed}
 
 
 IFDEF_CONFIG_RUST_RE = re.compile(
@@ -288,10 +324,15 @@ def main() -> int:
     fig.savefig(OUT / "status.png", dpi=160, facecolor=SURFACE)
     logging.info("wrote %s", OUT / "status.png")
 
+    prov = tu_provenance_split()
+    hand_files = hand_translated_files()
     md = [
         f"# Status — {now}", "",
         "![status](status/status.png)", "",
-        f"- Translated TUs: **{cum[-1] if cum else 0}**   ·   KUnit: "
+        f"- Translated TUs: **{prov['total']}** "
+        f"(**{prov['hand']} hand** — bridge, tracked for transpiler "
+        f"replacement · **{prov['c2rust'] + prov['c2rust+hand-fix']} "
+        f"c2rust**)   ·   KUnit: "
         f"**{len(suites)} suites, {vectors} vectors** green   ·   Rules: "
         f"**{sum(tiers.values())}** (t1 {tiers[1]} / t2 {tiers[2]} / t3 {tiers[3]})",
         f"- Wired into live boot path: **{wiring['wired_fns']} functions across "
@@ -316,6 +357,15 @@ def main() -> int:
            "| file | functions |", "|---|---|",
            *[f"| `{path}` | {', '.join(fns)} |" for path, fns in wiring["wired_detail"]],
            "", "</details>"] if wiring["wired_detail"] else []),
+        *(["", "## Hand-translated files (bridge, tracked for replacement)",
+           "", "Every file here is hand-written Rust, not transpiler "
+           "output — a visible, tracked bridge (see "
+           "[docs/streams.md](streams.md)'s stream 4), replaced with "
+           "real `awtoau/c2rust` output as the transpiler catches up.",
+           "", "| C file | replacement issue |", "|---|---|",
+           *[f"| `{c_file}` | {issue or '_none filed_'} |"
+             for c_file, issue in hand_files]]
+          if hand_files else []),
         "", "## KUnit (latest boot)", "", "| suite | vectors |", "|---|---|",
         *[f"| {s} | {v} |" for s, v in sv],
         "", "## Next candidates by readiness", "", "| TU | readiness |", "|---|---|",
@@ -325,8 +375,9 @@ def main() -> int:
     ]
     (REPO / "docs" / "STATUS.md").write_text("\n".join(md) + "\n")
     logging.info("wrote docs/STATUS.md")
-    print(f"REPORT OK: {cum[-1] if cum else 0} TUs, {len(suites)} suites, "
-          f"{vectors} vectors, {sum(tiers.values())} rules")
+    print(f"REPORT OK: {prov['total']} TUs ({prov['hand']} hand, "
+          f"{prov['c2rust'] + prov['c2rust+hand-fix']} c2rust), "
+          f"{len(suites)} suites, {vectors} vectors, {sum(tiers.values())} rules")
     return 0
 
 

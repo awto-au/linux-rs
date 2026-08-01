@@ -144,9 +144,30 @@ CREATE TABLE translated_tus (
     c_file TEXT PRIMARY KEY,      -- relative to linux-riscv/, e.g. "lib/bcd.c"
     rs_file TEXT NOT NULL,
     landed_at TEXT,               -- commit date, ISO 8601
-    patch_number INTEGER
+    patch_number INTEGER,
+    -- Explicit, never-inferred provenance — this project builds a
+    -- transpiler (awtoau/c2rust); hand-translation is an accepted,
+    -- visible BRIDGE, not silent equivalence with transpiler output.
+    -- Every row MUST set this; there is no default (see #56 for why:
+    -- a hand-written file silently counted the same as a transpiled
+    -- one in every "N TUs landed" report until this column existed).
+    --   'hand'            -- written by a human/agent from scratch, no c2rust involvement
+    --   'c2rust'          -- c2rust's raw transpile output, unmodified logic
+    --   'c2rust+hand-fix' -- c2rust output with a narrow, well-scoped hand fix
+    --                        (dead-struct opaquing, #[export]->#[no_mangle],
+    --                        register-static removal, asm addressing fixes —
+    --                        NOT a rewrite of logic c2rust never produced)
+    provenance TEXT NOT NULL CHECK (provenance IN ('hand', 'c2rust', 'c2rust+hand-fix')),
+    -- For provenance='hand' only: the GitHub issue tracking replacement
+    -- of this file with real transpiler output once c2rust can handle
+    -- it (e.g. "awto-au/linux-rs#57") — NULL for c2rust/c2rust+hand-fix
+    -- rows, required for 'hand' rows (enforced by check_split_tu_coverage
+    -- -style tooling, not a DB-level CHECK, since SQLite CHECK can't
+    -- easily express "required iff provenance='hand'" portably).
+    replacement_issue TEXT
 );
 CREATE INDEX idx_translated_tus_cfile ON translated_tus(c_file);
+CREATE INDEX idx_translated_tus_provenance ON translated_tus(provenance);
 
 -- Explicit provenance for landed .rs files that are NOT a 1:1 translation
 -- of a standalone compile unit — translated_tus assumes exactly that

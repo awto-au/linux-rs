@@ -259,38 +259,48 @@ Don't attempt both in one pass.
 the shell prompt, nothing else) — that's the only thing blocking this
 stream right now.
 
-## 4. hand-translation — RETIRED, do not use (2026-08-01)
+## 4. hand-translation — a visible, tracked BRIDGE, not the mission (revised 2026-08-01)
 
-**This stream is the wrong mission and must not be worked.** The project
-builds a transpiler (the `awtoau/c2rust` fork) — it does not hand-port the
-Linux kernel to Rust. A hand-written `*_rs.rs` file is not project output;
-it's a false data point that makes the corpus look more translated than
-the transpiler actually achieved, and the effort spent writing it is spent
-on the wrong deliverable. See `docs/HISTORY.md`'s 2026-08-01 entry and
-[[feedback_no_hand_translation]] for the incident this retirement follows
-(3 files hand-translated under this section's old text before the
-contradiction with the project's own standing rule was caught and all 3
-reverted).
+**The project's actual deliverable is the transpiler** (the `awtoau/c2rust`
+fork) — not any individual translated file. A hand-written `*_rs.rs` file
+is real, useful project output ONLY when its provenance is explicit and
+visible; the moment a hand-translated file looks indistinguishable from
+transpiler output in a report, it's a false data point inflating how much
+the transpiler achieved. This is the corrected version of a stricter
+"retired, do not use" note this section carried for a few hours the same
+day — Dan's refinement: hand-translated TUs are fine *if they work* and
+*if they're tracked and not hidden*, since the design intent is that the
+transpiler eventually replaces them with (hopefully better) output. See
+`docs/HISTORY.md`'s 2026-08-01 entries and [[feedback_no_hand_translation]]
+for the incident this policy exists to prevent from recurring silently a
+third time (41 files hand-written across many sessions before the gap
+between this doc and the project's own standing rule was caught).
 
-**What used to be here:** "translate `lib/`-style C files to Rust by hand,
-one TU at a time" — this framing is retired, full stop, not narrowed. It
-does not matter how small, pure, or low-risk a function looks (a
-lookup-table switch, a well-tested algorithm) — hand-writing its Rust
-translation is still out of scope, because the point was never "does a
-Rust version of this file exist," it's "can the transpiler produce one."
-Checked directly against real c2rust output for the two most recently
-reverted files (`lib/glob.c`, `lib/zstd/common/error_private.c`,
-`tmp/c2rust-reference-check/`): both transpile completely, including
-`lib/glob.c`'s goto-heavy backtracking (c2rust lowers it to labeled
-loops/breaks correctly) — there was no transpiler gap excusing the hand
-translation in either case, just unchecked assumption that it would be
-too hard for c2rust.
+**The hard requirement, not optional:** every hand-translated file MUST
+have a `rulesdb/tu_provenance.json` entry with `provenance: "hand"` and a
+`replacement_issue` (a real GitHub issue tracking its eventual replacement
+with transpiler output) — enforced by `scripts/check_tu_provenance.py`,
+wired into `dev.py`'s `PRE_BUILD_CHECKS` (build fails if any `*_rs.rs` file
+lacks an entry). `dev.py check`'s report and `docs/STATUS.md` always show
+the hand/transpiled split explicitly (never a combined-only "N TUs landed"
+number) plus an itemized table of every hand-translated file and its
+replacement issue — see `scripts/report.py`'s `tu_provenance_split()`/
+`hand_translated_files()`.
 
-**If a translated Rust version of a specific file is wanted:** that's
-either stream 1 (find/fix why c2rust's raw output isn't good enough — file
-a real issue against the fork) or stream 2 (wire up already-good c2rust
-output as a boot-screening candidate, `awto-au/linux-rs#28`'s process).
-Never a new hand-written stream.
+**Before hand-translating a file:** check what `awtoau/c2rust`'s actual
+transpile output looks like first (`tmp/c2rust-reference-check/`, or run a
+fresh transpile) — don't assume it will be too hard/verbose/unsafe without
+checking (this session's own mistake: assumed `lib/glob.c`'s goto-heavy
+backtracking would be hard for c2rust; it wasn't, c2rust lowers it to
+labeled loops/breaks correctly). If c2rust genuinely can't produce
+something usable, that's a real transpiler gap — file it (stream 1) — and
+a hand-translation as a tracked bridge is a legitimate interim answer,
+not a shortcut around fixing the transpiler.
+
+**Where priority comes from:** `dev.py readiness`, same as before.
+**Verification gate:** diff-oracle byte-identical (where feasible) +
+`dev.py check` full boot pass, same as before — plus the provenance
+manifest entry, which is new and mandatory.
 
 ## 5. tooling/infra
 

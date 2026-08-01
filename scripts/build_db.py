@@ -188,10 +188,25 @@ def load_translated_tus(conn):
     if not TREE.exists():
         logging.warning("no linux-riscv/ worktree — skipping translation status")
         return 0
+    # Provenance is explicit, never inferred — see check_tu_provenance.py
+    # and awto-au/linux-rs#56. A *_rs.rs file with no manifest entry is a
+    # real error (run check_tu_provenance.py first), not silently
+    # defaulted to any provenance value here.
+    manifest_path = REPO / "rulesdb" / "tu_provenance.json"
+    entries = json.loads(manifest_path.read_text()).get("entries", {}) if manifest_path.exists() else {}
     n = 0
+    skipped = 0
     for rs in sorted(TREE.rglob("*_rs.rs")):
         c_rel = str(rs.relative_to(TREE)).replace("_rs.rs", ".c")
         rs_rel = str(rs.relative_to(TREE))
+        meta = entries.get(rs_rel)
+        if meta is None:
+            logging.warning(
+                "%s has no rulesdb/tu_provenance.json entry — skipping "
+                "(run check_tu_provenance.py for the full list)", rs_rel,
+            )
+            skipped += 1
+            continue
         landed_at, patch_num = None, None
         try:
             log = subprocess.run(
@@ -202,10 +217,12 @@ def load_translated_tus(conn):
         except Exception:
             pass
         conn.execute(
-            "INSERT OR REPLACE INTO translated_tus VALUES (?,?,?,?)",
-            (c_rel, rs_rel, landed_at, patch_num),
+            "INSERT OR REPLACE INTO translated_tus VALUES (?,?,?,?,?,?)",
+            (c_rel, rs_rel, landed_at, patch_num, meta["provenance"], meta.get("replacement_issue")),
         )
         n += 1
+    if skipped:
+        logging.warning("%d *_rs.rs file(s) skipped for missing provenance — see above", skipped)
     return n
 
 
@@ -268,7 +285,15 @@ def main() -> int:
     n_stmts = load_statement_families(conn)
     logging.info("statement families: %d", n_stmts)
     n_tus = load_translated_tus(conn)
-    logging.info("translated TUs: %d", n_tus)
+    tu_split = dict(conn.execute(
+        "SELECT provenance, COUNT(*) FROM translated_tus GROUP BY provenance"
+    ).fetchall())
+    n_hand = tu_split.get("hand", 0)
+    n_c2rust = tu_split.get("c2rust", 0) + tu_split.get("c2rust+hand-fix", 0)
+    logging.info(
+        "translated TUs: %d total (%d hand, %d c2rust/c2rust+hand-fix)",
+        n_tus, n_hand, n_c2rust,
+    )
     n_docs = load_doc_sources(conn)
     logging.info("doc sources: %d", n_docs)
 
@@ -357,7 +382,8 @@ def main() -> int:
     conn.close()
     logging.info("wrote %s (%.1f MB)", DB, DB.stat().st_size / 1e6)
     print(f"DB OK: {n_rules} rules, {n_funcs} functions, {n_stmts} statement "
-         f"families, {n_tus} translated TUs -> {DB}")
+         f"families, {n_tus} translated TUs ({n_hand} hand, {n_c2rust} "
+         f"c2rust/c2rust+hand-fix) -> {DB}")
     # Loud, not just logged: a schema/data mismatch here silently drops
     # persisted rows on every rebuild until someone happens to grep the
     # log — this happened for real (2026-07-17, c2rust_attempts/
