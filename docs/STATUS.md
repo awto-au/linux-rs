@@ -1,24 +1,16 @@
-# Status — 2026-08-01T12:35:25+10:00
+# Status — 2026-08-01T12:43:53+10:00
 
 ![status](status/status.png)
 
-- Translated TUs: **41**   ·   KUnit: **20 suites, 224 vectors** green   ·   Rules: **31** (t1 21 / t2 5 / t3 5)
-- Wired into live boot path: **6 functions across 1 file(s)** (vs. **4** total TUs landed) — see [docs/streams.md](streams.md)'s stream 2 ("c2rust-boot-blocker") for why this is the harder, more important milestone: a standalone `lib/` swap compiling clean is not the same as real Rust executing at a live, pre-existing C call site.
+- Translated TUs: **41**   ·   KUnit: **19 suites, 220 vectors** green   ·   Rules: **31** (t1 21 / t2 5 / t3 5)
+- Wired into live boot path: **0 functions across 0 file(s)** (vs. **0** total TUs landed) — see [docs/streams.md](streams.md)'s stream 2 ("c2rust-boot-blocker") for why this is the harder, more important milestone: a standalone `lib/` swap compiling clean is not the same as real Rust executing at a live, pre-existing C call site.
 
 ## Boot-path integration patterns (live-derived, not hand-maintained)
 
 | pattern | count | detection |
 |---|---|---|
-| In-place wired (`#ifdef CONFIG_RUST` C wrapper calls a `*_rs` fn) | **6 fns / 1 file(s)** | regex scan of `linux-riscv/**/*.c` for `#ifdef CONFIG_RUST` blocks calling a `*_rs(...)` function |
-| Whole-file `lib/` swap (Makefile points straight at `*_rs.rs`, no call-site wrapper) | **4** | `*_rs.rs` TUs whose sibling `.c` (if any) has no `#ifdef CONFIG_RUST` wrapper calling into it |
-
-<details><summary>Wired functions (detail)</summary>
-
-| file | functions |
-|---|---|
-| `drivers/tty/serial/8250/8250_port.c` | bytes_to_fcr_rxtrig, fcr_get_rxtrig_bytes, serial8250_compute_lcr, serial8250_do_shutdown, serial8250_do_startup, serial8250_handle_irq_locked |
-
-</details>
+| In-place wired (`#ifdef CONFIG_RUST` C wrapper calls a `*_rs` fn) | **0 fns / 0 file(s)** | regex scan of `linux-riscv/**/*.c` for `#ifdef CONFIG_RUST` blocks calling a `*_rs(...)` function |
+| Whole-file `lib/` swap (Makefile points straight at `*_rs.rs`, no call-site wrapper) | **0** | `*_rs.rs` TUs whose sibling `.c` (if any) has no `#ifdef CONFIG_RUST` wrapper calling into it |
 
 ## KUnit (latest boot)
 
@@ -43,7 +35,6 @@
 | glob | 64 |
 | list_sort | 1 |
 | lib_sort | 1 |
-| rust_8250_mem_serial_io | 4 |
 
 ## Next candidates by readiness
 
