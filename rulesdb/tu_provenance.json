@@ -1,4 +1,169 @@
 {
   "_comment": "Explicit, never-inferred provenance for every translated_tus row. This project builds a transpiler (awtoau/c2rust) -- hand-translation is an accepted, visible BRIDGE, not silent equivalence with transpiler output. Every real *_rs.rs file in linux-riscv/ MUST have an entry here (enforced by scripts/check_tu_provenance.py) before it can land in translated_tus. See awto-au/linux-rs#56.",
-  "entries": {}
+  "entries": {
+    "drivers/tty/serial/8250/8250_helpers_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#96"
+    },
+    "drivers/tty/serial/8250/8250_io_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#73"
+    },
+    "drivers/tty/serial/8250/8250_irq_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#87"
+    },
+    "drivers/tty/serial/8250/8250_startup_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#82"
+    },
+    "lib/argv_split_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#88"
+    },
+    "lib/base64_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#57"
+    },
+    "lib/bcd_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#70"
+    },
+    "lib/bitmap-str_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#60"
+    },
+    "lib/bitmap_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#76"
+    },
+    "lib/checksum_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#86"
+    },
+    "lib/cmdline_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#58"
+    },
+    "lib/ctype_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#90"
+    },
+    "lib/decompress_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#89"
+    },
+    "lib/earlycpio_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#94"
+    },
+    "lib/find_bit_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#78"
+    },
+    "lib/glob_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#84"
+    },
+    "lib/hexdump_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#65"
+    },
+    "lib/hweight_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#64"
+    },
+    "lib/iomem_copy_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#85"
+    },
+    "lib/kstrtox_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#68"
+    },
+    "lib/list_sort_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#67"
+    },
+    "lib/llist_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#79"
+    },
+    "lib/math/div64_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#71"
+    },
+    "lib/math/gcd_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#69"
+    },
+    "lib/math/int_log_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#83"
+    },
+    "lib/math/int_pow_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#92"
+    },
+    "lib/math/int_sqrt_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#91"
+    },
+    "lib/math/lcm_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#66"
+    },
+    "lib/math/rational_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#97"
+    },
+    "lib/math/reciprocal_div_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#81"
+    },
+    "lib/memcat_p_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#63"
+    },
+    "lib/memweight_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#72"
+    },
+    "lib/parser_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#93"
+    },
+    "lib/sort_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#77"
+    },
+    "lib/string_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#95"
+    },
+    "lib/strncpy_from_user_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#62"
+    },
+    "lib/strnlen_user_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#59"
+    },
+    "lib/ucs2_string_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#80"
+    },
+    "lib/usercopy_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#61"
+    },
+    "lib/win_minmax_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#75"
+    },
+    "lib/zstd/common/error_private_rs.rs": {
+      "provenance": "hand",
+      "replacement_issue": "awto-au/linux-rs#74"
+    }
+  }
 }
