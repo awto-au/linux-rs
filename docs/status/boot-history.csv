@@ -429,3 +429,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-08-01T16:18:12+10:00,vdso-ldbfd-test,0,0,0,0,docs/status/boot-logs/20260801T161812.441790-1223176+1000-vdso-ldbfd-test.log
 2026-08-01T16:44:43+10:00,vdso-isolate-test,0,0,0,0,docs/status/boot-logs/20260801T164443.020335-1419761+1000-vdso-isolate-test.log
 2026-08-01T16:46:23+10:00,default,20,0,1,0,docs/status/boot-logs/20260801T164623.479028-1435324+1000-default.log
+2026-08-02T13:37:23+10:00,combined-boot-28,20,0,1,0,docs/status/boot-logs/20260802T133723.985524-84078+1000-combined-boot-28.log
