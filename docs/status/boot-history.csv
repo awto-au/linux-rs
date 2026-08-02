@@ -435,3 +435,4 @@ timestamp,run_id,ok,not_ok,init_reached,returncode,log_file
 2026-08-02T20:09:01+10:00,combined-boot-28-18file,18,0,0,0,docs/status/boot-logs/20260802T200901.906074-689890+1000-combined-boot-28-18file.log
 2026-08-02T20:11:23+10:00,combined-boot-28-18file-v2,20,0,1,0,docs/status/boot-logs/20260802T201123.527162-695890+1000-combined-boot-28-18file-v2.log
 2026-08-02T20:37:05+10:00,combined-boot-28-19file,20,0,1,0,docs/status/boot-logs/20260802T203705.908612-782109+1000-combined-boot-28-19file.log
+2026-08-02T20:43:17+10:00,default,20,0,1,0,docs/status/boot-logs/20260802T204317.002342-868337+1000-default.log
