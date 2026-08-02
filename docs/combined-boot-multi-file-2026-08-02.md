@@ -1,11 +1,15 @@
-# Combined-image boot test: 3 c2rust-transpiled files in one image
+# Combined-image boot test: c2rust-transpiled files in one image
 
 First real test of issue #28's actual ask — multiple c2rust-transpiled
 files wired into *one* kernel image and boot-screened together, as
 opposed to the 22 individual one-file-per-boot attempts documented in
 `combined-boot-attempt-2026-07-18.md`. That doc proved the mechanism
 works per-file; this one proves it still works when files are combined,
-and surfaces two real bugs that only exist at combination time.
+and surfaces real bugs that only exist at combination time.
+
+Two rounds so far: 3 files (klist/sys_info/rcuref, see below), then
+scaled to 8 (adding glob/group_cpus/bucket_locks/errseq/uuid, see
+"Round 2" near the end) — both clean boots, 20/20 KUnit suites each.
 
 ## Candidate selection
 
@@ -176,3 +180,76 @@ combination-only bugs above (both now fixed at the root: the register-
 pseudo-global duplication by deleting dead per-file declarations, the
 `c2rust_bitfields` link gap by a general Kbuild fix already landed on
 the main tree).
+
+## Round 2: scaling to 8 files
+
+Added 5 more from the 2026-07-18 individually-verified pool: `glob.c`,
+`group_cpus.c`, `bucket_locks.c`, `errseq.c`, `uuid.c` — all link-clean
+filler (none proven on the natural boot path; `glob.c`'s own KUnit
+suite does exercise `glob_match` at boot, which is real functional
+signal even without organic boot-path traffic). Same worktree/branch,
+same `CONFIG_RUST_C2RUST_BOOT_TEST` gate, each file pulled out of its
+bundled `lib-y`/`obj-y` line individually.
+
+Fresh transpile at the same c2rust HEAD (`7a7b63b804e3`) used for
+round 1: `REFERENCE-CHECK: 5/5 OK`.
+
+### Fix classes needed, per file
+
+- **`group_cpus_rs.rs`**: `use ::macros::export;` → dropped, `#[export]`
+  → `#[no_mangle]` (1 site); duplicate `riscv_current_is_tp`/
+  `current_stack_pointer` declarations deleted (grep-confirmed dead,
+  same as every prior occurrence of this class).
+- **`glob_rs.rs`**: only the duplicate register-pseudo-global
+  declarations needed deleting — no export/feature issues.
+- **`bucket_locks_rs.rs`**: same — only the duplicate
+  register-pseudo-global declarations.
+- **`uuid_rs.rs`**: `use ::macros::export;` → dropped, `#[export]` →
+  `#[no_mangle]` (2 sites: `guid_gen`, `uuid_gen`). No duplicate
+  register-pseudo-globals in this file.
+- **`errseq_rs.rs`**: one `kernel::warn_on!(...) != 0` → plain
+  `kernel::warn_on!(...)` (same bool-vs-int class as `rcuref.c` in
+  round 1); 12 RISC-V asm bracket-addressing sites (`[{N}]` →
+  `0({N})`, issue #29's class — this file's atomic helpers use the
+  same Zacas/Zabha-guarded `amocas`/LR-SC pattern as `klist.c`/
+  `rcuref.c`, left in place since it compiled clean with the guards
+  present, same call as round 1's `rcuref.c`).
+
+### Round 2 combination-only bugs
+
+Same class as round 1, not a new one: `group_cpus_rs.rs`, `glob_rs.rs`,
+and `bucket_locks_rs.rs` each independently declared the same
+`riscv_current_is_tp`/`current_stack_pointer` fabricated statics
+already fixed in `rcuref_rs.rs`/`sys_info_rs.rs` during round 1 — this
+confirms the fix is a recurring, mechanical step (grep for
+`get_current()` calls, delete if absent) rather than a one-off, and
+that essentially any file whose header chain reaches GCC's `register
+... __asm__("tp")` declarations will hit this the moment a second such
+file joins the same image. No fresh Kbuild-level bug this round — the
+`c2rust_bitfields.o` link fix from round 1 covered `bucket_locks_rs.rs`'s
+own `BitfieldStruct` derives (`mmap_action`, `percpu_ref_data`,
+`signal_struct`, `sched_dl_entity`, `task_struct`) with no further
+change needed.
+
+### Round 2 outcome: clean 8-file boot, 20/20 KUnit suites
+
+- `make ARCH=riscv LLVM=1 -j32`: clean on the first full-image attempt
+  after the individual-file fixes above — no new link-stage surprises.
+- `llvm-nm vmlinux.unstripped`: all 8 files' representative symbols
+  present as `T` (`klist_add_tail`, `sys_info`, `rcuref_get_slowpath`,
+  `glob_match`, `group_cpus_evenly`, `__alloc_bucket_spinlocks`,
+  `errseq_set`, `uuid_gen`).
+- `scripts/boot_qemu.py --tree linux-riscv-worktrees/combined-boot-28
+  --run-id combined-boot-28-8file`: boots clean, **20/20 KUnit suites
+  pass** (0 fail, same suite count as round 1 — no new suites gated on
+  by this batch), `initramfs init reached, PID 1 alive`, zero
+  panic/oops/BUG/WARN. Notably the `glob` KUnit suite (64/64 pass) ran
+  against the transpiled `glob_rs.o`, giving real functional signal
+  beyond link-cleanliness for that file. Boot-history row
+  auto-committed/pushed. Archived at
+  `docs/status/boot-logs/20260802T165237.609662-345270+1000-combined-boot-28-8file.log`.
+
+8 files now combined-boot-verified in one image, up from 3 — the
+batching mechanism continues to scale with no per-round growth in fix
+complexity (round 2's fixes were the same recurring classes as round 1,
+applied faster).
