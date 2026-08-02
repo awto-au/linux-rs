@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "poison-pointer-const-eval"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "((void*)N + POISON_POINTER_DELTA) — fabricated-pointer sentinel constants such as LIST_POISON1/LIST_POISON2 (list.h) and TIMER_ENTRY_STATIC (timer.h), and any other constant sharing this exact shape"
+family = "EXPR:poison-pointer-offset"
+
+[emit]
+kind = "const-eval-failure"
+rust = "c2rust translates the C pointer-arithmetic idiom as `.offset()` on a bare-integer-cast pointer: `(N as ::core::ffi::c_int as *mut ::core::ffi::c_void).offset(POISON_POINTER_DELTA as isize)`. This fails Rust's const evaluator (`E0080`, in-bounds pointer arithmetic on a no-provenance/dangling pointer) whenever the constant is itself evaluated at compile time (a `const`/`static` initializer), since Rust's const-eval — unlike a runtime pointer offset — refuses arithmetic on a pointer with no real allocation behind it. Fix: rewrite as plain integer `wrapping_add` + cast, bit-identical value at runtime: `(N as u64).wrapping_add(POISON_POINTER_DELTA as u64) as *mut ::core::ffi::c_void`."
+deviations = ["none — wrapping_add on the raw integer produces the exact same bit pattern the original C pointer arithmetic does, this is a representation change only"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "First hit and fixed by hand in lib/klist_rs.rs during issue #28's combined-boot screening (LIST_POISON1=0x100, LIST_POISON2=0x122).",
+  "Confirmed corpus-wide via scripts/sweep_c2rust_corpus.py (issue #99, 2026-08-02): 54 files across 3 distinct constant values (0x100/LIST_POISON1, 0x122/LIST_POISON2, 0x300/TIMER_ENTRY_STATIC) hit the identical E0080 shape. Automated in scripts/apply_c2rust_fix_classes.py (fix_poison_pointer_constants); a full corpus re-sweep after landing the fix confirmed all 3 signatures dropped to 0 files (54/54 fixed, ok-count rose 391->419 in the same run alongside the warn_on!==0 fix).",
+]
+
+[validation]
+instances = ["lib/klist.c (issue #28)", "drivers/base/attribute_container.c (issue #99)", "drivers/char/random.c (issue #99)"]
+oracle = "tier4"
+negative = ["A pointer-arithmetic expression NOT reached via a const/static initializer (i.e. genuinely runtime-evaluated) would not hit E0080 even with c2rust's .offset()-on-bare-cast shape — this rule's fix is still correct there (identical runtime value) but the const-eval failure specifically only manifests for compile-time-evaluated constants; not yet observed as a runtime-only occurrence in the corpus."]
+human_review = false

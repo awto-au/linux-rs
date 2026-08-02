@@ -299,6 +299,76 @@ CREATE TABLE c2rust_compile_outcomes (
 CREATE INDEX idx_c2rust_compile_outcomes_rev ON c2rust_compile_outcomes(c2rust_rev);
 CREATE INDEX idx_c2rust_compile_outcomes_run_at ON c2rust_compile_outcomes(run_at);
 
+-- Corpus-wide sweep: same "does it compile" question as
+-- c2rust_compile_outcomes, but AFTER scripts/apply_c2rust_fix_classes.py's
+-- mechanical fixes (export->no_mangle, bracket-addressing, register-static
+-- deletion, warn_on!=0 stripping) run on a scratch copy first, and taken
+-- one step further — a real object-file build+link attempt against the
+-- actual kernel target, not just --emit=metadata type-checking. This is
+-- the automated, continuous version of the #28 combined-boot screening
+-- effort's manual per-round candidate hunt (rounds 1-4, 2026-08-02):
+-- instead of hand-picking ~5-file batches, sweep the whole
+-- tmp/c2rust-baseline corpus and let the fix-classes + build attempt
+-- itself decide what's ready. Driven by scripts/sweep_c2rust_corpus.py,
+-- triggered after any rulesdb/rules/ or apply_c2rust_fix_classes.py
+-- change (a new/changed rule can only ever unlock MORE files, never
+-- fewer, so re-running after either is always worth it — no point
+-- re-running on an unchanged fix-class set).
+CREATE TABLE c2rust_sweep_outcomes (
+    id INTEGER PRIMARY KEY,
+    c2rust_rev TEXT NOT NULL,       -- awtoau/c2rust git rev the transpile came from
+    fix_classes_rev TEXT NOT NULL,  -- linux-rs git rev of apply_c2rust_fix_classes.py used
+    run_at TEXT NOT NULL,           -- ISO 8601
+    c_file TEXT NOT NULL,           -- relative to linux-riscv/, e.g. "lib/foo.c"
+    rs_file TEXT NOT NULL,          -- scratch-copy path the fixes were applied to
+    fix_classes_applied TEXT,       -- comma-joined list of fix classes that actually changed something (empty if none needed)
+    needs_manual_review INTEGER NOT NULL DEFAULT 0,  -- 1 if a LIVE register-static or other judgement-required case was flagged, not auto-fixed
+    compile_outcome TEXT NOT NULL,  -- 'ok' | 'error' | 'timeout'
+    compile_error_signature TEXT,   -- first real error line, normalised — the grouping key for issue-filing (NULL if compile_outcome='ok')
+    link_attempted INTEGER NOT NULL DEFAULT 0,  -- 1 if compile_outcome='ok' and a real object-file build+link was also attempted
+    link_outcome TEXT,              -- 'ok' | 'error' | NULL (not attempted)
+    link_error_signature TEXT       -- first real linker error line, normalised (NULL if link_outcome != 'error')
+);
+CREATE INDEX idx_c2rust_sweep_outcomes_rev ON c2rust_sweep_outcomes(c2rust_rev, fix_classes_rev);
+CREATE INDEX idx_c2rust_sweep_outcomes_run_at ON c2rust_sweep_outcomes(run_at);
+CREATE INDEX idx_c2rust_sweep_outcomes_cfile ON c2rust_sweep_outcomes(c_file);
+CREATE INDEX idx_c2rust_sweep_outcomes_compile ON c2rust_sweep_outcomes(compile_outcome);
+CREATE INDEX idx_c2rust_sweep_outcomes_errsig ON c2rust_sweep_outcomes(compile_error_signature);
+
+-- Latest-run failure grouping for the sweep — one row per distinct
+-- normalised error signature, ranked by how many files it blocks. This
+-- is the issue-filing queue: scripts/sweep_c2rust_corpus.py files (or
+-- updates) one GitHub issue per NEW signature here, not one per file —
+-- mirrors c2rust_failure_patterns' same "group by root cause, not
+-- occurrence count" design for the transpile-level failure signatures.
+CREATE VIEW c2rust_sweep_failure_patterns AS
+SELECT compile_error_signature, COUNT(DISTINCT c_file) AS files_affected,
+       GROUP_CONCAT(DISTINCT c_file) AS example_files
+FROM c2rust_sweep_outcomes
+WHERE run_at = (SELECT MAX(run_at) FROM c2rust_sweep_outcomes)
+  AND compile_outcome = 'error'
+GROUP BY compile_error_signature
+ORDER BY files_affected DESC;
+
+-- Links a sweep failure signature to the linux-rs (not c2rust) GitHub
+-- issue tracking it, so a re-run doesn't re-file a duplicate issue for
+-- a signature already known and open. Distinct from c2rust_fix_patterns
+-- (which tracks upstream awtoau/c2rust transpiler-level bugs) — this
+-- table is for linux-rs-side gaps: missing fix classes, files needing a
+-- new rulesdb/rules/NNNN-*.toml entry, or a deliberate feature-allowlist
+-- divergence decision (e.g. rule 0032's c_variadic precedent).
+CREATE TABLE c2rust_sweep_issue_links (
+    id INTEGER PRIMARY KEY,
+    compile_error_signature TEXT NOT NULL UNIQUE,
+    linux_rs_issue_number INTEGER NOT NULL,  -- awto-au/linux-rs#NNN
+    rulesdb_rule_id TEXT,                    -- rulesdb/rules/NNNN-*.toml id, once one exists for this signature (NULL until then)
+    status TEXT NOT NULL DEFAULT 'open',     -- open | fixed | wontfix | deferred
+    created_at TEXT NOT NULL,
+    notes TEXT
+);
+CREATE INDEX idx_sweep_issue_links_sig ON c2rust_sweep_issue_links(compile_error_signature);
+CREATE INDEX idx_sweep_issue_links_issue ON c2rust_sweep_issue_links(linux_rs_issue_number);
+
 -- Per-file clippy outcomes for each c2rust_rev — populated by
 -- scripts/check_c2rust_output_clippy.py, one row per (rs_file, run).
 -- Mirrors c2rust_compile_outcomes' shape/rev-tagging discipline so

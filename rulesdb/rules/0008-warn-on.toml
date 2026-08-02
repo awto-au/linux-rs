@@ -15,10 +15,13 @@ deviations = ["none — real __WARN_FLAGS path with TAINT_WARN"]
 
 [provenance]
 derivation = "API-inspired"
-evidence = ["rust/kernel/bug.rs (v7.1)"]
+evidence = [
+    "rust/kernel/bug.rs (v7.1)",
+    "c2rust output gap (issue #100, 2026-08-02 corpus sweep, ~52 files): kernel::warn_on! already returns bool, but c2rust frequently emits code as if it still returns C's int — either wrapping the call in `!= 0`/`== 0` (both equally E0308, confirmed `bool == 0` fails identically to `bool != 0` via direct rustc probe) or passing a bare int/function-call result directly with no comparison at all (`kernel::warn_on!(atomic_read(...) as c_int)`, `kernel::warn_on!(idx & !(0x1 as c_int))`). The `!=`/`==` wrapper case is mechanically fixed by scripts/apply_c2rust_fix_classes.py (fix_warn_on_neq0). The bare-int case is NOT automated — a regex can't reliably distinguish a bare int expression from an already-bool method call (e.g. `warn_on!(x.is_none())` needs no fix), confirmed false-positive-prone in testing; each occurrence needs a one-line `!= 0`/comparison added by hand, verified via the sweep's own rustc E0308 output per file.",
+]
 
 [validation]
-instances = ["lib/math/int_log.c:intlog2", "lib/math/int_log.c:intlog10 (KUnit exercises the WARN path: log(0) vectors)"]
+instances = ["lib/math/int_log.c:intlog2", "lib/math/int_log.c:intlog10 (KUnit exercises the WARN path: log(0) vectors)", "lib/once.c:static_key_disable (bare-int case, hand-fixed, issue #100)"]
 oracle = "tier4"
 negative = ["WARN_ON_ONCE — once-semantics not yet in kernel crate; separate rule when needed"]
 human_review = false

@@ -47,6 +47,8 @@ PERSISTENT_TABLES = [
     "c2rust_failure_signatures",
     "c2rust_decl_outcomes",
     "c2rust_compile_outcomes",
+    "c2rust_sweep_outcomes",
+    "c2rust_sweep_issue_links",
     "c2rust_clippy_outcomes",
     "c2rust_clippy_runs",
     "c2rust_file_review_steps",
