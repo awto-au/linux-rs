@@ -199,6 +199,41 @@ def fix_libc_fn_and_intptr(text: str) -> tuple[str, int]:
     return text, n1 + n2
 
 
+# A c2rust-bitfields #[bitfield] setter (X.set_FIELD(...)) desugars to
+# a &mut self method call. When the C source's argument expression
+# itself takes the address of the same struct value being assigned
+# into (the common `x.field = f(&x)` idiom, translated this way
+# because `field` is a C :1 bitfield rather than a plain field), c2rust
+# emits `x.set_field(f(&raw mut x))` -- two overlapping mutable borrows
+# of `x` in one expression (E0499). Harmless in C (a plain struct
+# write), a real borrow conflict in Rust once the field becomes a
+# bitfield-derive method call. Fixed by hoisting the argument into a
+# local temporary first, breaking the overlap -- exactly rustc's own
+# suggested fix -- issue awto-au/linux-rs#115. Strictly single-line:
+# `\n` is excluded from both argument-capture classes so the match
+# cannot span a c2rust-style multiline call (`.set_FIELD(\n    ...,\n
+# );`) -- a future multiline self-referential setter simply won't
+# match and surfaces as an unhandled E0499 for manual review instead
+# of risking a malformed rewrite.
+SELF_BORROW_SETTER_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<recv>[A-Za-z_]\w*)\.(?P<setter>set_\w+)\("
+    r"(?P<args>[^;\n]*&raw mut (?P=recv)\b[^;\n]*)\);\n",
+    re.MULTILINE,
+)
+
+
+def fix_bitfield_setter_self_borrow(text: str) -> tuple[str, int]:
+    def repl(m: re.Match) -> str:
+        indent = m.group("indent")
+        recv = m.group("recv")
+        setter = m.group("setter")
+        args = m.group("args")
+        tmp = f"__c2rust_{recv}_{setter}_arg"
+        return f"{indent}let {tmp} = {args};\n{indent}{recv}.{setter}({tmp});\n"
+
+    return SELF_BORROW_SETTER_RE.subn(repl, text)
+
+
 def fix_labeled_block_bare_break(text: str) -> tuple[str, int]:
     def repl(m: re.Match) -> str:
         return f"{m.group('assign')}break '{m.group('label')} {m.group('var')};"
@@ -467,6 +502,9 @@ def apply_fixes(path: Path) -> dict:
 
     text, n = fix_libc_fn_and_intptr(text)
     report["libc_fn_and_intptr_sites_fixed"] = n
+
+    text, n = fix_bitfield_setter_self_borrow(text)
+    report["bitfield_setter_self_borrow_sites_fixed"] = n
 
     text, n = fix_labeled_block_bare_break(text)
     report["labeled_block_bare_break_sites_fixed"] = n

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "bitfield-setter-self-borrow"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "the C idiom `x.field = f(&x)` where `field` is a `:1`-width bitfield (harmless as a plain struct write in C)"
+family = "EXPR:bitfield-setter-self-borrow"
+
+[emit]
+kind = "hoist-to-temporary"
+rust = "`x.set_field(f(&raw mut x));` -> `let tmp = f(&raw mut x); x.set_field(tmp);` -- exactly rustc's own suggested fix for the resulting E0499 (overlapping mutable borrows of the same receiver within one method-call expression)."
+deviations = ["Strictly single-line: `\\n` excluded from both argument-capture classes so the regex cannot span a c2rust-style multiline call — a future multiline self-referential setter simply won't match and surfaces as an unhandled E0499 for manual review instead of risking a malformed rewrite."]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#115, 2026-08-02): mm/vma.c's check_ksm_early — a c2rust-bitfields #[bitfield] setter desugars to a &mut self method call; when the C argument itself takes the address of the same struct being assigned into, this becomes a real Rust borrow conflict where the C original was a harmless plain write. Confirmed via corpus-wide scan that this exact shape occurs exactly once in the 601-file corpus, so the regex is conservative by construction.",
+]
+
+[validation]
+instances = ["mm/vma.c"]
+oracle = "tier4"
+negative = []
+human_review = false
