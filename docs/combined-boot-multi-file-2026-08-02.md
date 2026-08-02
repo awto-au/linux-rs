@@ -9,11 +9,13 @@ and surfaces real bugs that only exist at combination time.
 
 Three rounds so far: 3 files (klist/sys_info/rcuref, see below), then
 8 (adding glob/group_cpus/bucket_locks/errseq/uuid, "Round 2"), then
-18 (adding is_single_threaded/lwq/bust_spinlocks/debug_locks/
+19 (adding is_single_threaded/lwq/bust_spinlocks/debug_locks/
 devmem_is_allowed/test_sort/kfifo/fonts/lz4_decompress/
-decompress_bunzip2, "Round 3" — one candidate, `seq_buf.c`, deferred;
-one real transpiler bug found and fixed) — all three clean boots,
-20/20 KUnit suites each.
+decompress_bunzip2/seq_buf, "Round 3" — one real transpiler bug found
+and fixed; `seq_buf.c` needed a deliberate, tracked allow-list
+divergence from upstream's feature set, landed as `c2rust+hand-fix` on
+the main tree as a result) — all three clean boots, 20/20 KUnit
+suites each.
 
 ## Candidate selection
 
@@ -342,10 +344,77 @@ Confirmed `c_variadic` itself compiles cleanly on this project's
 existing toolchain (`rustc 1.97.0` via the same `RUSTC_BOOTSTRAP=1`
 mechanism that already unlocks the other 4 allow-listed features) —
 technically available, just not something upstream RfL has adopted.
-Decided to defer rather than add it unilaterally: `seq_buf.c` stays
-plain C for this round, `lib/Makefile` documents why inline. Revisit if
-upstream ever adds `c_variadic` to their own allow-list, or if a
-narrower non-variadic redesign of the call sites becomes worth it.
+Initially deferred rather than add it unilaterally (see below for the
+reversal): `seq_buf.c` stayed plain C for the rest of this round,
+`lib/Makefile` documented why inline.
+
+### Reversal: `c_variadic` turned on, gated as an explicit per-feature decision
+
+After the round closed, explicit direction from the project owner:
+this is an experimental, from-scratch translation project, not a
+strict subset of upstream RfL — divergences from upstream's feature
+choices are fine, *provided each one is an individually-reviewed,
+documented decision* (never a blanket "use whatever compiles" policy).
+`rulesdb/rules/0032-c-variadic-feature-gate.toml` records this as a
+new numbered rule (matching every other tracked transpiler-output
+pattern in this project) — the `[status]` note spells out the standing
+requirement: any *future* unstable-feature addition to
+`rust_allowed_features` that upstream RfL does not also carry needs
+its own dedicated rule the same way, never a silent append.
+
+`git grep`-checked issue history first (per the instruction to check
+whether this had come up before): confirmed via
+[`awto-au/linux-rs#37`](https://github.com/awto-au/linux-rs/issues/37)
+(2026-07-19) — the exact same `seq_buf.c`/`c_variadic` gap was hit
+once already, resolved that time via a hand-written C shim
+(`lib/seq_buf_rs_shim.c`) rather than turning on the feature. c2rust
+itself later automated half of that split (commit `788c9a651`:
+`va_list`-consuming sibling helpers like `seq_buf_vprintf` now
+auto-retype to `__builtin_va_list`; the true variadic entry point gets
+a structured marker comment naming the sibling to shim against,
+instead of unstable-feature emission) — but the shim itself remained a
+manual step, and this project's own transpile of `seq_buf.c` had
+inherited exactly that marker-comment/extern-only fallback.
+
+With `c_variadic` now allow-listed, wrote the real Rust definition by
+hand (a genuine hand-fix, not a rewrite of transpiler-produced logic):
+retyped `seq_buf_vprintf`'s `args` parameter from `__builtin_va_list`
+to `core::ffi::VaList` (ABI-identical on riscv64 — `core::ffi::VaList`
+is documented as matching the platform's real `va_list` layout), then
+
+```rust
+#[no_mangle]
+pub unsafe extern "C" fn seq_buf_printf(
+    s: *mut seq_buf,
+    fmt: *const ::core::ffi::c_char,
+    args: ...
+) -> ::core::ffi::c_int {
+    unsafe { seq_buf_vprintf(s, fmt, args) }
+}
+```
+
+(`args: ...` already binds a `core::ffi::VaList` directly on the
+kernel's pinned rustc — no `.as_va_list()`/conversion call needed; that
+method belongs to an older pre-stabilization API shape and doesn't
+exist on this toolchain, confirmed by testing both forms directly
+before committing to the final code.) Verified `T` (defined, not `U`)
+via `llvm-nm` before wiring it back in.
+
+`seq_buf.c` landed as a real, permanently-transpiled file on the main
+kernel tree (`linux-riscv/`, not just the `combined-boot-28` worktree)
+— tracked in `rulesdb/tu_provenance.json` as
+`provenance: "c2rust+hand-fix"` (the ~5-line wrapper above is the hand
+fix; everything else is c2rust's own transpile), wired via the same
+unconditional `ifdef CONFIG_RUST` pattern every other landed c2rust
+file uses (not the temporary `CONFIG_RUST_C2RUST_BOOT_TEST` screening
+gate). Missing SPDX header caught by `dev.py check`'s SPDX-provenance
+gate on the first attempt (`WARN — no SPDX-License-Identifier found`)
+and fixed before landing. Verified via a full `dev.py check` on the
+main tree: `TU PROVENANCE PASS (42 total: 41 hand, 0 c2rust, 1
+c2rust+hand-fix)`, `ORACLE PASS (20 suites)`, `INIT REACHED`, zero
+regression. Committed/pushed as its own dedicated commit on both the
+kernel tree (`444505b90446`) and the top-level repo (`4e33aa8`),
+separate from #28's other experimental wiring.
 
 ### New c2rust bug found: signed multiply overflow panics instead of wrapping
 
@@ -371,36 +440,43 @@ Fixed locally via `r.wrapping_mul(725861)`; filed as
 general fix (translate signed `*`/`+`/`-` as `wrapping_mul`/
 `wrapping_add`/`wrapping_sub` uniformly, not just for `+`/`-`).
 
-### Round 3 outcome: clean 18-file boot (19 attempted, 1 deferred), 20/20 KUnit suites
+### Round 3 outcome: clean 19-file boot, 20/20 KUnit suites
 
 - First full-image attempt (19 files, `seq_buf.c` included) failed at
   `modpost`/`ld.lld` link with `seq_buf_printf` undefined — the
-  `c_variadic` gap above, correctly deferred.
+  `c_variadic` gap above, deferred at the time.
 - Deferring `seq_buf.c` initially still failed the same way on the
   first retry — traced to an editing mistake (the revert to plain C
   deleted the `ifdef`/`else`/`endif` wrapper *and* the fallback
   `lib-y += seq_buf.o` line inside it, leaving `seq_buf.c` wired into
   nothing). Fixed by re-adding the unconditional `lib-y += seq_buf.o`
   line; rebuilt clean.
-- Second full-image attempt (18 files) built and linked clean, but
-  panicked at boot in the `lib_sort` KUnit suite — the `test_sort.c`
-  multiply-overflow bug above, not caught by the individual-file
-  build (compiles fine; only *panics at runtime* when the test
-  actually executes with `overflow-checks` on).
-- Third attempt, after the `wrapping_mul` fix: clean build, clean
+- Third attempt (18 files, `seq_buf.c` excluded) built and linked
+  clean, but panicked at boot in the `lib_sort` KUnit suite — the
+  `test_sort.c` multiply-overflow bug above, not caught by the
+  individual-file build (compiles fine; only *panics at runtime* when
+  the test actually executes with `overflow-checks` on).
+- Fourth attempt, after the `wrapping_mul` fix: clean build, clean
   boot, **20/20 KUnit suites pass** (0 fail, `lib_sort` now included
-  and passing), `initramfs init reached, PID 1 alive`, zero
-  panic/oops/BUG/WARN. `llvm-nm vmlinux.unstripped` confirms all 17
-  Rust-transpiled files' representative symbols (`T`) plus
-  `seq_buf_printf` correctly resolving to the plain-C object, not a
-  Rust one. Boot-history row auto-committed/pushed. Archived at
-  `docs/status/boot-logs/20260802T201123.527162-695890+1000-combined-boot-28-18file-v2.log`.
+  and passing), 18 files combined.
+- After the `c_variadic` reversal (see above): fifth attempt, 19 files
+  (`seq_buf.c` back in with its real Rust `seq_buf_printf`
+  definition): clean build, clean boot, **20/20 KUnit suites pass** (0
+  fail), `initramfs init reached, PID 1 alive`, zero panic/oops/BUG/
+  WARN. `llvm-nm vmlinux.unstripped` confirms all 18 Rust-transpiled
+  files' representative symbols (`T`) including `seq_buf_printf`
+  itself now correctly `T` (defined) rather than resolving to the
+  plain-C object. Boot-history row auto-committed/pushed. Archived at
+  `docs/status/boot-logs/20260802T203705.908612-782109+1000-combined-boot-28-19file.log`.
 
-18 files now combined-boot-verified in one image, up from 8 — and,
+19 files now combined-boot-verified in one image, up from 8 — and,
 unlike rounds 1–2, this round surfaced two genuinely new gap classes
 (a toolchain-feature boundary, and a real transpiler correctness bug)
-rather than just the by-now-familiar recurring ones. Both are handled
-the way this project's own established discipline calls for: the
-toolchain gap documented and deferred rather than unilaterally
-resolved outside upstream's own choices, the transpiler bug fixed
-narrowly and reported upstream rather than silently patched.
+rather than just the by-now-familiar recurring ones. The transpiler
+bug was fixed narrowly and reported upstream rather than silently
+patched. The toolchain gap was resolved by turning the feature on —
+but only as an explicit, individually-reviewed, numbered-rule
+decision (`rulesdb/rules/0032-c-variadic-feature-gate.toml`), not a
+blanket "diverge from upstream whenever convenient" policy — with
+`seq_buf.c` itself landed as a real `c2rust+hand-fix` file on the main
+kernel tree as a direct result.
