@@ -1,6 +1,10 @@
 {
   "_comment": "Explicit, never-inferred provenance for every translated_tus row. This project builds a transpiler (awtoau/c2rust) -- hand-translation is an accepted, visible BRIDGE, not silent equivalence with transpiler output. Every real *_rs.rs file in linux-riscv/ MUST have an entry here (enforced by scripts/check_tu_provenance.py) before it can land in translated_tus. See awto-au/linux-rs#56.",
   "entries": {
+    "lib/seq_buf_rs.rs": {
+      "provenance": "c2rust+hand-fix",
+      "replacement_issue": null
+    },
     "drivers/tty/serial/8250/8250_helpers_rs.rs": {
       "provenance": "hand",
       "replacement_issue": "awto-au/linux-rs#96"

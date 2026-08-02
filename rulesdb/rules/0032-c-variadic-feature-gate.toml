@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "c-variadic-feature-gate"
+version = 1
+tier = 2
+category = "toolchain"
+
+[match]
+c = "A C function definition (not just a call site) with a real `...` variadic parameter list, e.g. `int seq_buf_printf(struct seq_buf *s, const char *fmt, ...)` — c2rust translates this using Rust's unstable `c_variadic` feature and `core::ffi::VaList`, both required to DEFINE (not merely call) a variadic-ABI function"
+family = "TOOLCHAIN:c-variadic-definition"
+
+[emit]
+kind = "feature-gate-decision"
+rust = "`#![feature(c_variadic)]` on the crate + `...: ...` in the function signature + `core::ffi::VaList` for the argument-pack type. Compiles as-is once `c_variadic` is added to `rust_allowed_features` (scripts/Makefile.build) — verified working on this project's stable rustc 1.97.0 toolchain via the existing RUSTC_BOOTSTRAP=1 mechanism (the same trick that already unlocks every other allow-listed feature)."
+deviations = ["none — c2rust's own VaList-based translation is a faithful match for the C variadic ABI on every arch this project targets"]
+
+[provenance]
+derivation = "policy-decision"
+evidence = [
+  "issue awto-au/linux-rs#37 (2026-07-19, seq_buf.c): first encounter. c_variadic was NOT added to the allow-list at that time — instead landed a hand-written C shim (lib/seq_buf_rs_shim.c) carrying just the true variadic entry point, calling into a va_list-based Rust helper. c2rust itself later automated half of that split (commit 788c9a651: bystander va_list-consuming functions like seq_buf_vprintf now auto-retype to __builtin_va_list; the true variadic entry point gets a structured marker comment instead of unstable-feature emission) — but the shim itself remained a manual, tracked hand-fix (rulesdb/tu_provenance.json provenance='c2rust+hand-fix').",
+  "issue #28 round 3 (2026-08-02, seq_buf.c again, combined-boot batch): re-encountered the same gap while scaling the combined-boot image. Researched real upstream Rust-for-Linux's own precedent before deciding — they never define a genuinely variadic Rust function anywhere; pr_info!/pr_err! avoid the problem via a fixed-arity opaque-pointer trick (core::fmt::Arguments passed to C's _printk as a single void* argument, unpacked via a %pA format-specifier callback into Rust) that only works because RfL controls both the caller and _printk's own format parsing — doesn't generalize to an arbitrary pre-existing C variadic function like seq_buf_printf, called from many already-transpiled sites.",
+]
+
+[validation]
+instances = ["lib/seq_buf.c (seq_buf_printf) — pending, not yet re-landed with this rule's approach as of 2026-08-02"]
+oracle = "tier4"
+negative = ["Variadic CALL sites (extern \"C\" { fn foo(fmt: *const c_char, ...); }) need no feature gate at all — only variadic DEFINITIONS do. c2rust's own output already emits call-site externs like this unmodified everywhere (e.g. the _printk extern declaration present in most translated TUs) with zero friction; do not confuse the two directions when triaging a new file."]
+human_review = true
+
+[status]
+note = "Corrected 2026-08-02: rust_allowed_features (scripts/Makefile.build) is deliberately scoped to mirror real upstream Rust-for-Linux's own vetted feature list (cites Rust-for-Linux/linux#2) — c_variadic is NOT on upstream's list, so adding it here is a genuine linux-rs-specific divergence, not something upstream has endorsed. Decision (2026-08-02, explicit user instruction): this is fine — this is an experimental from-scratch translation project, not a strict subset of upstream RfL, and we should stay loose about diverging from their feature choices where it genuinely helps, PROVIDED each divergence is (a) an explicit, individually-reviewed decision per feature (not a blanket policy of 'use whatever compiles'), and (b) documented here / in the allow-list comment / in the originating issue, never silent. c_variadic is the first such divergence. Any FUTURE unstable-feature addition to rust_allowed_features that upstream RfL does not also use must get its own dedicated rulesdb/rules/NNNN-*.toml entry following this same shape (match/emit/provenance citing the deciding issue/conversation, [status] note stating explicitly that it diverges from upstream and why) — never just silently appended to the allow-list."
