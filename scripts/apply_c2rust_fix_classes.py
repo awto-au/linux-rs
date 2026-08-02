@@ -125,6 +125,28 @@ POISON_POINTER_RE = re.compile(
 # real rustc E0308 output (issue #100) rather than a heuristic that can't
 # balance parens.
 LIBC_QUALIFIED_RE = re.compile(r"::libc::(\w+)")
+# 2 of the 3 ::libc:: legs investigated for issue #98, confirmed safe
+# and generalizable at adversarial verify:
+#   - memcpy/memset/memmove/strcmp/strlen are already bindgen-generated
+#     in the `bindings` crate (from the real kernel headers) with
+#     argument-for-argument matching signatures, and `bindings` is
+#     already linked into every translated file -- confirmed every
+#     call site in the corpus is already inside an unsafe{} block (0
+#     exceptions across all 49 affected files).
+#   - intptr_t is never locally defined in this corpus (unlike its
+#     cousin uintptr_t, which IS defined as `pub type uintptr_t =
+#     usize;` when needed) -- always used as a plain signed
+#     pointer-width scalar, safe to substitute the real primitive.
+# The THIRD leg (size_t -> bare `size_t`) was found NOT safe at
+# verify: in ~24 files that combine size_t with one of the 5 functions
+# above, size_t's local alias chain resolves to c_ulong (u64 on this
+# target), but bindings::{memcpy,memset,memmove}'s size parameter is
+# usize -- the "just strip the qualifier" fix introduces a NEW E0308
+# (u64 vs usize) at the call site in most of those files. Left
+# flagged, not auto-fixed, same as the file's other type-ambiguous
+# cases -- see issue #98.
+LIBC_FN_RE = re.compile(r"::libc::(memcpy|memset|memmove|strcmp|strlen)\b")
+LIBC_INTPTR_T_RE = re.compile(r"::libc::intptr_t\b")
 
 # c2rust's wait_event_interruptible*() translation: the early-exit path
 # assigns the return value (`__ret[_N] = __int;`) then does a bare
@@ -169,6 +191,12 @@ FEATURE_LINE_RE = re.compile(r"^#!\[feature\(([^)]*)\)\]\n", re.MULTILINE)
 C2RUST_RESULT_NARROW_MISSING_SEMI_RE = re.compile(
     r"(= c2rust_result_narrow(?:_\d+)?)(\s*\n\s*)(__must_check_overflow\()"
 )
+
+
+def fix_libc_fn_and_intptr(text: str) -> tuple[str, int]:
+    text, n1 = LIBC_FN_RE.subn(r"bindings::\1", text)
+    text, n2 = LIBC_INTPTR_T_RE.subn("isize", text)
+    return text, n1 + n2
 
 
 def fix_labeled_block_bare_break(text: str) -> tuple[str, int]:
@@ -436,6 +464,9 @@ def apply_fixes(path: Path) -> dict:
 
     text, n = fix_poison_pointer_constants(text)
     report["poison_pointer_sites_fixed"] = n
+
+    text, n = fix_libc_fn_and_intptr(text)
+    report["libc_fn_and_intptr_sites_fixed"] = n
 
     text, n = fix_labeled_block_bare_break(text)
     report["labeled_block_bare_break_sites_fixed"] = n

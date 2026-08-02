@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "libc-qualified-fn-and-intptr"
+version = 1
+tier = 1
+category = "api"
+
+[match]
+c = "any C source referencing memcpy/memset/memmove/strcmp/strlen or intptr_t without a locally-captured header prototype/typedef for it"
+family = "API:libc-qualified"
+
+[emit]
+kind = "extern-path-rewrite"
+rust = "`::libc::{memcpy,memset,memmove,strcmp,strlen}` -> `bindings::{...}` (already bindgen-generated from the real kernel headers, argument-for-argument matching, `bindings` crate already linked into every translated file). `::libc::intptr_t` -> `isize` (never locally defined in this corpus, always used as a plain signed pointer-width scalar)."
+deviations = ["A THIRD leg of this same signature (`::libc::size_t` -> bare `size_t`) is deliberately NOT included here -- see rule status note."]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#98, 2026-08-02): c2rust's usual userspace/std-linked output convention (::libc::X) doesn't exist in this no_std kernel build. The 7-symbol closed set and per-symbol counts (memcpy 142, size_t 173, intptr_t 54, strcmp 22, strlen 19, memset 16, memmove 15) were confirmed consistent across all 49 affected corpus files. Every ::libc::{memcpy,memset,memmove,strcmp,strlen} call site is already inside an unsafe{} block (0 exceptions, verified via brace-depth scan).",
+]
+
+[validation]
+instances = ["arch/riscv/kernel/cpu.c", "drivers/tty/tty_jobctrl.c"]
+oracle = "tier4"
+negative = ["size_t leg REJECTED at adversarial verify: in ~24 files that combine size_t with one of the 5 functions above, size_t's local alias chain resolves to c_ulong (u64 on this target), but bindings::{memcpy,memset,memmove}'s size parameter is usize -- a blind qualifier-strip introduces a NEW E0308 (u64 vs usize) at the call site in most of those files (lib/string.c: 0 new errors claimed, actually introduces 1; lib/zstd/decompress/huf_decompress.c: 92 substitutions applied, 46 new E0308s). Left flagged, not auto-fixed -- see LIBC_QUALIFIED_RE's flagged-symbols report."]
+human_review = false
