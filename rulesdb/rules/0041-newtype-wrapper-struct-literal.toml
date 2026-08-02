@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "newtype-wrapper-struct-literal"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "a struct needing extra padding/alignment, wrapped by c2rust in a C2Rust_<Name>_Inner newtype (repr(C, align(N)))"
+family = "EXPR:newtype-wrapper-literal"
+
+[emit]
+kind = "wrap-struct-literal"
+rust = "`Name { field: val, ... }` -> `Name(Inner { field: val, ... })` at any struct-literal site c2rust's own initializer-rewrite pass missed, once a `pub struct Name(pub Inner);` newtype wrapper is confirmed declared in the same file."
+deviations = ["`[^{}]*` assumes a flat field list with no nested brace-literal field values (true of every wrapped-struct literal seen in the corpus so far). A genuinely empty-bodied function returning `*mut WrapperName {}` isn't structurally impossible in a future unswept file and could confuse this, matching the same class of concern already flagged for the (rejected) bare-int warn_on! detector -- but the failure mode here is a compile error rustc would reject, not silent wrong behavior."]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#113, 2026-08-02): kernel/softirq.c's irq_cpustat_t wraps in C2Rust_irq_cpustat_t_Inner, but a struct literal elsewhere in the file still uses the pre-wrap field-by-name syntax. Ran the regex against all 569 corpus files containing newtype-wrapper declarations (3160 total decls) -- fires exactly once, on the true positive, zero false positives across 21 files specifically hunted for the one plausible false-positive shape.",
+]
+
+[validation]
+instances = ["kernel/softirq.c"]
+oracle = "tier4"
+negative = []
+human_review = false

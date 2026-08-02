@@ -126,11 +126,264 @@ POISON_POINTER_RE = re.compile(
 # balance parens.
 LIBC_QUALIFIED_RE = re.compile(r"::libc::(\w+)")
 
+# c2rust's wait_event_interruptible*() translation: the early-exit path
+# assigns the return value (`__ret[_N] = __int;`) then does a bare
+# `break 'label;` with no payload, while the block's other exit
+# (fallthrough after the loop) correctly does `break 'label __ret[_N];`
+# -- both must carry the same value since the labeled block is used as
+# a value-producing expression. The variable is always the one just
+# assigned on the immediately preceding line, captured from context
+# rather than guessed -- issue awto-au/linux-rs#104, confirmed identical
+# shape across 5 files.
+LABELED_BLOCK_BARE_BREAK_RE = re.compile(
+    r"(?P<assign>(?P<var>\b\w+\b) = __int;\n\s*)break '(?P<label>_c2rust_label(?:_\d+)?);"
+)
+# c2rust mistranslates the C compound literal `(size_t){0}` (the
+# `void *: &(size_t){ 0 }` no-op branch of __set_flex_counter()'s
+# _Generic, taken whenever a flexible-array-member has no
+# __counted_by() annotation) as a bare Rust cast expression
+# `0 as size_t` instead of a real place -- `&raw mut` of that cast
+# fails E0745 (temporary value). The write-through is a deliberate C
+# no-op sink; give it a real backing local instead -- issue
+# awto-au/linux-rs#105.
+FLEX_COUNTER_NOOP_RE = re.compile(
+    r"let (c2rust_lvalue_ptr(?:_\d+)?) = &raw mut \(0 as size_t\);\n"
+    r"(\s*)\*\1 = __count;"
+)
+# `stdsimd` is a defunct feature name no longer in rustc's feature
+# list -- c2rust stamps it onto any TU that #includes
+# linux/mmu_notifier.h, unconditionally regardless of
+# #[cfg(target_arch = ...)], so it hard-errors (E0635) on every
+# non-x86 target even though the gated code is always dead there.
+# Strips only the stdsimd token, preserving any other feature names
+# (e.g. label_break_value) already present -- issue awto-au/linux-rs#106.
+FEATURE_LINE_RE = re.compile(r"^#!\[feature\(([^)]*)\)\]\n", re.MULTILINE)
+# c2rust occasionally drops the statement-terminating `;` when
+# flattening a triple-nested GNU statement-expression -- seen where a
+# WARN_ON(overflows_type(...)) C idiom expands through
+# __overflows_type's nested check_add_overflow statement-expr. The
+# narrowed result assignment is left with no `;` before the following
+# __must_check_overflow(...) tail expression -- issue
+# awto-au/linux-rs#111 (confirmed unique to one file/site in the whole
+# corpus; safe to run unconditionally).
+C2RUST_RESULT_NARROW_MISSING_SEMI_RE = re.compile(
+    r"(= c2rust_result_narrow(?:_\d+)?)(\s*\n\s*)(__must_check_overflow\()"
+)
+
+
+def fix_labeled_block_bare_break(text: str) -> tuple[str, int]:
+    def repl(m: re.Match) -> str:
+        return f"{m.group('assign')}break '{m.group('label')} {m.group('var')};"
+
+    return LABELED_BLOCK_BARE_BREAK_RE.subn(repl, text)
+
+
+def fix_flex_counter_noop_sink(text: str) -> tuple[str, int]:
+    def repl(m: re.Match) -> str:
+        name, indent = m.group(1), m.group(2)
+        tmp = f"{name}_tmp"
+        return (
+            f"let mut {tmp}: size_t = 0;\n"
+            f"{indent}let {name} = &raw mut {tmp};\n"
+            f"{indent}*{name} = __count;"
+        )
+
+    return FLEX_COUNTER_NOOP_RE.subn(repl, text)
+
+
+def fix_stdsimd_feature(text: str) -> tuple[str, int]:
+    def repl(m: re.Match) -> str:
+        names = [n.strip() for n in m.group(1).split(",") if n.strip()]
+        if "stdsimd" not in names:
+            return m.group(0)
+        remaining = [n for n in names if n != "stdsimd"]
+        if not remaining:
+            return ""
+        return f"#![feature({', '.join(remaining)})]\n"
+
+    new_text = FEATURE_LINE_RE.sub(repl, text)
+    return new_text, (1 if new_text != text else 0)
+
+
+def fix_missing_semicolon_before_must_check_overflow(text: str) -> tuple[str, int]:
+    return C2RUST_RESULT_NARROW_MISSING_SEMI_RE.subn(r"\1;\2\3", text)
+
+
+# c2rust's compiletime_assert() unique-ID reuse bug: c2rust emits a
+# bare (non-_0-suffixed) __compiletime_assert_N() call at some sites
+# with no matching #[link_name="__compiletime_assert_N"] extern decl
+# reachable in scope. The guarded `if` is always a compile-time-
+# constant-false BUILD_BUG-style size check, so the call is
+# unreachable in practice -- synthesizing a `-> !` extern decl matching
+# the shape c2rust itself uses for every working sibling is safe.
+# Always synthesizes a FRESH, locally-scoped extern block at EVERY
+# orphan site, even when the same N has a decl elsewhere in the file --
+# c2rust nests each extern "C" {} inside its own call site's specific
+# block-expression, which is NOT visible from a sibling or later
+# block-expression in the same function (a prior "reuse by name" draft
+# of this fix was disproven against the real corpus: it silently left
+# the E0425 in place under a renamed symbol) -- issue awto-au/linux-rs#102.
+ORPHAN_COMPILETIME_ASSERT_RE = re.compile(r"\b__compiletime_assert_(\d+)\(\)")
+# c2rust flexible-array-member (FAM) initializer emitted as a cast from
+# a synthesized helper constant to the field's true zero-length array
+# type -- e.g. `MM_STRUCT_FLEXIBLE_ARRAY_INIT as [::core::ffi::c_char; 0]`.
+# Rust's `as` never converts between array types of different length
+# (E0605) regardless of element type or source size; a C99 flexible
+# array member's only valid Rust value is the empty array literal `[]`
+# -- confirmed against this exact file's own correctly-transpiled
+# sibling initializer of the same field. Negative lookbehind excludes a
+# trailing path/field-access segment (`self.foo as [u8; 0]`,
+# `Foo::BAR as [u8; 0]`) from matching -- those are left for manual
+# review rather than risking a mis-truncated rewrite -- issue
+# awto-au/linux-rs#109.
+FAM_CAST_RE = re.compile(r"(?<![.\w:])\b\w+ as (\[[^;]+; 0\])")
+
+
+def fix_orphaned_compiletime_assert(text: str) -> tuple[str, int]:
+    def repl(m: re.Match) -> str:
+        n = m.group(1)
+        return (
+            f'{{\n'
+            f'                        extern "C" {{\n'
+            f'                            #[link_name = "__compiletime_assert_{n}"]\n'
+            f'                            fn __compiletime_assert_{n}_0() -> !;\n'
+            f'                        }}\n'
+            f'                        __compiletime_assert_{n}_0()\n'
+            f'                    }}'
+        )
+
+    return ORPHAN_COMPILETIME_ASSERT_RE.subn(repl, text)
+
+
+def fix_fam_cast_constants(text: str) -> tuple[str, int]:
+    return FAM_CAST_RE.subn("[]", text)
+
+
+# c2rust wraps some structs needing extra padding/alignment in a
+# C2Rust_<Name>_Inner newtype (same mechanism as the C2Rust_Unnamed_N
+# padding wrappers seen elsewhere) but its initializer-rewrite pass can
+# miss a struct LITERAL elsewhere in the same file, leaving it using
+# the pre-wrap field-by-name brace syntax against the outer tuple
+# struct, which has no such fields -- E0560, issue awto-au/linux-rs#113.
+# Anchored on the wrapper's own declaration line per file. `[^{}]*`
+# assumes a flat field list with no nested brace-literal field values
+# (true of every wrapped-struct literal seen in the corpus so far --
+# single scalar fields; a genuinely empty-bodied function returning
+# `*mut WrapperName {}` could in principle confuse this on some future
+# unswept file, since a regex can't balance braces reliably here any
+# more than the already-rejected bare-int warn_on! detector could, but
+# that failure mode is a compile error rustc would reject, not silent
+# wrong behavior, so it's a known limitation rather than a landing
+# blocker).
+NEWTYPE_WRAPPER_DECL_RE = re.compile(r"^pub struct (\w+)\(pub (C2Rust_\w+_Inner)\);$", re.MULTILINE)
+# c2rust cross-TU merge bug: an incomplete/weak-extern array decl with
+# no initializer in this TU (e.g. `const char linux_banner[] __weak;`
+# in init/version.c, real definition + real length living in a
+# DIFFERENT TU) gets its declared array length defaulted to 0, but the
+# real initializer's byte string (length N) still gets merged in on the
+# transmute's source side -- producing
+# `transmute::<[u8; N], [TYPE; 0]>(*b"...")`, an N-vs-0 size mismatch
+# (E0512). The transmute's source array length is the only ground
+# truth available in this TU; fixing both the transmute's target array
+# length and the static's own declared array length to N makes the
+# error disappear entirely -- issue awto-au/linux-rs#114.
+ZERO_LEN_ARRAY_DECL_RE = re.compile(
+    r"(: \[([\w:]+); )0(\]\s*=\s*unsafe\s*\{\s*::core::mem::transmute::<\s*\[u8;\s*)(\d+)(\s*\],)",
+    re.DOTALL,
+)
+ZERO_LEN_ARRAY_TRANSMUTE_RE = re.compile(
+    r"::core::mem::transmute::<\s*\[u8;\s*(\d+)\s*\]\s*,\s*\[([\w:]+);\s*0\s*\]\s*,?\s*>",
+    re.DOTALL,
+)
+# c2rust sometimes attaches a lifetime parameter to a plain-data struct
+# translated from C without ever using it in a field type (E0392,
+# issue awto-au/linux-rs#117) -- every c2rust struct field type derived
+# from C is a raw pointer/value, never a Rust reference, so a lifetime
+# param genuinely unused in the field list is always dead here (unlike
+# hand-written kernel/rust crate code, which legitimately uses struct
+# lifetimes and is untouched by this regex, since it only fires on
+# non-generic-bracket structs literally named `pub struct NAME<'lt> {
+# ... }` with `'lt` absent from the body).
+STRUCT_UNUSED_LIFETIME_RE = re.compile(r"pub struct (\w+)<(\'\w+)>( \{[^}]*\})", re.DOTALL)
+
+
+def fix_newtype_wrapper_struct_literals(text: str) -> tuple[str, int]:
+    total = 0
+    for name, inner in NEWTYPE_WRAPPER_DECL_RE.findall(text):
+        pattern = re.compile(r"(?<!struct )\b" + re.escape(name) + r"\s*\{([^{}]*)\}")
+
+        def repl(m: re.Match, _name=name, _inner=inner) -> str:
+            return f"{_name}({_inner} {{{m.group(1)}}})"
+
+        text, n = pattern.subn(repl, text)
+        total += n
+    return text, total
+
+
+def fix_zero_len_array_transmute(text: str) -> tuple[str, int]:
+    def decl_repl(m: re.Match) -> str:
+        prefix, _ty, mid, n, tail = m.groups()
+        return f"{prefix}{n}{mid}{n}{tail}"
+
+    def transmute_repl(m: re.Match) -> str:
+        n, ty = m.group(1), m.group(2)
+        return f"::core::mem::transmute::<[u8; {n}], [{ty}; {n}]>"
+
+    text, n_decl = ZERO_LEN_ARRAY_DECL_RE.subn(decl_repl, text)
+    text, n_trans = ZERO_LEN_ARRAY_TRANSMUTE_RE.subn(transmute_repl, text)
+    return text, n_trans
+
+
+# `#[used]` attached directly to the __exit-macro function itself
+# (`#[link_section = ".exit.text"]` / `#[used]` / `#[cold]` / `unsafe
+# extern "C" fn ..._exit/_fini(...)`) -- Rust's `#[used]` is only valid
+# on `static` items, but c2rust carries over GCC's
+# `__attribute__((used))` from the kernel's __exit macro expansion onto
+# the function unconditionally. Every sibling __init function in the
+# same files gets the matching `#[link_section = ".init.text"]` +
+# `#[cold]` pair with NO `#[used]`, confirming this is specific to the
+# __exit shape -- issue awto-au/linux-rs#101. NOTE: `#[used]` is
+# dropped rather than translated to an equivalent; this changes
+# --gc-sections retention for these specific functions versus GCC's
+# original semantics, and is currently inert only because
+# CONFIG_MODULES is unset in this build's .config (an unreferenced
+# __exit function is normally only reachable via module unload, which
+# doesn't exist without CONFIG_MODULES) -- revisit if/when a
+# modules-enabled config is ever targeted.
+USED_ON_EXIT_FN_RE = re.compile(
+    r'(#\[link_section = "\.exit\.text"\]\n)#\[used\]\n(#\[cold\]\nunsafe extern "C" fn)'
+)
+
+
+def fix_used_on_exit_fn(text: str) -> tuple[str, int]:
+    return USED_ON_EXIT_FN_RE.subn(r"\1\2", text)
+
+
+def fix_unused_struct_lifetime(text: str) -> tuple[str, int]:
+    n = 0
+
+    def repl(m: re.Match) -> str:
+        nonlocal n
+        name, lt, body = m.group(1), m.group(2), m.group(3)
+        if lt in body:
+            return m.group(0)
+        n += 1
+        return f"pub struct {name}{body}"
+
+    return STRUCT_UNUSED_LIFETIME_RE.sub(repl, text), n
+
 
 def fix_poison_pointer_constants(text: str) -> tuple[str, int]:
     def repl(m: re.Match) -> str:
         n = m.group(1)
-        return f"({n}u64.wrapping_add(POISON_POINTER_DELTA as u64)) as *mut ::core::ffi::c_void"
+        # usize, not a fixed u64: POISON_POINTER_DELTA is `unsigned
+        # long` in C (pointer-width -- ILP32's 32-bit UL on a 32BIT
+        # config, LP64's 64-bit UL on 64BIT), currently 0 on 32-bit
+        # configs (arch/riscv/Kconfig) so a hardcoded u64 has been
+        # harmless so far by accident, not by correctness -- RV32
+        # feasibility research (2026-08-02) found this the one
+        # target-width assumption in this fix worth calling out.
+        return f"({n}usize.wrapping_add(POISON_POINTER_DELTA as usize)) as *mut ::core::ffi::c_void"
 
     return POISON_POINTER_RE.subn(repl, text)
 
@@ -183,6 +436,36 @@ def apply_fixes(path: Path) -> dict:
 
     text, n = fix_poison_pointer_constants(text)
     report["poison_pointer_sites_fixed"] = n
+
+    text, n = fix_labeled_block_bare_break(text)
+    report["labeled_block_bare_break_sites_fixed"] = n
+
+    text, n = fix_flex_counter_noop_sink(text)
+    report["flex_counter_noop_sink_sites_fixed"] = n
+
+    text, n = fix_stdsimd_feature(text)
+    report["stdsimd_feature_sites_fixed"] = n
+
+    text, n = fix_missing_semicolon_before_must_check_overflow(text)
+    report["missing_semicolon_before_must_check_overflow_sites_fixed"] = n
+
+    text, n = fix_orphaned_compiletime_assert(text)
+    report["orphaned_compiletime_assert_sites_fixed"] = n
+
+    text, n = fix_fam_cast_constants(text)
+    report["fam_cast_sites_fixed"] = n
+
+    text, n = fix_newtype_wrapper_struct_literals(text)
+    report["newtype_wrapper_struct_literal_sites_fixed"] = n
+
+    text, n = fix_zero_len_array_transmute(text)
+    report["zero_len_array_transmute_sites_fixed"] = n
+
+    text, n = fix_unused_struct_lifetime(text)
+    report["unused_struct_lifetime_sites_fixed"] = n
+
+    text, n = fix_used_on_exit_fn(text)
+    report["used_on_exit_fn_sites_fixed"] = n
 
     if text != original:
         path.write_text(text)

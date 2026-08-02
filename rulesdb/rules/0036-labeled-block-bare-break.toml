@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "labeled-block-bare-break"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "wait_event_interruptible*()-family macros, whose early-exit path assigns a return value then exits the enclosing GNU statement-expression"
+family = "EXPR:labeled-block-bare-break"
+
+[emit]
+kind = "break-value-insertion"
+rust = "`<var> = __int;\\nbreak 'label;` -> `<var> = __int;\\nbreak 'label <var>;` -- the labeled block is used as a value-producing expression, so every exit path (including the early-exit one) must carry a value, matching the block's other (fallthrough) exit."
+deviations = ["none -- the variable name is captured directly from the immediately preceding assignment line, not guessed"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#104, 2026-08-02): c2rust's wait_event_interruptible*() translation omits the break payload at the early-exit path while the block's other exit correctly carries one. Confirmed identical shape across 5 files (drivers/char/random.c, drivers/tty/tty_ioctl.c, kernel/irq/manage.c, lib/percpu-refcount.c, mm/oom_kill.c).",
+]
+
+[validation]
+instances = ["drivers/char/random.c", "kernel/irq/manage.c"]
+oracle = "tier4"
+negative = []
+human_review = false

@@ -198,11 +198,26 @@ def inject_no_std(path: Path):
 
 def rustc_check(rs_path: Path) -> tuple[str, str]:
     out_rmeta = rs_path.with_suffix(".rmeta")
+    # --crate-name: rustc infers the crate name from the input filename
+    # when this is absent, and several kernel source files share a bare
+    # basename (core.c appears under block/partitions/, drivers/base/,
+    # kernel/events/, kernel/sched/, etc, all transpiling to a literal
+    # core.rs) which collides with the --extern core=... dependency
+    # below and produces E0519 "the current crate is indistinguishable
+    # from one of its dependencies" (issue awto-au/linux-rs#107).
+    # Derive a unique, collision-free crate name from the scratch
+    # subdirectory (already the full slugified C path, e.g.
+    # block_partitions_core.c) instead of trusting rustc's
+    # filename-only default.
+    crate_name = re.sub(r"[^0-9a-zA-Z_]", "_", rs_path.parent.name)
+    if crate_name and crate_name[0].isdigit():
+        crate_name = "_" + crate_name
     cmd = [
         "rustc", "+nightly",
         "--edition=2021",
         "--target", TARGET,
         "--crate-type", "rlib",
+        "--crate-name", crate_name,
         "--emit=metadata",
         "-o", str(out_rmeta),
         "--sysroot=/dev/null",

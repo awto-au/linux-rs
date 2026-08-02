@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "stdsimd-feature-gate"
+version = 1
+tier = 1
+category = "toolchain"
+
+[match]
+c = "#includes of linux/mmu_notifier.h"
+family = "TOOLCHAIN:stdsimd-feature"
+
+[emit]
+kind = "feature-strip"
+rust = "Strip the `stdsimd` token from `#![feature(...)]`, preserving any other feature names (e.g. label_break_value) already present."
+deviations = ["none -- stdsimd is a defunct feature name no longer in rustc's feature list at all (E0635 unknown feature, not just disallowed), c2rust stamps it on unconditionally regardless of #[cfg(target_arch = ...)], so it hard-errors on every non-x86 target even though the gated code is always dead there"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#106, 2026-08-02): grep -rl 'stdsimd' across the corpus returns exactly 5 files (mm/memory.c, mm/mprotect.c, mm/mremap.c, mm/rmap.c, + 1 more), all #including linux/mmu_notifier.h.",
+]
+
+[validation]
+instances = ["mm/memory.c", "mm/rmap.c"]
+oracle = "tier4"
+negative = []
+human_review = false

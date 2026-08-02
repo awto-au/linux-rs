@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "used-attr-on-exit-fn"
+version = 1
+tier = 1
+category = "process"
+
+[match]
+c = "__exit macro expansion (`__attribute__((__section__(\".exit.text\"))) __cold __attribute__((__used__))`) on a module-exit function"
+family = "ATTR:used-on-fn"
+
+[emit]
+kind = "attribute-strip"
+rust = "Drop `#[used]` entirely; keep `#[link_section = \".exit.text\"]` and `#[cold]`. Rust's `#[used]` is only valid on `static` items."
+deviations = ["#[used] is dropped rather than translated to an equivalent -- changes --gc-sections retention for these specific functions versus GCC's original semantics, currently inert only because CONFIG_MODULES is unset in this build's .config (an unreferenced __exit function is normally only reachable via module unload). Revisit if a modules-enabled config is ever targeted."]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#101, 2026-08-02): c2rust carries over GCC's __attribute__((used)) from the __exit macro expansion onto the function unconditionally -- every sibling __init function in the same files gets the matching #[link_section = \".init.text\"] + #[cold] pair with NO #[used], confirming this is specific to the __exit shape. Confirmed identical across all 17 affected files.",
+]
+
+[validation]
+instances = ["block/kyber-iosched.c", "lib/kunit/test.c"]
+oracle = "tier4"
+negative = []
+human_review = false

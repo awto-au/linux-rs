@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "fam-cast-constant"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "a C99 flexible-array-member (FAM) struct field initialized via a synthesized helper constant"
+family = "EXPR:fam-cast-constant"
+
+[emit]
+kind = "cast-to-literal"
+rust = "`<CONST> as [T; 0]` -> `[]` -- Rust's `as` never converts between array types of different length (E0605) regardless of element type or source size; a zero-length FAM field's only valid value is the empty array literal."
+deviations = ["Negative lookbehind excludes a trailing path/field-access segment (`self.foo as [u8; 0]`, `Foo::BAR as [u8; 0]`) from matching -- left for manual review rather than risking a mis-truncated rewrite."]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#109, 2026-08-02): confirmed against a correctly-transpiled sibling initializer of the same field in the same file (drivers/firmware/efi/efi.c: one FAM initializer goes through the shared-constant path and breaks, another through the plain path and already emits `[]` correctly).",
+]
+
+[validation]
+instances = ["drivers/firmware/efi/efi.c", "mm/init-mm.c"]
+oracle = "tier4"
+negative = []
+human_review = false

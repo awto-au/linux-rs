@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "zero-len-array-transmute"
+version = 1
+tier = 2
+category = "expr"
+
+[match]
+c = "an incomplete/weak-extern array decl with no initializer in this TU (e.g. `const char linux_banner[] __weak;`), real definition + real length living in a DIFFERENT TU"
+family = "EXPR:zero-len-array-transmute"
+
+[emit]
+kind = "array-length-correction"
+rust = "The declared array length defaults to 0 in this TU, but the real initializer's byte-string length N still gets merged in on the transmute's source side (`transmute::<[u8; N], [T; 0]>`) -- fix both the transmute's target array length and the static's own declared length to N (the only ground truth available in this TU, derived from the real initializer data)."
+deviations = ["none -- single-TU fix using data already present in the file (the transmute's own source array length), not a cross-TU/linker resolution"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#114, 2026-08-02): init/version.c's linux_banner (real definition + length in the separate init/version-timestamp.c TU) — confirmed the corpus's only current occurrence via direct rustc probe; fixing both lengths to N eliminates the E0512 with no other errors introduced.",
+]
+
+[validation]
+instances = ["init/version.c"]
+oracle = "tier4"
+negative = []
+human_review = false

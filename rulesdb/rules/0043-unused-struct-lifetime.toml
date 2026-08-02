@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "unused-struct-lifetime"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "a plain-data struct translated from C (every field a raw pointer/value, never a Rust reference)"
+family = "EXPR:unused-struct-lifetime"
+
+[emit]
+kind = "lifetime-strip"
+rust = "`pub struct Name<'lt> { ... }` -> `pub struct Name { ... }` when `'lt` does not occur anywhere in the field list -- grep-verified per match, not blind-stripped."
+deviations = ["Only fires on non-generic-bracket structs literally named `pub struct NAME<'lt> { ... }` with `'lt` absent from the body — does not touch impl blocks or hand-written kernel/rust crate code, which legitimately uses struct lifetimes."]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#117, 2026-08-02): kernel/panic.c's `struct warn_args<'a>` (a `const char *fmt; va_list args;` struct with no reference semantics) attaches an unused lifetime, tripping E0392. c2rust output never threads the phantom lifetime through call sites either (`*mut warn_args` appears with zero lifetime args at its one use site).",
+]
+
+[validation]
+instances = ["kernel/panic.c"]
+oracle = "tier4"
+negative = []
+human_review = false

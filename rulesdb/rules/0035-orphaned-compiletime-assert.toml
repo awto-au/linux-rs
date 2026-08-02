@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "orphaned-compiletime-assert"
+version = 1
+tier = 1
+category = "process"
+
+[match]
+c = "compiletime_assert()/BUILD_BUG_ON()-family macros expanding to __compiletime_assert_N(), where N is a __COUNTER__-derived unique id"
+family = "EXPR:compiletime-assert-orphan"
+
+[emit]
+kind = "synthesize-extern-decl"
+rust = "Synthesize a fresh, locally-scoped `extern \"C\" { #[link_name = \"__compiletime_assert_N\"] fn __compiletime_assert_N_0() -> !; }` at EVERY orphan call site, even when the same N has a decl elsewhere in the file -- do not attempt to reuse a same-named decl from another block-expression."
+deviations = ["none -- the guarded `if` is always a compile-time-constant-false BUILD_BUG-style size check, so the call is unreachable in practice; the synthesized decl matches the shape c2rust itself uses for every working sibling"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#102, 2026-08-02): c2rust emits a bare (non-_0-suffixed) __compiletime_assert_N() call at some sites with no matching extern decl reachable in scope. A first draft of this fix tried reusing an in-file decl by name alone and was disproven against the real corpus (kernel/rcu/sync.c N=91, kernel/rcu/srcutiny.c N=324) -- it silently left the E0425 in place under a renamed symbol, since c2rust nests each extern \"C\" {} inside its own call site's specific block-expression, not visible from a sibling or later block-expression in the same function.",
+]
+
+[validation]
+instances = ["block/blk-settings.c", "block/ioprio.c"]
+oracle = "tier4"
+negative = ["Some E0425 __compiletime_assert instances may still remain after this fix if the orphan shape differs from the simple bare-call pattern matched here -- 3 files still showed this signature after landing (down from 13-15), worth a follow-up investigation."]
+human_review = false

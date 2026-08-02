@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "flex-counter-noop-sink"
+version = 1
+tier = 1
+category = "expr"
+
+[match]
+c = "__set_flex_counter()'s _Generic no-op branch: `void *: &(size_t){ 0 }`, taken when a flexible-array-member has no __counted_by() annotation (linux/overflow.h)"
+family = "EXPR:flex-counter-noop"
+
+[emit]
+kind = "temporary-to-local"
+rust = "`let X = &raw mut (0 as size_t); *X = __count;` -> give the write-through a real backing local (`let mut X_tmp: size_t = 0; let X = &raw mut X_tmp; *X = __count;`) since &raw mut on a bare cast expression fails E0745 (temporary value)."
+deviations = ["none -- the C original is a deliberate no-op sink (nothing to store the counter into); this just gives Rust a real place to take the address of"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#105, 2026-08-02): c2rust mistranslates the C compound literal as a bare Rust cast expression instead of a real place.",
+]
+
+[validation]
+instances = ["block/blk-map.c"]
+oracle = "tier4"
+negative = []
+human_review = false

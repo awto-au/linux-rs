@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "missing-semi-must-check-overflow"
+version = 1
+tier = 2
+category = "expr"
+
+[match]
+c = "WARN_ON(overflows_type(...)) expanding through __overflows_type's nested check_add_overflow GNU statement-expression (a triple-nested statement-expr)"
+family = "EXPR:missing-semi-narrow-result"
+
+[emit]
+kind = "insert-semicolon"
+rust = "Insert the missing `;` between `= c2rust_result_narrow_N` and the following `__must_check_overflow(` tail expression."
+deviations = ["none -- confirmed unique to one file/site in the whole corpus; the regex only ever matches this exact broken shape"]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep (issue awto-au/linux-rs#111, 2026-08-02): c2rust drops the statement-terminating `;` when flattening this specific 3-level statement-expression nesting depth. Only 1 of 13 corpus-wide c2rust_result_narrow assignments lacks its semicolon -- a rare codegen slip tied to this exact nesting shape, not a general pattern (single-file scope confirmed by exhaustive corpus grep).",
+]
+
+[validation]
+instances = ["block/blk-mq-dma.c"]
+oracle = "tier4"
+negative = []
+human_review = false
