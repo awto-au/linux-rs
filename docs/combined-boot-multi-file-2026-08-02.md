@@ -7,9 +7,13 @@ opposed to the 22 individual one-file-per-boot attempts documented in
 works per-file; this one proves it still works when files are combined,
 and surfaces real bugs that only exist at combination time.
 
-Two rounds so far: 3 files (klist/sys_info/rcuref, see below), then
-scaled to 8 (adding glob/group_cpus/bucket_locks/errseq/uuid, see
-"Round 2" near the end) — both clean boots, 20/20 KUnit suites each.
+Three rounds so far: 3 files (klist/sys_info/rcuref, see below), then
+8 (adding glob/group_cpus/bucket_locks/errseq/uuid, "Round 2"), then
+18 (adding is_single_threaded/lwq/bust_spinlocks/debug_locks/
+devmem_is_allowed/test_sort/kfifo/fonts/lz4_decompress/
+decompress_bunzip2, "Round 3" — one candidate, `seq_buf.c`, deferred;
+one real transpiler bug found and fixed) — all three clean boots,
+20/20 KUnit suites each.
 
 ## Candidate selection
 
@@ -253,3 +257,150 @@ change needed.
 batching mechanism continues to scale with no per-round growth in fix
 complexity (round 2's fixes were the same recurring classes as round 1,
 applied faster).
+
+## Round 3: scaling to 18 files, one deferred, one real transpiler bug found
+
+Attempted all 11 remaining individually-verified candidates:
+`is_single_threaded.c`, `lwq.c`, `bust_spinlocks.c`, `debug_locks.c`,
+`devmem_is_allowed.c`, `tests/test_sort.c`, `seq_buf.c`, `kfifo.c`,
+`fonts/fonts.c`, `lz4/lz4_decompress.c`, `decompress_bunzip2.c`.
+Fresh transpile at the same c2rust HEAD as rounds 1–2
+(`7a7b63b804e3`): `REFERENCE-CHECK: 11/11 OK`.
+
+### Fix classes needed, per file
+
+5 of 11 built clean raw: `is_single_threaded.c`, `bust_spinlocks.c`,
+`devmem_is_allowed.c`, `tests/test_sort.c` (before the overflow bug
+below), `decompress_bunzip2.c`. All 7 that declared the duplicate
+`riscv_current_is_tp`/`current_stack_pointer` register-pseudo-globals
+(now hit in 7 of the 8 files across rounds 2–3 that transitively pull
+in the C source's `register ... __asm__("tp")` pattern) had them
+deleted after grep-confirming dead — same mechanical step as every
+prior occurrence.
+
+Two files (`is_single_threaded.c`, `lwq.c`) genuinely **call**
+`get_current()` rather than leaving it dead — first time this session
+a file in the combined-boot pool actually invokes it rather than just
+declaring the pseudo-globals unused. Both already compile to the
+correct `asm!("mv {0}, tp", ...)` form (the transpiler fix confirmed in
+round 1 for `klist.c` holds here too), so no hand-fix was needed for
+the call itself — only the still-independently-declared
+`current_stack_pointer` (dead) needed removing.
+
+- **`lwq_rs.rs`**: `use ::macros::export;` (unused `warn_on` import
+  too) dropped, `#[export]` → `#[no_mangle]` (2 sites); duplicate
+  `current_stack_pointer` deleted; 8 RISC-V asm bracket-addressing
+  sites fixed (issue #29's class, `amoswap.d.aqrl`/`lr.w`/`sc.w.rl`
+  variants this time, not just `amocas.*`).
+- **`debug_locks_rs.rs`**: same export fix (1 site); both duplicate
+  statics deleted; 8 bracket-addressing sites (`amoswap.w.aqrl`
+  variant).
+- **`seq_buf_rs.rs`**: export fix, duplicate statics deleted, 3
+  `kernel::warn_on!(...) != 0` → plain `kernel::warn_on!(...)` sites
+  fixed — but ultimately **deferred from this round**, see below.
+- **`kfifo_rs.rs`**: 1 `warn_on!(...) != 0` site fixed; duplicate
+  statics deleted (not caught until a second full pass, since the
+  first error-survey only surfaced the first blocking error per file —
+  worth remembering that `make`'s fail-fast means a clean "0 errors"
+  report from an early stage doesn't guarantee no later-stage issues
+  in the same file).
+- **`fonts/fonts_rs.rs`**: export fix, duplicate statics deleted, 2
+  `warn_on!(...) != 0` sites fixed.
+- **`lz4/lz4_decompress_rs.rs`**: duplicate statics deleted; new fix
+  class — `::libc::memcpy`/`::libc::memmove`/`::libc::size_t` (c2rust's
+  usual userspace/`std`-linked output convention) don't exist in this
+  `no_std` kernel build. Added a `memcpy` extern declaration alongside
+  the file's existing `memmove` one, then replaced all `::libc::`
+  qualifications with the local unqualified names (`memcpy`, `memmove`,
+  `size_t`) already declared/aliased in the same file.
+
+### New gap: `seq_buf_printf`'s C-variadic definition needs `c_variadic`
+
+`seq_buf_printf(struct seq_buf *s, const char *fmt, ...)` is a real
+C-variadic function *definition* (not just a call site — c2rust output
+already declares plenty of `extern "C" { fn foo(..., ...); }` call-only
+bindings without issue). Defining one in Rust needs the unstable
+`c_variadic` feature, which is not in `rust_allowed_features`
+(`scripts/Makefile.build`) — that list is deliberately scoped to mirror
+real upstream Rust-for-Linux's own vetted feature set (cites
+`Rust-for-Linux/linux#2`).
+
+Researched whether upstream Rust-for-Linux has a pattern for this: they
+don't define genuinely variadic Rust functions anywhere. Their
+`pr_info!`/`pr_err!` macros avoid the problem entirely — `rust/kernel/
+print.rs` builds a `core::fmt::Arguments` at the Rust call site, then
+calls C's `_printk` with a **fixed** 3-argument signature (format,
+module, an opaque pointer to the `Arguments` value); the C side's
+`%pA` format specifier calls back into a Rust formatter
+(`rust_fmt_argument`) to consume it. That trick only works because RfL
+controls both the caller and `_printk`'s own format-string parsing —
+it doesn't generalize to an arbitrary pre-existing C variadic function
+like `seq_buf_printf` that's called from many already-transpiled sites
+we don't want to also rewrite.
+
+Confirmed `c_variadic` itself compiles cleanly on this project's
+existing toolchain (`rustc 1.97.0` via the same `RUSTC_BOOTSTRAP=1`
+mechanism that already unlocks the other 4 allow-listed features) —
+technically available, just not something upstream RfL has adopted.
+Decided to defer rather than add it unilaterally: `seq_buf.c` stays
+plain C for this round, `lib/Makefile` documents why inline. Revisit if
+upstream ever adds `c_variadic` to their own allow-list, or if a
+narrower non-variadic redesign of the call sites becomes worth it.
+
+### New c2rust bug found: signed multiply overflow panics instead of wrapping
+
+`tests/test_sort.c`'s own KUnit test seeds a bounded pseudo-random
+sequence: `r = (r * 725861) % 6599`. `r` is always `< 6599` after each
+iteration, but the *intermediate* product (`r` up to 6598 times
+725861) reaches ~4.79 billion — over `i32::MAX` (~2.1 billion) before
+the `% 6599` brings it back down. C's signed overflow wraps in
+practice; c2rust emitted a bare Rust `*`, which panics under
+`overflow-checks`:
+
+```
+rust_kernel: panicked at lib/tests/test_sort_rs.rs:4088:17:
+attempt to multiply with overflow
+Kernel BUG [#1]
+```
+
+Same root-cause class as the already-fixed `awtoau/c2rust#27`
+(`refcount.h`'s `+`/`-` overflow-detection idiom, fixed via
+`wrapping_add`/`wrapping_sub`) — this is the `*` case of the same gap.
+Fixed locally via `r.wrapping_mul(725861)`; filed as
+[`awtoau/c2rust#33`](https://github.com/awtoau/c2rust/issues/33) for a
+general fix (translate signed `*`/`+`/`-` as `wrapping_mul`/
+`wrapping_add`/`wrapping_sub` uniformly, not just for `+`/`-`).
+
+### Round 3 outcome: clean 18-file boot (19 attempted, 1 deferred), 20/20 KUnit suites
+
+- First full-image attempt (19 files, `seq_buf.c` included) failed at
+  `modpost`/`ld.lld` link with `seq_buf_printf` undefined — the
+  `c_variadic` gap above, correctly deferred.
+- Deferring `seq_buf.c` initially still failed the same way on the
+  first retry — traced to an editing mistake (the revert to plain C
+  deleted the `ifdef`/`else`/`endif` wrapper *and* the fallback
+  `lib-y += seq_buf.o` line inside it, leaving `seq_buf.c` wired into
+  nothing). Fixed by re-adding the unconditional `lib-y += seq_buf.o`
+  line; rebuilt clean.
+- Second full-image attempt (18 files) built and linked clean, but
+  panicked at boot in the `lib_sort` KUnit suite — the `test_sort.c`
+  multiply-overflow bug above, not caught by the individual-file
+  build (compiles fine; only *panics at runtime* when the test
+  actually executes with `overflow-checks` on).
+- Third attempt, after the `wrapping_mul` fix: clean build, clean
+  boot, **20/20 KUnit suites pass** (0 fail, `lib_sort` now included
+  and passing), `initramfs init reached, PID 1 alive`, zero
+  panic/oops/BUG/WARN. `llvm-nm vmlinux.unstripped` confirms all 17
+  Rust-transpiled files' representative symbols (`T`) plus
+  `seq_buf_printf` correctly resolving to the plain-C object, not a
+  Rust one. Boot-history row auto-committed/pushed. Archived at
+  `docs/status/boot-logs/20260802T201123.527162-695890+1000-combined-boot-28-18file-v2.log`.
+
+18 files now combined-boot-verified in one image, up from 8 — and,
+unlike rounds 1–2, this round surfaced two genuinely new gap classes
+(a toolchain-feature boundary, and a real transpiler correctness bug)
+rather than just the by-now-familiar recurring ones. Both are handled
+the way this project's own established discipline calls for: the
+toolchain gap documented and deferred rather than unilaterally
+resolved outside upstream's own choices, the transpiler bug fixed
+narrowly and reported upstream rather than silently patched.
