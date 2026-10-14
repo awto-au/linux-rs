@@ -16,11 +16,10 @@ automate:
      docs/combined-boot-attempt-2026-07-18.md's "new gap class" #1).
   3. RISC-V inline-asm bracket-addressing (`[{N}]`/`[{N:}]` ->
      `0({N})`/`0({N:})` -- issue awto-au/linux-rs#29).
-  4. `kernel::warn_on!(cond) != 0` / `== 0` -> `kernel::warn_on!(cond)`
-     (the macro already returns bool; both comparisons are equally an
-     E0308 type error, c2rust assumes C's int-returning WARN_ON() either
-     way -- confirmed `bool == 0` fails identically to `bool != 0` via a
-     direct rustc probe).
+  4. `kernel::warn_on!(cond) != 0` -> `kernel::warn_on!(cond)`,
+     `kernel::warn_on!(cond) == 0` -> `!kernel::warn_on!(cond)` (the
+     macro already returns bool; c2rust assumes C's int-returning
+     WARN_ON()). Paren-balanced -- issue awto-au/linux-rs#121.
   5. Fabricated register-pseudo-global statics
      (`riscv_current_is_tp`/`current_stack_pointer`, rule 0031) --
      deleted ONLY when grep-confirmed dead (no `get_current()` CALL
@@ -101,11 +100,9 @@ LABEL_USE_RE = re.compile(r"'_c2rust_label")
 MACROS_EXPORT_USE_RE = re.compile(r"^use ::macros::export;\n?", re.MULTILINE)
 EXPORT_ATTR_RE = re.compile(r"^#\[export\]$", re.MULTILINE)
 BRACKET_ADDR_RE = re.compile(r"\[\{(\d+)(:?)\}\]")
-# Both `!= 0` (the common case) and `== 0` (rarer, but equally an
-# E0308 -- `bool == 0`/`bool != 0` are both type errors, c2rust assumes
-# C's int-returning WARN_ON() either way) -- confirmed via a direct
-# rustc probe that `bool == 0` fails identically to `bool != 0`.
-WARN_ON_NEQ0_RE = re.compile(r"(kernel::warn_on!\([^;]*?\))\s*(!=|==)\s*0")
+WARN_ON_OPEN_RE = re.compile(r"kernel::warn_on!\(")
+# Matched only at warn_on!'s own closing `)` -- see fix_warn_on_neq0 (issue #121).
+WARN_ON_CMP0_RE = re.compile(r"\s*(!=|==)\s*0(?![\w.])")
 # ((void*)N + POISON_POINTER_DELTA) translated as .offset() on a bare
 # integer-cast pointer -- fails Rust's const evaluator (E0080, no
 # provenance). Any integer literal N, not just the LIST_POISON1/2
@@ -476,8 +473,39 @@ def fix_bracket_addressing(text: str) -> tuple[str, int]:
     return BRACKET_ADDR_RE.subn(repl, text)
 
 
+def _extract_balanced_arg(text: str, open_paren_idx: int) -> tuple[str, int] | None:
+    """(argument text, index just past the matching `)`) for the group
+    opening at text[open_paren_idx] == '('; None if unbalanced."""
+    depth = 0
+    for i in range(open_paren_idx, len(text)):
+        c = text[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_paren_idx + 1 : i], i + 1
+    return None
+
+
 def fix_warn_on_neq0(text: str) -> tuple[str, int]:
-    return WARN_ON_NEQ0_RE.subn(r"\1", text)
+    """warn_on! returns bool; c2rust compares it to 0 as C's int (#100, #121).
+    - Only a comparison directly after warn_on!'s own matching `)` is touched.
+    - `!= 0` -> dropped; `== 0` (C `!WARN_ON(x)`) -> `!kernel::warn_on!(x)`."""
+    edits = []  # (start, end, replacement); non-overlapping, nested sites included
+    for m in WARN_ON_OPEN_RE.finditer(text):
+        bal = _extract_balanced_arg(text, m.end() - 1)
+        if bal is None:
+            continue
+        cmp_m = WARN_ON_CMP0_RE.match(text, bal[1])
+        if not cmp_m:
+            continue
+        edits.append((cmp_m.start(), cmp_m.end(), ""))
+        if cmp_m.group(1) == "==":
+            edits.append((m.start(), m.start(), "!"))
+    for start, end, rep in sorted(edits, reverse=True):
+        text = text[:start] + rep + text[end:]
+    return text, sum(1 for _s, _e, rep in edits if rep == "")
 
 
 def apply_fixes(path: Path) -> dict:
