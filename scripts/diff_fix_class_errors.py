@@ -70,6 +70,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True, help="git rev of the 'before' fix-classes script")
     ap.add_argument("--c2rust-rev", required=True)
+    ap.add_argument("--show-all", action="store_true", help="also log every 'after' error, not just new ones")
     ap.add_argument("c_files", nargs="+")
     args = ap.parse_args()
 
@@ -97,6 +98,9 @@ def main() -> int:
         log.info("%s: before=%d after=%d new=%d gone=%d", c_file, before.total(), after.total(), len(new), len(gone))
         for e in new:
             log.info("  NEW  %s", e)
+        if args.show_all:
+            for e in sorted(after.elements()):
+                log.info("  AFTER  %s", e)
     return rc
 
 
