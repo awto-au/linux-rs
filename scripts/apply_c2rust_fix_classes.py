@@ -144,6 +144,13 @@ LIBC_QUALIFIED_RE = re.compile(r"::libc::(\w+)")
 # cases -- see issue #98.
 LIBC_FN_RE = re.compile(r"::libc::(memcpy|memset|memmove|strcmp|strlen)\b")
 LIBC_INTPTR_T_RE = re.compile(r"::libc::intptr_t\b")
+# Rule 0047 (#98 size_t leg): size arg of bindings::mem{cpy,set,move} -> usize.
+# Local size_t is c_ulong, bindgen's param is usize: a plain qualifier strip stays E0308.
+# Runs after fix_libc_fn_and_intptr (matches the rewritten `bindings::` name).
+LIBC_SIZE_T_MEMCPY_ARG_RE = re.compile(
+    r"(bindings::(?:memcpy|memset|memmove)\([^;]*?)as ::libc::size_t(\s*,?\s*\);)",
+    re.DOTALL,
+)
 
 # c2rust's wait_event_interruptible*() translation: the early-exit path
 # assigns the return value (`__ret[_N] = __int;`) then does a bare
@@ -194,6 +201,10 @@ def fix_libc_fn_and_intptr(text: str) -> tuple[str, int]:
     text, n1 = LIBC_FN_RE.subn(r"bindings::\1", text)
     text, n2 = LIBC_INTPTR_T_RE.subn("isize", text)
     return text, n1 + n2
+
+
+def fix_libc_size_t_memcpy_arg(text: str) -> tuple[str, int]:
+    return LIBC_SIZE_T_MEMCPY_ARG_RE.subn(r"\1as usize\2", text)
 
 
 # A c2rust-bitfields #[bitfield] setter (X.set_FIELD(...)) desugars to
@@ -380,6 +391,97 @@ def fix_newtype_wrapper_struct_literals(text: str) -> tuple[str, int]:
     return text, total
 
 
+FN_SIG_OPEN_RE = re.compile(r"\bfn (?P<fname>\w+)\(")
+PARAM_SHADOW_RE = re.compile(r"\bmut (?P<pname>\w+): \*mut (?P<ptype>\w+)\b")
+
+
+def _find_matching_close(text: str, open_idx: int, open_ch: str, close_ch: str) -> int:
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == open_ch:
+            depth += 1
+        elif text[i] == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _rename_body_bare_word(body: str, name: str) -> tuple[str, int, bool]:
+    """Rename bare-word `name` -> `name_` in `body`; (body, 0, False) if `name`
+    also appears as turbofish `::<name>`, `*mut/*const name`, or field `.name`
+    (kernel/events/core.c has field `callback_head: callback_head`) -- caller flags."""
+    unsafe_re = re.compile(
+        r"::<\s*" + re.escape(name) + r"\s*>"
+        r"|\*(?:mut|const)\s+" + re.escape(name) + r"\b"
+        r"|\.\s*" + re.escape(name) + r"\b"
+    )
+    if unsafe_re.search(body):
+        return body, 0, False
+    new_body, n = re.subn(r"\b" + re.escape(name) + r"\b", f"{name}_", body)
+    return new_body, n, True
+
+
+def fix_param_shadows_tuple_struct(text: str) -> tuple[str, int, list[str]]:
+    """Rule 0048 (#110, E0530): param `mut NAME: *mut NAME` where NAME is also a
+    c2rust padding-wrapper tuple struct -> `NAME_`, renamed in that fn body only.
+    Balanced-paren/brace scanning; unsafe bodies are flagged, not rewritten."""
+    tuple_structs = {name for name, _inner in NEWTYPE_WRAPPER_DECL_RE.findall(text)}
+    flagged: list[str] = []
+    total = 0
+    out = []
+    last_end = 0
+
+    for m in FN_SIG_OPEN_RE.finditer(text):
+        if m.start() < last_end:
+            continue
+        fname = m.group("fname")
+        paren_open = m.end() - 1
+        paren_close = _find_matching_close(text, paren_open, "(", ")")
+        if paren_close == -1:
+            continue
+        params_text = text[paren_open + 1 : paren_close]
+        shadow = None
+        for pm in PARAM_SHADOW_RE.finditer(params_text):
+            if pm.group("pname") == pm.group("ptype") and pm.group("pname") in tuple_structs:
+                shadow = pm
+                break
+        if shadow is None:
+            continue
+        pname = shadow.group("pname")
+        after = text[paren_close + 1 :]
+        brace_rel, semi_rel = after.find("{"), after.find(";")
+        if brace_rel == -1 or (semi_rel != -1 and semi_rel < brace_rel):
+            flagged.append(f"{fname} (no fn body found -- skipped)")
+            continue
+        open_brace_idx = paren_close + 1 + brace_rel
+        close_brace_idx = _find_matching_close(text, open_brace_idx, "{", "}")
+        if close_brace_idx == -1:
+            flagged.append(f"{fname} (unbalanced braces, skipped)")
+            continue
+        body = text[open_brace_idx + 1 : close_brace_idx]
+        new_body, n, safe = _rename_body_bare_word(body, pname)
+        if not safe:
+            flagged.append(
+                f"{fname} (param `{pname}` shadows tuple struct `{pname}` but body has a "
+                "bare turbofish/cast-target/field-access reference -- not auto-fixed)"
+            )
+            continue
+        new_params_text = (
+            params_text[: shadow.start("pname")]
+            + f"{pname}_"
+            + params_text[shadow.end("pname") :]
+        )
+        out.append(text[last_end : paren_open + 1])
+        out.append(new_params_text)
+        out.append(text[paren_close : open_brace_idx + 1])
+        out.append(new_body)
+        last_end = close_brace_idx
+        total += 1
+    out.append(text[last_end:])
+    return "".join(out), total, flagged
+
+
 def fix_zero_len_array_transmute(text: str) -> tuple[str, int]:
     def decl_repl(m: re.Match) -> str:
         prefix, _ty, mid, n, tail = m.groups()
@@ -531,6 +633,9 @@ def apply_fixes(path: Path) -> dict:
     text, n = fix_libc_fn_and_intptr(text)
     report["libc_fn_and_intptr_sites_fixed"] = n
 
+    text, n = fix_libc_size_t_memcpy_arg(text)
+    report["libc_size_t_memcpy_arg_sites_fixed"] = n
+
     text, n = fix_bitfield_setter_self_borrow(text)
     report["bitfield_setter_self_borrow_sites_fixed"] = n
 
@@ -554,6 +659,10 @@ def apply_fixes(path: Path) -> dict:
 
     text, n = fix_newtype_wrapper_struct_literals(text)
     report["newtype_wrapper_struct_literal_sites_fixed"] = n
+
+    text, n, flagged = fix_param_shadows_tuple_struct(text)
+    report["param_shadows_tuple_struct_sites_fixed"] = n
+    report["param_shadows_tuple_struct_flagged"] = flagged
 
     text, n = fix_zero_len_array_transmute(text)
     report["zero_len_array_transmute_sites_fixed"] = n
@@ -672,6 +781,11 @@ def main() -> int:
             log.warning(
                 "%s: FLAGGED ::libc:: symbol(s) (needs a local extern decl or qualifier strip): %s",
                 rel, report["libc_qualified_flagged"],
+            )
+        if report.get("param_shadows_tuple_struct_flagged"):
+            log.warning(
+                "%s: FLAGGED param-shadows-tuple-struct site(s) (needs manual review): %s",
+                rel, report["param_shadows_tuple_struct_flagged"],
             )
 
     log.info("checking register-pseudo-global static class (rule 0031 — deletes only when grep-confirmed dead)")

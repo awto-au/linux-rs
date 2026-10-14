@@ -77,5 +77,33 @@ class WarnOnNeq0Test(unittest.TestCase):
         )
 
 
+class LibcSizeTMemcpyArgTest(unittest.TestCase):
+    def test_size_arg_cast_to_usize(self):
+        self.assertEqual(
+            mod.fix_libc_size_t_memcpy_arg("bindings::memcpy(d, s, n as ::libc::size_t);"),
+            ("bindings::memcpy(d, s, n as usize);", 1),
+        )
+
+    def test_other_size_t_untouched(self):
+        s = "let x = n as ::libc::size_t;"
+        self.assertEqual(mod.fix_libc_size_t_memcpy_arg(s), (s, 0))
+
+
+class ParamShadowsTupleStructTest(unittest.TestCase):
+    DECL = "pub struct klist(pub C2Rust_klist_Inner);\n"
+
+    def test_renamed_in_own_body(self):
+        src = self.DECL + "unsafe extern \"C\" fn f(mut klist: *mut klist) {\n    g(klist);\n}\n"
+        out, n, flagged = mod.fix_param_shadows_tuple_struct(src)
+        self.assertEqual((n, flagged), (1, []))
+        self.assertIn("fn f(mut klist_: *mut klist) {\n    g(klist_);\n}", out)
+
+    def test_turbofish_or_field_flagged(self):
+        for body in ("size_of::<klist>()", "(*p).klist"):
+            src = self.DECL + f"fn f(mut klist: *mut klist) {{ {body}; }}\n"
+            out, n, flagged = mod.fix_param_shadows_tuple_struct(src)
+            self.assertEqual((out, n, len(flagged)), (src, 0, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

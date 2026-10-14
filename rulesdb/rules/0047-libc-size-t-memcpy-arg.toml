@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "libc-size-t-memcpy-arg"
+version = 1
+tier = 1
+category = "api"
+
+[match]
+c = "the size argument of a memcpy/memset/memmove call, transpiled as `... as ::libc::size_t)` -- the third leg of the ::libc:: qualifier pattern deliberately excluded from rule 0044"
+family = "API:libc-size-t-memcpy-arg"
+
+[emit]
+kind = "cast-rewrite"
+rust = "`bindings::{memcpy,memset,memmove}(..., N as ::libc::size_t)` -> `bindings::{memcpy,memset,memmove}(..., N as usize)`. Function-name-anchored: only matches inside a memcpy/memset/memmove call argument list, not any bare `as ::libc::size_t);` shape."
+deviations = [
+  "Runs AFTER rule 0044's fn/intptr_t leg, since it matches the already-rewritten `bindings::` call name, not the original `::libc::` one.",
+  "Does not touch size_t appearing anywhere else (rule 0044 already flags those for manual review) -- this rule exists specifically because a blind corpus-wide size_t qualifier strip was rejected (see rule 0044's negative note): this local alias chain resolves to c_ulong (u64 on this target) while bindings::{memcpy,memset,memmove}'s real bindgen-generated size parameter is usize, so a blind strip trades one E0308 for another. Casting straight to usize at these call sites bypasses the size_t alias entirely instead.",
+]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep + multi-agent investigation (issue awto-au/linux-rs#98, 2026-08-02/03): affects lib/lz4/lz4_decompress.c in the 22-file combined-boot-28 audit, plus other corpus files sharing the same memcpy/memset/memmove + size_t shape.",
+  "First-draft regex lacked a function-name anchor (matched any `as ::libc::size_t);` shape) -- low-severity since it fails loudly via a new compile error rather than silently, but tightened per adversarial verify to require a `bindings::(memcpy|memset|memmove)(` prefix before the match is allowed to fire.",
+]
+
+[validation]
+instances = ["lib/lz4/lz4_decompress.c"]
+oracle = "tier4"
+negative = ["blanket size_t qualifier strip (rule 0044's rejected size_t leg) -- see rule 0044 negative note for the E0308 regression this rule exists to avoid"]
+human_review = false

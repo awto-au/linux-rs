@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-2.0-only
+id = "param-shadows-tuple-struct"
+version = 1
+tier = 1
+category = "decl"
+
+[match]
+c = "the RCU-callback/container_of idiom `void fn(struct NAME *NAME)` where c2rust transpiles NAME as both a same-named tuple-struct padding wrapper (`pub struct NAME(pub C2Rust_NAME_Inner);`) and a parameter of that same name and type -- a function parameter cannot shadow a type of the same name (E0530)"
+family = "DECL:param-shadows-tuple-struct"
+
+[emit]
+kind = "rename-with-safety-precheck"
+rust = "Rename the shadowing parameter `mut NAME: *mut NAME` to `mut NAME_: *mut NAME`, and every bare-word reference to NAME inside the function's own balanced-brace body, to NAME_."
+deviations = [
+  "The function's parameter list is extracted via real balanced-paren scanning, not a `[^)]*`-style regex -- a prior rejected attempt's signature regex silently truncated on an earlier callback-typed parameter containing its own nested parens (e.g. `Option<unsafe extern \"C\" fn(...) -> ()>`), skipping a real instance with no fix and no flag.",
+  "The function body is extracted via real balanced-brace scanning, then pre-checked for ANY bare turbofish (`::<NAME>`), cast/type-position (`as *mut/*const NAME`, bare `*mut/*const NAME`), or dotted-field-access (`.NAME`, e.g. `(*x).NAME` where a struct field happens to share the shadowed type's name) reference to NAME before any rename is applied -- if found, the site is FLAGGED for manual review, not silently rewritten.",
+  "Only touches the parameter's own declaration and bare-word occurrences within that function's own balanced-brace body -- never a file-wide or cross-function substitution.",
+]
+
+[provenance]
+derivation = "tool-discovered"
+evidence = [
+  "Corpus sweep + multi-agent investigation (issue awto-au/linux-rs#110, 2026-08-02/03): affects lib/klist.c in the 22-file combined-boot-28 audit; same shape also present in block/blk-core.c and kernel/events/core.c.",
+  "A first attempt (round 1) was REJECTED at adversarial verify: its docstring claimed c2rust output never refers to a type by a bare unprefixed name inside a function body, disproven by real `size_of::<NAME>()`/`with_exposed_provenance_mut::<NAME>()` call sites in the very files it claimed to fix safely, and its naive `[^)]*`-style signature regex silently skipped real instances with a multi-line/callback-typed parameter list.",
+  "A second attempt (round 2 retry) closed the size_of/turbofish gap but was found at adversarial verify to still miss a dotted-field-access collision (kernel/events/core.c declares `pub callback_head: callback_head,`, a struct field named identically to its own type) -- a bare `\\bname\\b` word-boundary regex can't tell a field access from a genuine bare identifier reference. Fixed by adding a `.NAME` alternation to the pre-check.",
+]
+
+[validation]
+instances = ["lib/klist.c", "block/blk-core.c", "kernel/events/core.c"]
+oracle = "tier4"
+negative = ["synthetic body containing size_of::<klist>()/dotted field access alongside a shadowing parameter -- confirmed FLAGGED, not silently rewritten"]
+human_review = false
