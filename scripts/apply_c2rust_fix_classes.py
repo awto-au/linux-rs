@@ -147,10 +147,9 @@ LIBC_INTPTR_T_RE = re.compile(r"::libc::intptr_t\b")
 # Rule 0047 (#98 size_t leg): size arg of bindings::mem{cpy,set,move} -> usize.
 # Local size_t is c_ulong, bindgen's param is usize: a plain qualifier strip stays E0308.
 # Runs after fix_libc_fn_and_intptr (matches the rewritten `bindings::` name).
-LIBC_SIZE_T_MEMCPY_ARG_RE = re.compile(
-    r"(bindings::(?:memcpy|memset|memmove)\([^;]*?)as ::libc::size_t(\s*,?\s*\);)",
-    re.DOTALL,
-)
+# Paren-balanced: the size arg may contain `;` (`size_of::<[U64; 4]>()`).
+LIBC_MEM_CALL_OPEN_RE = re.compile(r"bindings::(?:memcpy|memset|memmove)\(")
+LIBC_SIZE_T_TAIL_RE = re.compile(r"as ::libc::size_t(\s*,?\s*)$")
 
 # c2rust's wait_event_interruptible*() translation: the early-exit path
 # assigns the return value (`__ret[_N] = __int;`) then does a bare
@@ -204,7 +203,16 @@ def fix_libc_fn_and_intptr(text: str) -> tuple[str, int]:
 
 
 def fix_libc_size_t_memcpy_arg(text: str) -> tuple[str, int]:
-    return LIBC_SIZE_T_MEMCPY_ARG_RE.subn(r"\1as usize\2", text)
+    edits = []
+    for m in LIBC_MEM_CALL_OPEN_RE.finditer(text):
+        bal = _extract_balanced_arg(text, m.end() - 1)
+        tail = bal and LIBC_SIZE_T_TAIL_RE.search(bal[0])
+        if tail:
+            start = m.end() + tail.start()
+            edits.append((start, start + len("as ::libc::size_t")))
+    for start, end in sorted(edits, reverse=True):
+        text = text[:start] + "as usize" + text[end:]
+    return text, len(edits)
 
 
 # A c2rust-bitfields #[bitfield] setter (X.set_FIELD(...)) desugars to

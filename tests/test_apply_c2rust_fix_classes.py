@@ -84,6 +84,13 @@ class LibcSizeTMemcpyArgTest(unittest.TestCase):
             ("bindings::memcpy(d, s, n as usize);", 1),
         )
 
+    def test_semicolon_in_size_arg_multiline(self):
+        src = "bindings::memcpy(\n    d,\n    s,\n    ::core::mem::size_of::<[U64; 4]>() as ::libc::size_t,\n);"
+        self.assertEqual(
+            mod.fix_libc_size_t_memcpy_arg(src),
+            (src.replace("as ::libc::size_t", "as usize"), 1),
+        )
+
     def test_other_size_t_untouched(self):
         s = "let x = n as ::libc::size_t;"
         self.assertEqual(mod.fix_libc_size_t_memcpy_arg(s), (s, 0))
