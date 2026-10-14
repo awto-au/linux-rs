@@ -9,7 +9,7 @@ All kernel checkouts are worktrees of the machine-wide Linux store — no per-pr
 | `tmp/linux-store` | symlink to the store | full clone; remotes `origin` (torvalds), `next`, `stable`, `awto` (awto-au/linux), others |
 | `linux/` | pristine v7.1 corpus (x86_64 lab, `compile_commands.json`) | detached at `v7.1` |
 | `linux-riscv/` | actively-built riscv tree | branch `awto/linux-rs/phase2-gcd-<base>` |
-| `linux-riscv-worktrees/<name>/` | per-agent trees | branch `awto/linux-rs/<name>-<base>` |
+| `linux-riscv-worktrees/<name>/` | per-agent trees (create on demand; retire when done) | branch `awto/linux-rs/<name>-<base>` |
 
 - `<base>` = mainline tag under the series (`git describe --tags --abbrev=0 $(git merge-base HEAD origin/master)`).
 - Store path: `--store PATH` or env `LINUX_RS_STORE`, default `tmp/linux-store`. Tracked files never hold host paths.
@@ -43,5 +43,7 @@ Procedure:
 
 - Never `git clone` a kernel and never `--depth` into the store.
 - Never `git gc` / `git repack` in the store or its worktrees: a machine timer does it (`gc.auto 0`).
-- awto series are store branches `awto/linux-rs/<topic>-<base>`; pushing is a separate, approved step.
-- `linux-riscv/` series is published as `linux-rs/phase2-gcd` on awtoau/linux (not the store's `awto` remote, awto-au/linux).
+- awto series are store branches `awto/linux-rs/<topic>-<base>`, published under the same names on awto-au/linux (store remote `awto`); pushing is a separate, approved step.
+- Before pushing (public repo): `scripts/scrub_kernel_branches.py` must report 0 hits; fix a hit at a branch tip with `scripts/rewrite_branch_file.py`.
+- Retiring agent trees: `scripts/audit_kernel_worktrees.py` (lists unique work), `--retire --wastebasket DIR` (snapshot-commits uncommitted work on the tree's branch, moves the dir out).
+- `linux-rs/phase2-gcd` on awtoau/linux is a stale earlier publication.
