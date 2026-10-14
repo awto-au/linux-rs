@@ -219,8 +219,9 @@ def load_translated_tus(conn):
         except Exception:
             pass
         conn.execute(
-            "INSERT OR REPLACE INTO translated_tus VALUES (?,?,?,?,?,?)",
-            (c_rel, rs_rel, landed_at, patch_num, meta["provenance"], meta.get("replacement_issue")),
+            "INSERT OR REPLACE INTO translated_tus VALUES (?,?,?,?,?,?,?,?,?)",
+            (c_rel, rs_rel, landed_at, patch_num, meta["provenance"], meta.get("replacement_issue"),
+             meta.get("c_source_file"), meta.get("c_blob_sha"), meta.get("c_base_tag")),
         )
         n += 1
     if skipped:

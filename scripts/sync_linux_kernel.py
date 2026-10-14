@@ -18,6 +18,9 @@ automatically. Resolve conflicts / fix the regression, then re-run
 `dev.py check` yourself; this script's job is the rebase + one
 verification pass, not unattended repair.
 
+Before rebasing, check_c_drift.py lists translated TUs whose C original
+changed upstream; reported as required follow-up, never a rebase abort.
+
 Usage: sync_linux_kernel.py [--dry-run]
 Log: tmp/sync_linux_kernel.log
 """
@@ -71,6 +74,13 @@ def main():
     if behind == "0":
         print(f"SYNC OK: already at {UPSTREAM}")
         return 0
+
+    # Report only: drifted TUs go stale on rebase and check_tu_provenance.py then fails until re-translated.
+    drift = sh(["python3", str(REPO / "scripts" / "check_c_drift.py"), "--json"], cwd=REPO, check=False)
+    drifted = [ln for ln in drift.stdout.splitlines() if "DRIFTED" in ln or "GONE" in ln]
+    if drifted:
+        print(f"REQUIRED FOLLOW-UP: {len(drifted)} translated TU(s) have C drift — re-translate per docs/kernel-trees.md:")
+        print("\n".join(drifted))
 
     if args.dry_run:
         print("DRY RUN: not rebasing")

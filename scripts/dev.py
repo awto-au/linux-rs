@@ -105,11 +105,20 @@ PRE_BUILD_CHECKS = [
     "check_tu_provenance.py",
 ]
 POST_BOOT_CHECKS = ["report.py"]
+# Warn-only: drift vs origin/master is upstream not yet merged, not a defect in the built tree.
+# Gate for the built tree = check_tu_provenance.py (c_blob_sha vs series base).
+PRE_BUILD_ADVISORY = ["check_c_drift.py"]
 
 
 def run_pre_build_checks():
     for script in PRE_BUILD_CHECKS:
         sh(["python3", str(S / script)], quiet_ok=False)
+    for script in PRE_BUILD_ADVISORY:
+        p = subprocess.run(["python3", str(S / script)], cwd=REPO, capture_output=True, text=True)
+        if p.returncode:
+            print(f"ADVISORY (not gating): {script} — full output in tmp/logs/")
+            print("\n".join(ln for ln in p.stdout.splitlines() if not ln.split()[1:2] == ["same"]))
+            print(p.stderr[-2000:], end="")
 
 
 def run_post_boot_checks():

@@ -1,173 +1,299 @@
 {
-  "_comment": "Explicit, never-inferred provenance for every translated_tus row. This project builds a transpiler (awtoau/c2rust) -- hand-translation is an accepted, visible BRIDGE, not silent equivalence with transpiler output. Every real *_rs.rs file in linux-riscv/ MUST have an entry here (enforced by scripts/check_tu_provenance.py) before it can land in translated_tus. See awto-au/linux-rs#56.",
+  "_comment": "Explicit, never-inferred provenance for every translated_tus row. This project builds a transpiler (awtoau/c2rust) -- hand-translation is an accepted, visible BRIDGE, not silent equivalence with transpiler output. Every real *_rs.rs file in linux-riscv/ MUST have an entry here (enforced by scripts/check_tu_provenance.py) before it can land in translated_tus. See awto-au/linux-rs#56. c_source_file/c_blob_sha/c_base_tag = upstream C revision translated from; written only by scripts/check_c_drift.py --record (docs/kernel-trees.md).",
   "entries": {
     "lib/seq_buf_rs.rs": {
       "provenance": "c2rust+hand-fix",
-      "replacement_issue": null
+      "replacement_issue": null,
+      "c_source_file": "lib/seq_buf.c",
+      "c_blob_sha": "b59488fa8135cdb0340fbeb43d8d74db8ae13146",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "drivers/tty/serial/8250/8250_helpers_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#96"
+      "replacement_issue": "awto-au/linux-rs#96",
+      "c_source_file": "drivers/tty/serial/8250/8250_port.c",
+      "c_blob_sha": "e94a0802cbddc2ef3af3e2787f770cc60a2235e1",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "drivers/tty/serial/8250/8250_io_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#73"
+      "replacement_issue": "awto-au/linux-rs#73",
+      "c_source_file": "drivers/tty/serial/8250/8250_port.c",
+      "c_blob_sha": "e94a0802cbddc2ef3af3e2787f770cc60a2235e1",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "drivers/tty/serial/8250/8250_irq_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#87"
+      "replacement_issue": "awto-au/linux-rs#87",
+      "c_source_file": "drivers/tty/serial/8250/8250_port.c",
+      "c_blob_sha": "e94a0802cbddc2ef3af3e2787f770cc60a2235e1",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "drivers/tty/serial/8250/8250_startup_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#82"
+      "replacement_issue": "awto-au/linux-rs#82",
+      "c_source_file": "drivers/tty/serial/8250/8250_port.c",
+      "c_blob_sha": "e94a0802cbddc2ef3af3e2787f770cc60a2235e1",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/argv_split_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#88"
+      "replacement_issue": "awto-au/linux-rs#88",
+      "c_source_file": "lib/argv_split.c",
+      "c_blob_sha": "e28db8e3b58c8154ef571b5359cab90b32f6acba",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/base64_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#57"
+      "replacement_issue": "awto-au/linux-rs#57",
+      "c_source_file": "lib/base64.c",
+      "c_blob_sha": "325c7332b049288421bb8d059bfbe09c6e210492",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/bcd_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#70"
+      "replacement_issue": "awto-au/linux-rs#70",
+      "c_source_file": "lib/bcd.c",
+      "c_blob_sha": "c5e79ba9cd7b722d782c990d5f9f61b1cd661524",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/bitmap-str_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#60"
+      "replacement_issue": "awto-au/linux-rs#60",
+      "c_source_file": "lib/bitmap-str.c",
+      "c_blob_sha": "26d36c938c6aff7caefe4898ccb0edd60ed3803c",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/bitmap_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#76"
+      "replacement_issue": "awto-au/linux-rs#76",
+      "c_source_file": "lib/bitmap.c",
+      "c_blob_sha": "b9bfa157e0950dc6113375a50665dcfbdaaba2f1",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/checksum_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#86"
+      "replacement_issue": "awto-au/linux-rs#86",
+      "c_source_file": "lib/checksum.c",
+      "c_blob_sha": "025ba546e1ec6eade619c0394417fe8eeb52f438",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/cmdline_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#58"
+      "replacement_issue": "awto-au/linux-rs#58",
+      "c_source_file": "lib/cmdline.c",
+      "c_blob_sha": "16cce6621cec186aa5feb0f8bea9d7a4fa1a444f",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/ctype_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#90"
+      "replacement_issue": "awto-au/linux-rs#90",
+      "c_source_file": "lib/ctype.c",
+      "c_blob_sha": "c819fe269eb2b6b60f9b70acf966307b50d45dc0",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/decompress_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#89"
+      "replacement_issue": "awto-au/linux-rs#89",
+      "c_source_file": "lib/decompress.c",
+      "c_blob_sha": "7785471586c627aa2e40121f5bad0399aeac5a54",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/earlycpio_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#94"
+      "replacement_issue": "awto-au/linux-rs#94",
+      "c_source_file": "lib/earlycpio.c",
+      "c_blob_sha": "d2c37d64fd0c390311fee22ab2a75de1d4fd5d56",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/find_bit_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#78"
+      "replacement_issue": "awto-au/linux-rs#78",
+      "c_source_file": "lib/find_bit.c",
+      "c_blob_sha": "5ac52dfce73006660710a6fea5c761745b41ca49",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/glob_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#84"
+      "replacement_issue": "awto-au/linux-rs#84",
+      "c_source_file": "lib/glob.c",
+      "c_blob_sha": "c80d9dd736b4f928cc6a6646a616eb7d4844673e",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/hexdump_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#65"
+      "replacement_issue": "awto-au/linux-rs#65",
+      "c_source_file": "lib/hexdump.c",
+      "c_blob_sha": "2e5cd8c24769d79d5efb86b43857f458697de127",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/hweight_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#64"
+      "replacement_issue": "awto-au/linux-rs#64",
+      "c_source_file": "lib/hweight.c",
+      "c_blob_sha": "0dfcafc3fd393dc0f929fdaeb730bdf765b1ad15",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/iomem_copy_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#85"
+      "replacement_issue": "awto-au/linux-rs#85",
+      "c_source_file": "lib/iomem_copy.c",
+      "c_blob_sha": "dec7eaea60e02ba3514edaf713cdca9a8b6bf0f7",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/kstrtox_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#68"
+      "replacement_issue": "awto-au/linux-rs#68",
+      "c_source_file": "lib/kstrtox.c",
+      "c_blob_sha": "edc4eb7c1bca184a28f98ecc0786584381c5c234",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/list_sort_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#67"
+      "replacement_issue": "awto-au/linux-rs#67",
+      "c_source_file": "lib/list_sort.c",
+      "c_blob_sha": "ff99203f208f8b8b684da3c0e8fc35f49278e1a0",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/llist_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#79"
+      "replacement_issue": "awto-au/linux-rs#79",
+      "c_source_file": "lib/llist.c",
+      "c_blob_sha": "f574c17a238ed0aa506b50da8b5d5b9498059241",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/div64_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#71"
+      "replacement_issue": "awto-au/linux-rs#71",
+      "c_source_file": "lib/math/div64.c",
+      "c_blob_sha": "d1e92ea24fce569348f1052bf0318aa394161e9f",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/gcd_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#69"
+      "replacement_issue": "awto-au/linux-rs#69",
+      "c_source_file": "lib/math/gcd.c",
+      "c_blob_sha": "62efca6787aef244b769b82a28b36aa304db2104",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/int_log_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#83"
+      "replacement_issue": "awto-au/linux-rs#83",
+      "c_source_file": "lib/math/int_log.c",
+      "c_blob_sha": "8f9da3a2ad3901572a3d48e3393065be4d4be612",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/int_pow_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#92"
+      "replacement_issue": "awto-au/linux-rs#92",
+      "c_source_file": "lib/math/int_pow.c",
+      "c_blob_sha": "0cf426e69bdaae6d26058fb19e5ddf1c3ad3421c",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/int_sqrt_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#91"
+      "replacement_issue": "awto-au/linux-rs#91",
+      "c_source_file": "lib/math/int_sqrt.c",
+      "c_blob_sha": "a8170bb9142f396263a4164db4d83ba56665bdef",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/lcm_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#66"
+      "replacement_issue": "awto-au/linux-rs#66",
+      "c_source_file": "lib/math/lcm.c",
+      "c_blob_sha": "6e0b2e7367007db3a7a1edaa148f2b08bedcc1c6",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/rational_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#97"
+      "replacement_issue": "awto-au/linux-rs#97",
+      "c_source_file": "lib/math/rational.c",
+      "c_blob_sha": "d2c34e629ee1d246548dd84f276852e237e10a1b",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/math/reciprocal_div_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#81"
+      "replacement_issue": "awto-au/linux-rs#81",
+      "c_source_file": "lib/math/reciprocal_div.c",
+      "c_blob_sha": "6cb4adbb81d27b497d91e538c46cf1359fdbb051",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/memcat_p_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#63"
+      "replacement_issue": "awto-au/linux-rs#63",
+      "c_source_file": "lib/memcat_p.c",
+      "c_blob_sha": "b810fbc66962f79d01284c9b90ac4d050678f7bc",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/memweight_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#72"
+      "replacement_issue": "awto-au/linux-rs#72",
+      "c_source_file": "lib/memweight.c",
+      "c_blob_sha": "94dd72ccaa7f86235fa3942e4cb734320d6494dc",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/parser_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#93"
+      "replacement_issue": "awto-au/linux-rs#93",
+      "c_source_file": "lib/parser.c",
+      "c_blob_sha": "62da0ac0d4389e05c86a9e1f56937bc6d804cc7b",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/sort_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#77"
+      "replacement_issue": "awto-au/linux-rs#77",
+      "c_source_file": "lib/sort.c",
+      "c_blob_sha": "52363995ccc5cc74e7d5153242c6bbeaa52a2115",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/string_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#95"
+      "replacement_issue": "awto-au/linux-rs#95",
+      "c_source_file": "lib/string.c",
+      "c_blob_sha": "a4e8ad23577d882721dacba9e9960c73a813e347",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/strncpy_from_user_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#62"
+      "replacement_issue": "awto-au/linux-rs#62",
+      "c_source_file": "lib/strncpy_from_user.c",
+      "c_blob_sha": "5bb752ff7c61b47fbc8969ce1a47b14667821ccd",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/strnlen_user_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#59"
+      "replacement_issue": "awto-au/linux-rs#59",
+      "c_source_file": "lib/strnlen_user.c",
+      "c_blob_sha": "4a6574b67f824f14cdc40d1250a34ec6c11cafe6",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/ucs2_string_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#80"
+      "replacement_issue": "awto-au/linux-rs#80",
+      "c_source_file": "lib/ucs2_string.c",
+      "c_blob_sha": "dfb4f2358cabfea962bb950fb986ac4bac20097e",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/usercopy_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#61"
+      "replacement_issue": "awto-au/linux-rs#61",
+      "c_source_file": "lib/usercopy.c",
+      "c_blob_sha": "e2f0bf104a591bfee0231f4747c362f849964218",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/win_minmax_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#75"
+      "replacement_issue": "awto-au/linux-rs#75",
+      "c_source_file": "lib/win_minmax.c",
+      "c_blob_sha": "1682e614309c724ce0321cde5bd6c6bea629ac55",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     },
     "lib/zstd/common/error_private_rs.rs": {
       "provenance": "hand",
-      "replacement_issue": "awto-au/linux-rs#74"
+      "replacement_issue": "awto-au/linux-rs#74",
+      "c_source_file": "lib/zstd/common/error_private.c",
+      "c_blob_sha": "6c3dbad838b6903af95eea06a1020cc16600d403",
+      "c_base_tag": "v7.2-rc5-300-g8ba098e6b6ff"
     }
   }
 }

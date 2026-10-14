@@ -2,48 +2,45 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Every translated_tus row must have explicit, visible provenance.
 
-This project builds a transpiler (awtoau/c2rust) -- hand-translation is
-an accepted, visible BRIDGE (Dan, 2026-08-01: "hand translated TU are
-not a big issue - if they work it is fine ... but you need to show me
-how it will be tracked and not hidden"), not silent equivalence with
-transpiler output. build_db.py's load_translated_tus() discovers every
-*_rs.rs file in linux-riscv/ by filesystem glob and lands it in
-translated_tus unconditionally -- without this check, a hand-written
-file and a c2rust-transpiled file are indistinguishable in every "N TUs
-landed" report, exactly the gap that let 41 files get hand-written
-across many sessions before anyone noticed (awto-au/linux-rs#56).
+- Hand-translation is an accepted, visible bridge; it must never pass as transpiler output (#56).
+- build_db.py lands every *_rs.rs in translated_tus by glob; this check is what tells them apart.
+- Reads rulesdb/tu_provenance.json (rs_file -> {provenance, replacement_issue, c_source_file, c_blob_sha, c_base_tag}).
 
-Reads rulesdb/tu_provenance.json (rs_file -> {provenance, replacement_issue}).
 Fails if:
   - any real *_rs.rs file in linux-riscv/ has no entry
   - any entry has provenance='hand' with no replacement_issue
   - any entry's provenance is not one of hand/c2rust/c2rust+hand-fix
   - any manifest entry has no corresponding file on disk (stale entry)
+  - any entry lacks c_source_file/c_blob_sha (record: check_c_drift.py --record)
+  - c_source_file's blob at the series base != c_blob_sha (C changed under the Rust: re-translate)
 
-Usage: check_tu_provenance.py
-Log: tmp/check_tu_provenance.log
+Usage: check_tu_provenance.py [--tree DIR]
+Log: tmp/logs/check_tu_provenance.log
 """
+import argparse
 import json
 import logging
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-TREE = REPO / "linux-riscv"
-MANIFEST = REPO / "rulesdb" / "tu_provenance.json"
-LOG = REPO / "tmp" / "check_tu_provenance.log"
+from _repo import REPO, log_path
+from check_c_drift import DEFAULT_TREE, MANIFEST, blob_sha, series_base
+
+LOG = log_path("check_tu_provenance")
 VALID_PROVENANCE = {"hand", "c2rust", "c2rust+hand-fix"}
 
 
 def main() -> int:
-    REPO.joinpath("tmp").mkdir(exist_ok=True)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tree", type=Path, default=DEFAULT_TREE)
+    tree = ap.parse_args().tree
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[logging.FileHandler(LOG, mode="w"), logging.StreamHandler(sys.stdout)],
     )
 
-    if not TREE.exists():
+    if not tree.exists():
         logging.warning("no linux-riscv/ worktree — skipping provenance check")
         return 0
 
@@ -51,8 +48,8 @@ def main() -> int:
     entries = manifest.get("entries", {})
 
     real_files = {
-        str(rs.relative_to(TREE))
-        for rs in sorted(TREE.rglob("*_rs.rs"))
+        str(rs.relative_to(tree))
+        for rs in sorted(tree.rglob("*_rs.rs"))
     }
 
     errors = []
@@ -70,6 +67,17 @@ def main() -> int:
             continue
         if prov == "hand" and not meta.get("replacement_issue"):
             errors.append(f"MISSING ISSUE: {rs_rel} is provenance=hand but has no replacement_issue")
+
+    base = series_base(tree)
+    for rs_rel, meta in sorted(entries.items()):
+        c_file, want = meta.get("c_source_file"), meta.get("c_blob_sha")
+        if not (c_file and want):
+            errors.append(f"NO C BLOB: {rs_rel} lacks c_source_file/c_blob_sha (check_c_drift.py --record {rs_rel})")
+            continue
+        have = blob_sha(tree, base, c_file)
+        if have != want:
+            errors.append(f"STALE TRANSLATION: {c_file} at base {base[:12]} is {str(have)[:12]}, "
+                          f"{rs_rel} translated from {want[:12]} -- re-translate, then --record")
 
     if errors:
         logging.error("TU PROVENANCE FAIL: %d issue(s)", len(errors))

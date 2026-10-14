@@ -164,7 +164,12 @@ CREATE TABLE translated_tus (
     -- rows, required for 'hand' rows (enforced by check_split_tu_coverage
     -- -style tooling, not a DB-level CHECK, since SQLite CHECK can't
     -- easily express "required iff provenance='hand'" portably).
-    replacement_issue TEXT
+    replacement_issue TEXT,
+    -- Upstream C revision the Rust was translated from; mirrored from
+    -- rulesdb/tu_provenance.json (source of truth). See docs/kernel-trees.md.
+    c_source_file TEXT,           -- real upstream C file (= c_file, or split_tu_provenance.source_c_file)
+    c_blob_sha TEXT,              -- git blob of c_source_file translated from
+    c_base_tag TEXT               -- git describe of the base it was recorded at
 );
 CREATE INDEX idx_translated_tus_cfile ON translated_tus(c_file);
 CREATE INDEX idx_translated_tus_provenance ON translated_tus(provenance);
