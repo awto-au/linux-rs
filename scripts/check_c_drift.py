@@ -8,9 +8,11 @@
 - Unrecorded c_blob_sha → compare against merge-base(linux-riscv HEAD, target), flagged UNRECORDED.
 - --record: write c_source_file + c_blob_sha + c_base_tag (at merge-base) into tu_provenance.json,
   then `dev.py db` to mirror. No RS_FILE named → only entries lacking c_blob_sha; named → overwrite.
+- --at REV: record at REV instead of merge-base (TU translated from older C, e.g. v7.1 corpus).
 - Git helpers here are shared with check_tu_provenance.py.
 
-Usage: check_c_drift.py [--tree DIR] [--db FILE] [--target REV] [--json] [--record [RS_FILE ...]]
+Usage: check_c_drift.py [--tree DIR] [--db FILE] [--target REV] [--json]
+                        [--record [RS_FILE ...] [--at REV]]
 Log: tmp/logs/check_c_drift.log; JSON: tmp/c_drift.json
 """
 import argparse
@@ -85,7 +87,10 @@ def main() -> int:
     ap.add_argument("--target", default=UPSTREAM)
     ap.add_argument("--json", action="store_true", help="also write tmp/c_drift.json")
     ap.add_argument("--record", nargs="*", metavar="RS_FILE")
+    ap.add_argument("--at", metavar="REV", help="--record at REV instead of merge-base")
     args = ap.parse_args()
+    if args.at and args.record is None:
+        ap.error("--at requires --record")
     log = make_log("check_c_drift")
     tree, target = args.tree, args.target
 
@@ -94,7 +99,7 @@ def main() -> int:
     if args.record is not None or any(sha is None for _, _, sha in rows):
         base = series_base(tree, target)
     if args.record is not None:
-        return record(tree, base, rows, args.record, log)
+        return record(tree, args.at or base, rows, args.record, log)
 
     target_sha = git(tree, "rev-parse", target)
     log(f"target={git(tree, 'describe', '--tags', target)}")
