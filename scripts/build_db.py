@@ -223,6 +223,11 @@ def load_translated_tus(conn):
             (c_rel, rs_rel, landed_at, patch_num, meta["provenance"], meta.get("replacement_issue"),
              meta.get("c_source_file"), meta.get("c_blob_sha"), meta.get("c_base_tag")),
         )
+        conn.executemany(
+            "INSERT INTO tu_deps VALUES (?,?,?,?,?)",
+            [(rs_rel, p, sha, "rust" if p.startswith("rust/") else "header", meta.get("deps_base_tag"))
+             for p, sha in meta.get("deps", {}).items()],
+        )
         n += 1
     if skipped:
         logging.warning("%d *_rs.rs file(s) skipped for missing provenance — see above", skipped)

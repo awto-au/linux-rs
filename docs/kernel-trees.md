@@ -28,16 +28,24 @@ All kernel checkouts are worktrees of the machine-wide Linux store — no per-pr
 - Split TUs (8250 slices): `c_source_file` = `split_tu_provenance.source_c_file`.
 - Gate: `check_tu_provenance.py` (in `dev.py check`) fails if `c_source_file`'s blob at the series base ≠ `c_blob_sha` → Rust is stale.
 - Advisory: `check_c_drift.py` (in `dev.py check`, warn-only) lists TUs whose `c_blob_sha` ≠ blob at `origin/master` — what the next rebase will make stale.
+- Deps per TU: `tu_provenance.json` `deps` {path: blob} + `deps_base_tag`; mirrored to `patterns.db` `tu_deps` (kind `header`/`rust`). Derived by `scripts/tu_deps.py`, never hand-listed:
+  - headers: `deps_` list in the C object's kbuild `.<name>.o.cmd` — `include/`, `arch/`, quoted-local; no generated. Needs the C object built once.
+  - rust: `kernel::` paths, kernel/proc macros and `bindings::` in the Rust TU → `rust/kernel/*.rs`, `rust/macros/*.rs`, `rust/bindings/bindings_helper.h`, `rust/helpers/*.c` (`rust_helper_<name>`).
+  - files absent at the record rev (series-only) are skipped.
+- Gate: `check_tu_provenance.py` fails on `NO DEPS` and `STALE DEP` (dep blob at series base ≠ recorded).
+- Advisory: `check_c_drift.py` also prints `DEPCHG` per TU (header/rust counts, numstat), `DEP` per changed file, and `HIGH` = a header hunk touching a `#define`/static inline whose name is an identifier in the TU's Rust (re-implemented inline, rule 0016; also catches function→macro changes).
 
 Procedure:
-1. `scripts/sync_linux_kernel.py --dry-run` → fetches, prints `REQUIRED FOLLOW-UP` drift list (also `tmp/c_drift.json`).
+1. `scripts/sync_linux_kernel.py --dry-run` → fetches, prints `REQUIRED FOLLOW-UP` C drift list and dep `HIGH`/`SUMMARY` lines (full: `tmp/logs/check_c_drift.log`, `tmp/c_drift.json`).
 2. `scripts/sync_linux_kernel.py` → rebase; drift is reported, never aborts the rebase. Post-rebase `dev.py check` fails on the stale TUs until step 3–4.
 3. Per drifted TU:
    - c2rust TU (`c2rust`, `c2rust+hand-fix`): re-run the c2rust + fix-class pipeline on the new C.
    - hand-bridge TU: port the C diff (`git diff <c_blob_sha> <new blob>`) by hand, tracked under its `replacement_issue`.
-4. `scripts/check_c_drift.py --record <rs_file> ...` → updates `c_blob_sha`/`c_base_tag` to the new base; `dev.py db`.
+   - every `HIGH`: diff the header hunk against the Rust copy; port it. Other dep changes: signature changes fail the build; skim the `rust/` ones.
+4. `scripts/check_c_drift.py --record <rs_file> ...` → updates `c_blob_sha`/`c_base_tag` and `deps` to the new base; `dev.py db`.
+   - Dep drift only (C unchanged): `--record <rs_file> ... --deps-only`.
 5. `dev.py check` (provenance gate + build + boot/KUnit oracle).
-- Never `--record` a TU that wasn't re-translated: it hides the drift.
+- Never `--record` a TU that wasn't re-translated / reviewed: it hides the drift.
 
 ## Rules
 

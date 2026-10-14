@@ -4,7 +4,7 @@
 
 - Hand-translation is an accepted, visible bridge; it must never pass as transpiler output (#56).
 - build_db.py lands every *_rs.rs in translated_tus by glob; this check is what tells them apart.
-- Reads rulesdb/tu_provenance.json (rs_file -> {provenance, replacement_issue, c_source_file, c_blob_sha, c_base_tag}).
+- Reads rulesdb/tu_provenance.json (rs_file -> {provenance, replacement_issue, c_source_file, c_blob_sha, c_base_tag, deps, deps_base_tag}).
 
 Fails if:
   - any real *_rs.rs file in linux-riscv/ has no entry
@@ -13,6 +13,8 @@ Fails if:
   - any manifest entry has no corresponding file on disk (stale entry)
   - any entry lacks c_source_file/c_blob_sha (record: check_c_drift.py --record)
   - c_source_file's blob at the series base != c_blob_sha (C changed under the Rust: re-translate)
+  - any entry lacks deps (NO DEPS; record: check_c_drift.py --record)
+  - a dep's blob at the series base != recorded (STALE DEP: review header/rust change, then --record)
 
 Usage: check_tu_provenance.py [--tree DIR]
 Log: tmp/logs/check_tu_provenance.log
@@ -25,6 +27,7 @@ from pathlib import Path
 
 from _repo import REPO, log_path
 from check_c_drift import DEFAULT_TREE, MANIFEST, blob_sha, series_base
+from tu_deps import blobs_at
 
 LOG = log_path("check_tu_provenance")
 VALID_PROVENANCE = {"hand", "c2rust", "c2rust+hand-fix"}
@@ -78,6 +81,17 @@ def main() -> int:
         if have != want:
             errors.append(f"STALE TRANSLATION: {c_file} at base {base[:12]} is {str(have)[:12]}, "
                           f"{rs_rel} translated from {want[:12]} -- re-translate, then --record")
+
+    at_base = blobs_at(tree, base, {p for m in entries.values() for p in m.get("deps", {})})
+    for rs_rel, meta in sorted(entries.items()):
+        if "deps" not in meta:
+            errors.append(f"NO DEPS: {rs_rel} lacks deps (check_c_drift.py --record {rs_rel})")
+            continue
+        for path, want in sorted(meta["deps"].items()):
+            have = at_base.get(path)
+            if have != want:
+                errors.append(f"STALE DEP: {path} at base {base[:12]} is {str(have)[:12]}, "
+                              f"{rs_rel} recorded {want[:12]} -- review (check_c_drift.py), then --record")
 
     if errors:
         logging.error("TU PROVENANCE FAIL: %d issue(s)", len(errors))

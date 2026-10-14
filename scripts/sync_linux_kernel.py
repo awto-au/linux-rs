@@ -18,14 +18,15 @@ automatically. Resolve conflicts / fix the regression, then re-run
 `dev.py check` yourself; this script's job is the rebase + one
 verification pass, not unattended repair.
 
-Before rebasing, check_c_drift.py lists translated TUs whose C original
-changed upstream; reported as required follow-up, never a rebase abort.
+Before rebasing, check_c_drift.py lists translated TUs whose C original or
+deps (headers, rust/) changed upstream; reported as required follow-up, never a rebase abort.
 
 Usage: sync_linux_kernel.py [--dry-run]
 Log: tmp/sync_linux_kernel.log
 """
 import argparse
 import logging
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -77,10 +78,15 @@ def main():
 
     # Report only: drifted TUs go stale on rebase and check_tu_provenance.py then fails until re-translated.
     drift = sh(["python3", str(REPO / "scripts" / "check_c_drift.py"), "--json"], cwd=REPO, check=False)
-    drifted = [ln for ln in drift.stdout.splitlines() if "DRIFTED" in ln or "GONE" in ln]
+    lines = drift.stdout.splitlines()
+    drifted = [ln for ln in lines if " DEP " not in ln and re.search(r"\s(DRIFTED|GONE)(\(UNRECORDED\))?\s+\+", ln)]
     if drifted:
         print(f"REQUIRED FOLLOW-UP: {len(drifted)} translated TU(s) have C drift — re-translate per docs/kernel-trees.md:")
         print("\n".join(drifted))
+    deps = [ln for ln in lines if " HIGH " in ln or "SUMMARY:" in ln]
+    if deps:
+        print("DEP DRIFT (review HIGH first; full list tmp/logs/check_c_drift.log):")
+        print("\n".join(deps))
 
     if args.dry_run:
         print("DRY RUN: not rebasing")

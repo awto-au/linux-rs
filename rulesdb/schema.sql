@@ -171,6 +171,17 @@ CREATE TABLE translated_tus (
     c_blob_sha TEXT,              -- git blob of c_source_file translated from
     c_base_tag TEXT               -- git describe of the base it was recorded at
 );
+-- Per-TU dependency blobs at record time (#119 step 7); mirrored from tu_provenance.json `deps`.
+-- Derived by scripts/tu_deps.py, written by check_c_drift.py --record; checked by check_tu_provenance.py.
+CREATE TABLE tu_deps (
+    rs_file TEXT NOT NULL,
+    dep_path TEXT NOT NULL,       -- header (include/, arch/, TU dir) or rust/ kernel-crate file
+    dep_blob_sha TEXT NOT NULL,   -- git blob of dep_path at base_tag
+    kind TEXT NOT NULL CHECK (kind IN ('header', 'rust')),
+    base_tag TEXT,                -- git describe of the rev deps were recorded at
+    PRIMARY KEY (rs_file, dep_path)
+);
+CREATE INDEX idx_tu_deps_path ON tu_deps(dep_path);
 CREATE INDEX idx_translated_tus_cfile ON translated_tus(c_file);
 CREATE INDEX idx_translated_tus_provenance ON translated_tus(provenance);
 
