@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Rebase linux-riscv/'s own commits (translations, config, boot-path
-fixes) onto the latest upstream torvalds/linux master, then rebuild and
-re-run the full boot+KUnit oracle. This project deliberately tracks
+fixes) onto the latest torvalds/linux master (store remote `origin`), then
+rebuild and re-run the full boot+KUnit oracle. This project deliberately tracks
 upstream HEAD rather than a pinned release (test/research infra, not
 production) — this is the repeatable version of that manual process.
 
@@ -30,6 +30,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 TREE = REPO / "linux-riscv"
 LOG = REPO / "tmp" / "sync_linux_kernel.log"
+UPSTREAM = "origin/master"  # store remote origin = torvalds/linux
 
 
 def sh(cmd, cwd=TREE, check=True):
@@ -60,14 +61,15 @@ def main():
         print("REFUSING: uncommitted changes in linux-riscv/ — commit or stash first")
         return 1
 
-    sh(["git", "fetch", "upstream"])
-    behind = sh(["git", "rev-list", "--count", "HEAD..upstream/master"]).stdout.strip()
-    behind_rust = sh(["git", "log", "--oneline", "HEAD..upstream/master", "--", "rust/"]).stdout
+    # linux-riscv/ is a worktree of the shared Linux store (#118); full fetch, never --depth
+    sh(["git", "fetch", "origin", "master"])
+    behind = sh(["git", "rev-list", "--count", f"HEAD..{UPSTREAM}"]).stdout.strip()
+    behind_rust = sh(["git", "log", "--oneline", f"HEAD..{UPSTREAM}", "--", "rust/"]).stdout
     n_rust = len(behind_rust.splitlines())
-    print(f"{behind} commits behind upstream/master ({n_rust} touching rust/)")
+    print(f"{behind} commits behind {UPSTREAM} ({n_rust} touching rust/)")
 
     if behind == "0":
-        print("SYNC OK: already at upstream/master")
+        print(f"SYNC OK: already at {UPSTREAM}")
         return 0
 
     if args.dry_run:
@@ -80,7 +82,7 @@ def main():
         print(f"{ours.stdout.strip()} local commits not yet rebased")
 
     try:
-        sh(["git", "rebase", "upstream/master"])
+        sh(["git", "rebase", UPSTREAM])
     except RuntimeError:
         print("REBASE CONFLICT — tree left mid-rebase. Resolve by hand:")
         print("  git -C linux-riscv status")

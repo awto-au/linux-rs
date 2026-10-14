@@ -130,7 +130,8 @@ PLAN.md      the plan: phases, gates, validation oracle, risks
 docs/        phase reports and findings (start here for results)
 scripts/     census/analysis tooling (Python, libclang)
 rulesdb/     pattern rules (SmPL + the growing rule DB)
-linux/       pinned kernel tree (local clone, not committed)
+linux/       pinned v7.1 kernel tree (store worktree, not committed)
+linux-riscv/ actively-built kernel tree (store worktree, not committed)
 tmp/         scratch + logs (not committed)
 ```
 
@@ -172,7 +173,8 @@ Common c2rust workflows:
   reliability runs (DB-backed outcomes and timing/failure inventory).
 
 Fedora 44-ish with clang/LLVM 22, bindgen, QEMU. Then:
-clone a kernel at **v7.1**, `make LLVM=1 defconfig`, enable `CONFIG_RUST`,
+check out a kernel at **v7.1** (here: a worktree of the shared Linux store,
+never a fresh clone — [docs/kernel-trees.md](docs/kernel-trees.md)), `make LLVM=1 defconfig`, enable `CONFIG_RUST`,
 build, `scripts/clang-tools/gen_compile_commands.py`, and run the scripts in
 [scripts/](scripts/). Each writes its log to `tmp/`.
 
@@ -188,9 +190,12 @@ instead of a disposable scratch-dir core build. Re-verified boot-clean
 (`dev.py check`: 15/15 KUnit suites, `INIT REACHED`) immediately after
 the switch — not a speculative change.
 
-`linux-riscv/` is itself a git worktree of `linux/` (see
-`scripts/linux_riscv_worktree.py` for isolated worktrees per parallel
-task), on branch `linux-rs/phase2-gcd`. That branch is now pushed to a
+`linux/`, `linux-riscv/` and `linux-riscv-worktrees/*` are worktrees of
+the machine-wide Linux store (objects shared, no per-project clone;
+[docs/kernel-trees.md](docs/kernel-trees.md), #118). `linux-riscv/` is on
+store branch `awto/linux-rs/phase2-gcd-<base>`
+(`scripts/linux_riscv_worktree.py` for isolated worktrees per parallel
+task). The series is pushed as `linux-rs/phase2-gcd` to a
 real fork — **[awtoau/linux](https://github.com/awtoau/linux)** — the
 same durable-fork pattern used for [awtoau/c2rust](https://github.com/awtoau/c2rust)
 (a public fork of `immunant/c2rust`); every landed TU is real, boot-verified

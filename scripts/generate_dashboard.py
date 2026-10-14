@@ -132,7 +132,7 @@ def fetch_progress_snapshots(conn):
 
 def fetch_tu_growth():
     """Cumulative hand-translation TU count over time, from the real git
-    history of linux-riscv's linux-rs/phase2-gcd branch — the same source
+    history of linux-riscv's checked-out branch — the same source
     scripts/report.py's tu_timeline() uses for STATUS.md, NOT the
     translated_tus DB table (confirmed stale: 31 rows vs. 32 real landed
     *_rs.rs files in git — missing drivers/tty/serial/8250/8250_helpers_rs.rs
@@ -142,7 +142,7 @@ def fetch_tu_growth():
     out = subprocess.run(
         ["git", "-C", str(tree), "log", "--reverse", "--diff-filter=A",
          "--date=iso-strict", "--format=C|%ad", "--name-only",
-         "linux-rs/phase2-gcd", "--", "*_rs.rs"],
+         "HEAD", "--", "*_rs.rs"],  # linux-riscv/'s branch; store name awto/linux-rs/phase2-gcd-<base> (#118)
         capture_output=True, text=True, check=True,
     ).stdout
     rows = []

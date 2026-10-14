@@ -1,186 +1,133 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Manage isolated git worktrees of the linux-riscv kernel tree for
-agents doing kernel-tree work in parallel.
+"""Isolated kernel worktrees for agents doing kernel-tree work in parallel.
 
-Why this exists (2026-07-18): linux-riscv/ is gitignored from this repo
-and lives as its own local git worktree of linux/ (confirmed via `cat
-linux-riscv/.git` -> gitdir: linux/.git/worktrees/linux-riscv), on
-branch linux-rs/phase2-gcd. It is the single shared kernel tree every
-boot-path/driver-translation agent builds and boots against. An agent
-fixing awto-au/linux-rs#3 (wiring 8250 driver functions to Rust) hit
-this directly: found concurrent uncommitted changes from another agent
-sitting in the same tree, correctly stopped rather than guessing, and
-had to wait for the coordinating session to confirm the tree was clear
-before proceeding — real, but avoidable, lost time on a task explicitly
-flagged as high-stakes (the live console driver the whole verification
-methodology depends on).
-
-Since linux-riscv/ is ALREADY a git worktree (not a plain clone), this
-script is cheap: `git worktree add` shares the object store with
-linux/, so a new isolated tree costs disk (the ~2.1G checked-out
-working tree, uncompressed — not the .git objects) but no wasted
-network/clone time. Every kernel-tree-touching agent that isn't doing a
-quick read-only check should get its own worktree via this script
-rather than editing the shared linux-riscv/ directly.
+- Worktrees come from the machine Linux store (tmp/linux-store, see kernel_store.py, #118):
+  objects shared, each tree costs only its ~2 GB checkout. Never clone a kernel for this.
+- Use one per kernel-touching task instead of editing the shared linux-riscv/ (two agents in one
+  tree was a real collision, linux-rs#3).
+- Branch per worktree: `awto/linux-rs/<name>-<base tag>`, from --base (default: linux-riscv/'s HEAD).
+- The new tree has no build output: build it before boot-testing, and check Rust linked in
+  (`llvm-nm vmlinux | grep <some *_rs symbol>`; a Rust-free build still says BUILD OK, linux-rs#33).
 
 Usage:
-  linux_riscv_worktree.py create <name> [--base linux-rs/phase2-gcd]
-      Creates linux-riscv-worktrees/<name>/ (sibling to linux-riscv/,
-      inside this repo's own tree but gitignored the same way) on a new
-      branch "agent-<name>" branched from --base.
-  linux_riscv_worktree.py list
-      Shows every linux-riscv worktree and flags anything not under the
-      managed dir as stray.
+  linux_riscv_worktree.py create <name> [--base REV]   -> linux-riscv-worktrees/<name>/
+  linux_riscv_worktree.py list                         store worktrees; flags any outside the managed dir
   linux_riscv_worktree.py remove <name> [--delete-branch]
-      Removes the worktree directory (and its branch, optionally).
-
-IMPORTANT: after creating a worktree, an agent must build its own
-kernel image in it (`dev.py build` equivalent) before boot-testing —
-worktrees share git history but NOT build artifacts (vmlinux, .config,
-compiled objects aren't tracked by git). This costs real build time per
-worktree; only worth it for genuinely-parallel kernel-tree work, not
-quick single-file edits that can wait for the shared tree to free up.
-
-Log: tmp/linux_riscv_worktree.log
+Store: --store PATH or env LINUX_RS_STORE, else tmp/linux-store.
+Log: tmp/logs/linux_riscv_worktree.log
 """
 import argparse
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-LOG = REPO / "tmp" / "linux_riscv_worktree.log"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _repo import REPO, log_path  # noqa: E402
+from kernel_store import MAINLINE, store_path  # noqa: E402
 
-LINUX_MAIN = REPO / "linux"
+LOG = log_path("linux_riscv_worktree")
+MAIN_TREE = REPO / "linux-riscv"
 WORKTREES_DIR = REPO / "linux-riscv-worktrees"
-SEED_CONFIG = REPO / "linux-riscv" / ".config"
+SEED_CONFIG = MAIN_TREE / ".config"
+# worktree add of a ~90k-file kernel checkout ~30-60 s on this disk; x1.25 rounded up.
+# Other git calls are local metadata reads (<1 s). On expiry: logged, exit 1.
+CHECKOUT_TIMEOUT, GIT_TIMEOUT = 90, 15
 
 
-def sh(cmd, cwd=None, check=True):
-    return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, check=check)
+def sh(cmd, cwd=None, check=True, timeout=GIT_TIMEOUT):
+    try:
+        return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, check=check, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logging.error("TIMEOUT %s: no result after %d s (limit)", " ".join(map(str, cmd)), timeout)
+        sys.exit(1)
 
 
-def create(name: str, base: str) -> int:
-    if not LINUX_MAIN.exists():
-        logging.error("no linux/ checkout at %s", LINUX_MAIN)
-        return 1
+def create(store: Path, name: str, base: str | None) -> int:
     target = WORKTREES_DIR / name
     if target.exists():
-        logging.error("worktree already exists: %s (use a different name, or "
-                       "`remove %s` first if it's stale)", target, name)
+        logging.error("worktree already exists: %s (other name, or `remove %s` first)", target, name)
         return 1
+    rev = base or sh(["git", "rev-parse", "HEAD"], cwd=MAIN_TREE).stdout.strip()
+    mb = sh(["git", "merge-base", rev, MAINLINE], cwd=store).stdout.strip()
+    tag = sh(["git", "describe", "--tags", "--abbrev=0", mb], cwd=store).stdout.strip()
+    branch = f"awto/linux-rs/{name}-{tag}"
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
-    branch = f"agent-{name}"
-    r = sh(["git", "worktree", "add", "-b", branch, str(target), base],
-           cwd=LINUX_MAIN, check=False)
+    r = sh(["git", "worktree", "add", "-b", branch, str(target), rev], cwd=store, check=False,
+           timeout=CHECKOUT_TIMEOUT)
     if r.returncode != 0:
         logging.error("worktree add failed: %s", r.stderr.strip())
         return 1
-    logging.info("created %s on branch %s (from %s)", target, branch, base)
-
-    # awto-au/linux-rs#33: a bare `git worktree add` carries no .config
-    # (git worktrees share history, never build artifacts). The first
-    # `dev.py config -e ...` + olddefconfig against an empty .config
-    # falls back to Kconfig defaults for EVERYTHING, including
-    # CONFIG_RUST itself — `dev.py build` then reports "BUILD OK" for a
-    # genuinely successful but silently Rust-free vmlinux. Seed a known
-    # CONFIG_RUST=y config so that trap requires an explicit opt-out
-    # (deleting the seeded .config) rather than being the default path.
+    logging.info("created %s on branch %s (from %s)", target, branch, rev[:12])
+    # No .config -> olddefconfig falls back to Kconfig defaults, CONFIG_RUST off (linux-rs#33)
     if SEED_CONFIG.exists():
-        import shutil
         shutil.copy2(SEED_CONFIG, target / ".config")
-        logging.info("seeded .config from %s", SEED_CONFIG)
         print(f"OK: {target}  (branch {branch}, .config seeded from linux-riscv/.config)")
     else:
-        logging.warning("no seed .config at %s — new worktree has NONE; "
-                         "the first `dev.py config -e` will fall back to Kconfig "
-                         "defaults, which sets CONFIG_RUST off (see linux-rs#33)", SEED_CONFIG)
-        print(f"OK: {target}  (branch {branch})")
-        print("WARNING: no .config seeded (none found at linux-riscv/.config). "
-              "Copy a known-good CONFIG_RUST=y .config in before the first "
-              "`dev.py config -e` — see linux-rs#33.")
-
-    print("NOTE: this worktree has git history only — no other build artifacts "
-          "(vmlinux, compiled objects). Build a kernel image in it before "
-          "boot-testing (see this project's dev.py build equivalent, pointed "
-          "at this tree). After building, verify Rust actually linked in: "
-          "`llvm-nm vmlinux | grep <an expected *_rs symbol>` — a Rust-free "
-          "build still reports BUILD OK (linux-rs#33).")
+        logging.warning("no seed .config at %s: copy a CONFIG_RUST=y .config in before "
+                        "`dev.py config -e` (linux-rs#33)", SEED_CONFIG)
+        print(f"OK: {target}  (branch {branch}, NO .config)")
+    print("NOTE: no build output in a new worktree; build before boot-testing (linux-rs#33).")
     return 0
 
 
-def list_worktrees() -> int:
-    r = sh(["git", "worktree", "list"], cwd=LINUX_MAIN, check=False)
-    if r.returncode != 0:
-        logging.error("could not list worktrees: %s", r.stderr.strip())
-        return 1
-    print(r.stdout, end="")
-    stray = []
-    for line in r.stdout.splitlines():
-        if not line.strip():
-            continue
-        path = Path(line.split()[0])
-        if path == LINUX_MAIN or path == (REPO / "linux-riscv") or path.parent == WORKTREES_DIR:
-            continue
-        stray.append(line)
+def list_worktrees(store: Path) -> int:
+    out = sh(["git", "worktree", "list"], cwd=store).stdout
+    print(out, end="")
+    mine = [ln for ln in out.splitlines() if ln.startswith(str(REPO) + "/")]
+    stray = [ln for ln in mine if Path(ln.split()[0]).parent != WORKTREES_DIR
+             and Path(ln.split()[0]) not in (MAIN_TREE, REPO / "linux")]
     if stray:
-        print("\nSTRAY (not the main linux-riscv/ tree and not under the "
-              "managed linux-riscv-worktrees/ dir — clean up by hand):")
-        for line in stray:
-            print(f"  {line}")
+        print("\nSTRAY (this repo's, but not linux/, linux-riscv/ or linux-riscv-worktrees/*):")
+        for ln in stray:
+            print(f"  {ln}")
     return 0
 
 
-def remove(name: str, delete_branch: bool) -> int:
+def remove(store: Path, name: str, delete_branch: bool) -> int:
     target = WORKTREES_DIR / name
-    branch = f"agent-{name}"
     if not target.exists():
         logging.error("no such worktree: %s", target)
         return 1
-    r = sh(["git", "worktree", "remove", "--force", str(target)], cwd=LINUX_MAIN, check=False)
+    branch = sh(["git", "branch", "--show-current"], cwd=target).stdout.strip()
+    r = sh(["git", "worktree", "remove", "--force", str(target)], cwd=store, check=False,
+           timeout=CHECKOUT_TIMEOUT)
     if r.returncode != 0:
         logging.error("worktree remove failed: %s", r.stderr.strip())
         return 1
     logging.info("removed %s", target)
-    if delete_branch:
-        r = sh(["git", "branch", "-D", branch], cwd=LINUX_MAIN, check=False)
-        if r.returncode == 0:
-            logging.info("deleted branch %s", branch)
-        else:
-            logging.warning("branch delete failed (may already be gone): %s", r.stderr.strip())
+    if delete_branch and branch:
+        r = sh(["git", "branch", "-D", branch], cwd=store, check=False)
+        logging.info("branch %s: %s", branch, "deleted" if r.returncode == 0 else r.stderr.strip())
     print(f"OK: removed {target}")
     return 0
 
 
 def main() -> int:
-    (REPO / "tmp").mkdir(exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO, format="%(message)s",
-        handlers=[logging.FileHandler(LOG, mode="a"), logging.StreamHandler(sys.stdout)],
-    )
-    ap = argparse.ArgumentParser()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
+                        handlers=[logging.FileHandler(LOG, mode="a"), logging.StreamHandler(sys.stdout)])
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--store", help="Linux store (default: env LINUX_RS_STORE, else tmp/linux-store)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    p_create = sub.add_parser("create")
-    p_create.add_argument("name")
-    p_create.add_argument("--base", default="linux-rs/phase2-gcd")
-
+    p = sub.add_parser("create")
+    p.add_argument("name")
+    p.add_argument("--base", help="start revision (default: linux-riscv/ HEAD)")
     sub.add_parser("list")
-
-    p_remove = sub.add_parser("remove")
-    p_remove.add_argument("name")
-    p_remove.add_argument("--delete-branch", action="store_true")
-
-    args = ap.parse_args()
-    if args.cmd == "create":
-        return create(args.name, args.base)
-    if args.cmd == "list":
-        return list_worktrees()
-    if args.cmd == "remove":
-        return remove(args.name, args.delete_branch)
-    return 1
+    p = sub.add_parser("remove")
+    p.add_argument("name")
+    p.add_argument("--delete-branch", action="store_true")
+    a = ap.parse_args()
+    store = store_path(a.store)
+    if not (store / ".git").exists():
+        logging.error("%s: no Linux store; run `kernel_store.py --store PATH setup` (#118)", store)
+        return 1
+    if a.cmd == "create":
+        return create(store, a.name, a.base)
+    if a.cmd == "list":
+        return list_worktrees(store)
+    return remove(store, a.name, a.delete_branch)
 
 
 if __name__ == "__main__":
