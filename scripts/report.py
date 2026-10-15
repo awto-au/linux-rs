@@ -219,7 +219,7 @@ def rules_by_tier():
 
 
 def readiness_top(n=10):
-    out = sh(["python3", str(REPO / "scripts" / "readiness.py")])
+    out = sh([sys.executable, str(REPO / "scripts" / "readiness.py")])
     rows = []
     for line in out.splitlines():
         m = re.search(r"(\S+\.c)\s+(\d+\.\d)%\s+(\d+)\s+(\d+)$",

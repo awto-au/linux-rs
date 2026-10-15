@@ -38,6 +38,41 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Interpreter pin (#123): the python3 first on PATH may lack clang.cindex (libclang
+# bindings, Fedora python3-clang) that report.py -> readiness.py needs after a boot.
+REQUIRED_MODULE = "clang.cindex"
+FALLBACK_PYTHONS = ("/usr/bin/python3",)
+# Interpreter start + libclang import, ~1 s cold; 5 s then treat that python as unusable.
+PROBE_TIMEOUT_S = 5
+
+
+def _has_module(py: str) -> bool:
+    try:
+        return subprocess.run([py, "-c", f"import {REQUIRED_MODULE}"], capture_output=True,
+                              timeout=PROBE_TIMEOUT_S).returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as e:
+        sys.stderr.write(f"dev.py: probing {py} for {REQUIRED_MODULE} failed: {e}\n")
+        return False
+
+
+def _pin_interpreter():
+    """Re-exec under a python that has REQUIRED_MODULE, or fail up front naming it."""
+    try:
+        __import__(REQUIRED_MODULE)
+        return
+    except ImportError:
+        pass
+    for py in FALLBACK_PYTHONS:
+        if os.path.realpath(py) != os.path.realpath(sys.executable) and _has_module(py):
+            os.execv(py, [py, __file__, *sys.argv[1:]])
+    sys.exit(f"dev.py: {sys.executable} has no `{REQUIRED_MODULE}` module (libclang Python "
+             f"bindings, Fedora package python3-clang) and neither does any of "
+             f"{', '.join(FALLBACK_PYTHONS)}; install it or run dev.py with a python that has it")
+
+
+_pin_interpreter()
+PY = sys.executable  # children run under the same pinned interpreter
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kunit_oracle import INIT_REACHED, verify_kunit_ok  # noqa: E402 — see module doc
@@ -112,9 +147,9 @@ PRE_BUILD_ADVISORY = ["check_c_drift.py"]
 
 def run_pre_build_checks():
     for script in PRE_BUILD_CHECKS:
-        sh(["python3", str(S / script)], quiet_ok=False)
+        sh([PY, str(S / script)], quiet_ok=False)
     for script in PRE_BUILD_ADVISORY:
-        p = subprocess.run(["python3", str(S / script)], cwd=REPO, capture_output=True, text=True)
+        p = subprocess.run([PY, str(S / script)], cwd=REPO, capture_output=True, text=True)
         if p.returncode:
             print(f"ADVISORY (not gating): {script} — full output in tmp/logs/")
             print("\n".join(ln for ln in p.stdout.splitlines() if not ln.split()[1:2] == ["same"]))
@@ -123,7 +158,7 @@ def run_pre_build_checks():
 
 def run_post_boot_checks():
     for script in POST_BOOT_CHECKS:
-        sh(["python3", str(S / script)], quiet_ok=False)
+        sh([PY, str(S / script)], quiet_ok=False)
 
 
 def boot(run_id=None):
@@ -142,7 +177,7 @@ def boot(run_id=None):
     # a real source of lost debugging time (see combined-c2rust-boot-10's
     # agent report). Pass --run-id through end-to-end so each caller gets
     # its own tmp/qemu-boot-<run_id>.log, isolated for the whole call.
-    cmd = ["python3", str(S / "boot_qemu.py"), "--tree", TREE_REL]
+    cmd = [PY, str(S / "boot_qemu.py"), "--tree", TREE_REL]
     log_name = "qemu-boot.log"
     if run_id:
         cmd += ["--run-id", run_id]
@@ -211,7 +246,7 @@ def main() -> int:
         boot(run_id)
         run_post_boot_checks()
     elif cmd == "report":
-        sh(["python3", str(S / "report.py")], quiet_ok=False)
+        sh([PY, str(S / "report.py")], quiet_ok=False)
     elif cmd == "config":
         opts = [a for a in rest if a != "-e"]
         sh([str(TREE / "scripts/config"), "--file", str(TREE / ".config"),
@@ -220,33 +255,33 @@ def main() -> int:
            log="dev-config.log")
         print("CONFIG OK:", " ".join(opts))
     elif cmd == "integrate":
-        sh(["python3", str(S / "integrate_tu.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "integrate_tu.py"), *rest], quiet_ok=False)
     elif cmd == "readiness":
         args = ["--glob", rest[0]] if rest else []
-        sh(["python3", str(S / "readiness.py"), *args], quiet_ok=False)
+        sh([PY, str(S / "readiness.py"), *args], quiet_ok=False)
     elif cmd == "bench":
-        sh(["python3", str(S / "bench_math.py")], quiet_ok=False)
+        sh([PY, str(S / "bench_math.py")], quiet_ok=False)
     elif cmd == "diff":
-        sh(["python3", str(S / "diff_oracle.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "diff_oracle.py"), *rest], quiet_ok=False)
     elif cmd == "c2rust-build":
         # `cargo build --release --bin c2rust` alone only builds the
         # dispatcher, not the sibling c2rust-transpile binary it shells
         # out to for `c2rust transpile` — see build_c2rust.py's module
         # doc for the real regression this caused. Always go through
         # this subcommand, never a hand-typed cargo invocation.
-        sh(["python3", str(S / "build_c2rust.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "build_c2rust.py"), *rest], quiet_ok=False)
     elif cmd == "c2rust-baseline":
         # Full-corpus c2rust triage loop: run, writing straight into
         # patterns.db's c2rust_attempts/c2rust_decl_outcomes (persisted
         # across rebuilds, see build_db.py's PERSISTENT_TABLES). Jobs
         # count is adaptive (see run_c2rust_baseline.py's
         # adaptive_job_count()), scaling with whatever RAM is free.
-        sh(["python3", str(S / "run_c2rust_baseline.py"), *rest], log="c2rust-baseline.log", timeout=1800)
+        sh([PY, str(S / "run_c2rust_baseline.py"), *rest], log="c2rust-baseline.log", timeout=1800)
     elif cmd == "c2rust-file-review":
         # Canonical entrypoint for per-file c2rust review loop automation.
         # Keep this as the supported interface in docs; script internals
         # can evolve without changing operator workflows.
-        sh(["python3", str(S / "run_c2rust_file_review.py"), *rest], log="c2rust-file-review.log")
+        sh([PY, str(S / "run_c2rust_file_review.py"), *rest], log="c2rust-file-review.log")
     elif cmd == "check-split-tu-coverage":
         # NOT in PRE_BUILD_CHECKS: unlike the other checks there, this one
         # depends on the CONFIG_RUST=n recovery worktree
@@ -257,28 +292,28 @@ def main() -> int:
         # only when there's a genuine split-TU provenance gap. Run on demand
         # (see awto-au/linux-rs#49's regression-check ask) or wire into CI
         # separately once the worktree-freshness question has an answer.
-        sh(["python3", str(S / "check_split_tu_coverage.py"), *rest], log="check-split-tu-coverage.log")
+        sh([PY, str(S / "check_split_tu_coverage.py"), *rest], log="check-split-tu-coverage.log")
     elif cmd == "c2rust-regress":
         # Per-declaration regression check between two awtoau/c2rust
         # revisions already baselined (dev.py c2rust-baseline at each
         # rev first). See c2rust_regression_check.py's module doc for
         # why file-level outcomes (clean/dropped_decls) are too noisy to
         # gate on directly.
-        sh(["python3", str(S / "c2rust_regression_check.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "c2rust_regression_check.py"), *rest], quiet_ok=False)
     elif cmd == "c2rust-clippy":
         # Second quality gate on top of c2rust-build's plain rustc
         # compile-check (check_c2rust_output_compiles.py) — same
         # kernel-toolchain-linked rmeta approach, clippy-driver in place
         # of rustc. See check_c2rust_output_clippy.py's module doc for
         # the SVH-mismatch pitfall this avoids.
-        sh(["python3", str(S / "check_c2rust_output_clippy.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "check_c2rust_output_clippy.py"), *rest], quiet_ok=False)
     elif cmd == "safety-scan":
         # Per-function unsafe/raw-pointer mechanical scan -> patterns.db's
         # function_safety_status (rulesdb/schema.sql) — the state-1/2 half
         # of the 5-state unsafe-baseline->safe-verified pipeline; states
         # 3-5 are set by a future real safe-lift conversion tool, not
         # this scanner. See scan_function_safety.py's module doc.
-        sh(["python3", str(S / "scan_function_safety.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "scan_function_safety.py"), *rest], quiet_ok=False)
     elif cmd == "check-register-statics":
         # rule 0031: c2rust fabricates a #[no_mangle] static standing in
         # for arch/riscv's register-variable extension (current/tp).
@@ -287,13 +322,13 @@ def main() -> int:
         # found by hand before this check existed). Exits nonzero if any
         # scanned file has a live (called) accessor still reading the
         # fabricated static.
-        sh(["python3", str(S / "check_fabricated_register_statics.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "check_fabricated_register_statics.py"), *rest], quiet_ok=False)
     elif cmd == "db":
-        sh(["python3", str(S / "build_db.py")], quiet_ok=False)
-        sh(["python3", str(S / "import_cscope.py")], quiet_ok=False)
-        sh(["python3", str(S / "import_sparse.py")], quiet_ok=False, timeout=600)
+        sh([PY, str(S / "build_db.py")], quiet_ok=False)
+        sh([PY, str(S / "import_cscope.py")], quiet_ok=False)
+        sh([PY, str(S / "import_sparse.py")], quiet_ok=False, timeout=600)
     elif cmd == "q":
-        sh(["python3", str(S / "query_db.py"), *rest], quiet_ok=False)
+        sh([PY, str(S / "query_db.py"), *rest], quiet_ok=False)
     elif cmd == "patch":
         n = rest[0] if rest else str(len(list((REPO / "patches").glob("*.patch"))) + 1)
         sh(["git", "-C", str(TREE), "format-patch", "-1",
@@ -307,7 +342,7 @@ def main() -> int:
         n = str(len(list((REPO / "patches").glob("*.patch"))) + 1)
         sh(["git", "-C", str(TREE), "format-patch", "-1",
             "--start-number", n, "-o", str(REPO / "patches")])
-        sh(["python3", str(S / "report.py")], quiet_ok=False)
+        sh([PY, str(S / "report.py")], quiet_ok=False)
         repo_msg = rest[1] if len(rest) > 1 else rest[0].splitlines()[0]
         sh(["git", "-C", str(REPO), "add", "-A"])
         sh(["git", "-C", str(REPO), "commit", "-m", repo_msg + TRAILER])
