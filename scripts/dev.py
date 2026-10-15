@@ -139,6 +139,8 @@ PRE_BUILD_CHECKS = [
     "check_census_gate.py",
     "check_tu_provenance.py",
 ]
+# After kmake(), before boot(): need build outputs, not a boot.
+POST_BUILD_CHECKS = ["check_tu_built.py"]
 POST_BOOT_CHECKS = ["report.py"]
 # Warn-only: drift vs origin/master is upstream not yet merged, not a defect in the built tree.
 # Gate for the built tree = check_tu_provenance.py (c_blob_sha vs series base).
@@ -154,6 +156,11 @@ def run_pre_build_checks():
             print(f"ADVISORY (not gating): {script} — full output in tmp/logs/")
             print("\n".join(ln for ln in p.stdout.splitlines() if not ln.split()[1:2] == ["same"]))
             print(p.stderr[-2000:], end="")
+
+
+def run_post_build_checks():
+    for script in POST_BUILD_CHECKS:
+        sh([PY, str(S / script), "--tree", TREE_REL], quiet_ok=False)
 
 
 def run_post_boot_checks():
@@ -243,6 +250,7 @@ def main() -> int:
         run_id, rest = pop_run_id(rest)
         run_pre_build_checks()
         kmake()
+        run_post_build_checks()
         boot(run_id)
         run_post_boot_checks()
     elif cmd == "report":
